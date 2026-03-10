@@ -1,0 +1,193 @@
+import type { AppEnv } from "../config/env.js";
+import type {
+  LinearSourceConfig,
+  NormalizedSourceItem,
+  RawSourceItem,
+  RunContext
+} from "../domain/types.js";
+import { hashParts } from "../lib/ids.js";
+import { BaseConnector } from "./base.js";
+
+const LINEAR_ENDPOINT = "https://api.linear.app/graphql";
+
+export class LinearConnector extends BaseConnector<LinearSourceConfig> {
+  readonly source = "linear" as const;
+
+  constructor(private readonly env: AppEnv) {
+    super();
+  }
+
+  override async fetchSince(cursor: string | null, config: LinearSourceConfig, _context: RunContext): Promise<RawSourceItem[]> {
+    if (!config.enabled || !this.env.LINEAR_API_KEY) {
+      return [];
+    }
+
+    const items: RawSourceItem[] = [];
+    if (config.includeIssues) {
+      const issues = await this.paginateNodes<Record<string, unknown>>(
+        config,
+        "issues",
+        `
+          id
+          title
+          description
+          updatedAt
+          url
+          identifier
+          state { name }
+          team { name }
+        `
+      );
+
+      for (const issue of issues) {
+        const updatedAt = String(issue.updatedAt ?? "");
+        if (cursor && updatedAt <= cursor) {
+          continue;
+        }
+        items.push({
+          id: String(issue.id),
+          cursor: updatedAt,
+          payload: {
+            ...issue,
+            itemType: "issue"
+          }
+        });
+      }
+    }
+
+    if (config.includeProjectUpdates) {
+      const updates = await this.paginateNodes<Record<string, unknown>>(
+        config,
+        "projectUpdates",
+        `
+          id
+          body
+          createdAt
+          updatedAt
+          health
+          project { name }
+        `
+      );
+
+      for (const update of updates) {
+        const updatedAt = String(update.updatedAt ?? update.createdAt ?? "");
+        if (cursor && updatedAt <= cursor) {
+          continue;
+        }
+        items.push({
+          id: String(update.id),
+          cursor: updatedAt,
+          payload: {
+            ...update,
+            itemType: "project_update"
+          }
+        });
+      }
+    }
+
+    return items.sort((left, right) => left.cursor.localeCompare(right.cursor));
+  }
+
+  override async normalize(rawItem: RawSourceItem, config: LinearSourceConfig, context: RunContext): Promise<NormalizedSourceItem> {
+    const payload = rawItem.payload as {
+      id?: string;
+      title?: string;
+      description?: string;
+      body?: string;
+      url?: string;
+      updatedAt?: string;
+      createdAt?: string;
+      itemType?: string;
+      identifier?: string;
+    };
+    const text = payload.description ?? payload.body ?? "";
+    const sourceItemId = String(payload.id ?? rawItem.id);
+    return {
+      source: "linear",
+      sourceItemId,
+      externalId: `linear:${sourceItemId}`,
+      sourceFingerprint: hashParts(["linear", sourceItemId, text]),
+      sourceUrl: payload.url ?? "",
+      title: payload.title ?? payload.identifier ?? `Linear item ${rawItem.id}`,
+      text,
+      summary: text.slice(0, 200),
+      occurredAt: payload.updatedAt ?? payload.createdAt ?? context.now.toISOString(),
+      ingestedAt: context.now.toISOString(),
+      metadata: {
+        itemType: payload.itemType ?? "issue",
+        includeIssueComments: config.includeIssueComments,
+        storeRawText: config.storeRawText
+      },
+      rawPayload: rawItem.payload,
+      rawText: config.storeRawText ? text : null
+    };
+  }
+
+  override async backfill(range: { from: Date; to: Date }, config: LinearSourceConfig, context: RunContext): Promise<RawSourceItem[]> {
+    return this.fetchSince(range.from.toISOString(), config, {
+      dryRun: false,
+      now: context.now
+    });
+  }
+
+  private async paginateNodes<T extends Record<string, unknown>>(config: LinearSourceConfig, fieldName: string, selection: string) {
+    const nodes: T[] = [];
+    let after: string | null = null;
+    let hasNextPage = true;
+
+    while (hasNextPage) {
+      const data: Record<string, { nodes?: T[]; pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } }> = await this.queryLinear(
+        config,
+        `
+          query PaginatedNodes($after: String) {
+            ${fieldName}(first: 100, after: $after) {
+              nodes {
+                ${selection}
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+            }
+          }
+        `,
+        { after }
+      );
+
+      const page: { nodes?: T[]; pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } } | undefined = data[fieldName];
+      nodes.push(...(page?.nodes ?? []));
+      hasNextPage = Boolean(page?.pageInfo?.hasNextPage);
+      after = page?.pageInfo?.endCursor ?? null;
+    }
+
+    return nodes;
+  }
+
+  private async queryLinear<T>(config: LinearSourceConfig, query: string, variables: Record<string, unknown>): Promise<T> {
+    const response = await this.executeWithRateLimit(config, () =>
+      fetch(LINEAR_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: this.env.LINEAR_API_KEY
+        },
+        body: JSON.stringify({ query, variables })
+      })
+    );
+
+    if (!response.ok) {
+      throw new Error(`Linear request failed with ${response.status}`);
+    }
+
+    const payload = (await response.json()) as { data?: T; errors?: Array<{ message?: string }> };
+    if (payload.errors?.length) {
+      throw new Error(payload.errors.map((error) => error.message ?? "Unknown Linear error").join("; "));
+    }
+
+    if (!payload.data) {
+      throw new Error("Linear response missing data");
+    }
+
+    return payload.data;
+  }
+}

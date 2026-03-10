@@ -1,0 +1,244 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model SourceCursor {
+  id         String   @id
+  source     String
+  cursor     String?
+  updatedAt  DateTime @updatedAt
+
+  @@unique([source])
+}
+
+model SourceItem {
+  id               String   @id
+  source           String
+  sourceItemId     String
+  externalId       String
+  fingerprint      String
+  sourceUrl        String
+  title            String
+  summary          String
+  text             String
+  authorName       String?
+  speakerName      String?
+  occurredAt       DateTime
+  ingestedAt       DateTime
+  metadataJson     Json
+  rawPayloadJson   Json
+  rawText          String?
+  chunksJson       Json?
+  rawTextStored    Boolean  @default(true)
+  rawTextExpiresAt DateTime?
+  cleanupEligible  Boolean  @default(false)
+  notionPageId     String?
+  notionPageFingerprint String?
+
+  evidenceReferences EvidenceReference[]
+  signalSourceItems  SignalSourceItem[]
+
+  @@unique([source, sourceItemId])
+  @@unique([fingerprint])
+  @@index([source, occurredAt])
+  @@index([cleanupEligible, rawTextExpiresAt])
+}
+
+model EvidenceReference {
+  id              String   @id
+  signalId        String?
+  opportunityId   String?
+  draftId         String?
+  sourceItemId    String
+  source          String
+  sourceUrl       String
+  timestamp       DateTime
+  excerpt         String
+  excerptHash     String
+  speakerOrAuthor String?
+  freshnessScore  Float
+  createdAt       DateTime @default(now())
+
+  signal      Signal?      @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  draft       Draft?       @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  sourceItem  SourceItem   @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
+  primaryForOpportunities Opportunity[] @relation("PrimaryOpportunityEvidence")
+
+  @@index([excerptHash])
+}
+
+model Signal {
+  id                    String   @id
+  sourceFingerprint     String   @unique
+  title                 String
+  summary               String
+  type                  String
+  freshness             Float
+  confidence            Float
+  probableOwnerProfile  String?
+  suggestedAngle        String
+  status                String
+  sensitivityJson       Json
+  duplicateOfSignalId   String?
+  themeClusterKey       String?
+  notionPageId          String?
+  notionPageFingerprint String
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  duplicateOf   Signal?          @relation("SignalDuplicate", fields: [duplicateOfSignalId], references: [id], onDelete: SetNull)
+  duplicates    Signal[]         @relation("SignalDuplicate")
+  evidence      EvidenceReference[]
+  sourceItems   SignalSourceItem[]
+  opportunities OpportunitySignal[]
+  themeCluster  ThemeCluster?    @relation(fields: [themeClusterKey], references: [key], onDelete: SetNull)
+}
+
+model SignalSourceItem {
+  signalId     String
+  sourceItemId String
+
+  signal     Signal     @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  sourceItem  SourceItem @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
+
+  @@id([signalId, sourceItemId])
+}
+
+model ThemeCluster {
+  key          String   @id
+  title        String
+  profileHint  String?
+  evidenceCount Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  signals Signal[]
+}
+
+model ProfileBase {
+  profileId            String   @id
+  role                 String
+  languagePreference   String
+  toneSummary          String
+  preferredStructure   String
+  typicalPhrasesJson   Json
+  avoidRulesJson       Json
+  contentTerritoriesJson Json
+  weakFitTerritoriesJson Json
+  sampleExcerptsJson   Json
+  sourcePath           String
+  notionPageId         String?
+  notionPageFingerprint String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+}
+
+model ProfileLearnedLayer {
+  profileId               String @id
+  recurringPhrasesJson    Json
+  structuralPatternsJson  Json
+  evidenceExcerptIdsJson  Json
+  lastIncrementalUpdateAt DateTime
+  lastWeeklyRecomputeAt   DateTime?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+}
+
+model Opportunity {
+  id                      String   @id
+  sourceFingerprint       String   @unique
+  title                   String
+  ownerProfile            String?
+  narrativePillar         String
+  angle                   String
+  whyNow                  String
+  whatItIsAbout           String
+  whatItIsNotAbout        String
+  routingStatus           String
+  readiness               String
+  status                  String
+  suggestedFormat         String
+  supportingEvidenceCount Int
+  evidenceFreshness       Float
+  primaryEvidenceId       String?
+  editorialOwner          String?
+  selectedAt              DateTime?
+  lastDigestAt            DateTime?
+  v1HistoryJson           Json
+  notionPageId            String?
+  notionPageFingerprint   String
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  primaryEvidence EvidenceReference?   @relation("PrimaryOpportunityEvidence", fields: [primaryEvidenceId], references: [id], onDelete: SetNull)
+  evidence        EvidenceReference[]
+  relatedSignals  OpportunitySignal[]
+  drafts          Draft[]
+}
+
+model OpportunitySignal {
+  opportunityId String
+  signalId      String
+
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  signal      Signal      @relation(fields: [signalId], references: [id], onDelete: Cascade)
+
+  @@id([opportunityId, signalId])
+}
+
+model Draft {
+  id               String   @id
+  opportunityId    String
+  profileId        String
+  proposedTitle    String
+  hook             String
+  summary          String
+  whatItIsAbout    String
+  whatItIsNotAbout String
+  visualIdea       String
+  firstDraftText   String
+  confidenceScore  Float
+  language         String
+  createdAt        DateTime @default(now())
+
+  opportunity Opportunity         @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  evidence    EvidenceReference[]
+}
+
+model SyncRun {
+  id               String   @id
+  runType          String
+  source           String?
+  status           String
+  startedAt        DateTime
+  finishedAt       DateTime?
+  countersJson     Json
+  warningsJson     Json
+  notes            String?
+  tokenTotalsJson  Json?
+  notionPageId     String?
+  notionPageFingerprint String
+  createdAt        DateTime @default(now())
+
+  costEntries CostLedgerEntry[]
+}
+
+model CostLedgerEntry {
+  id               String   @id
+  step             String
+  model            String
+  mode             String
+  promptTokens     Int
+  completionTokens Int
+  estimatedCostUsd Float
+  runId            String
+  createdAt        DateTime @default(now())
+
+  run SyncRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+}

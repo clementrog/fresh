@@ -1,0 +1,20 @@
+{
+  "source": "notion",
+  "enabled": true,
+  "storeRawText": false,
+  "retentionDays": 30,
+  "rateLimit": {
+    "requestsPerMinute": 30,
+    "maxRetries": 3,
+    "initialDelayMs": 1000
+  },
+  "pageAllowlist": [],
+  "databaseAllowlist": [],
+  "excludedDatabaseNames": [
+    "Signal Feed",
+    "Content Opportunities",
+    "Profiles",
+    "Market Findings",
+    "Sync Runs"
+  ]
+}

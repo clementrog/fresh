@@ -1,0 +1,9 @@
+node_modules
+dist
+.env
+.env.local
+coverage
+pnpm-lock.yaml
+.DS_Store
+prisma/dev.db
+*.tsbuildinfo

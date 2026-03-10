@@ -1,0 +1,18 @@
+{
+  "source": "slack",
+  "enabled": true,
+  "storeRawText": true,
+  "retentionDays": 30,
+  "rateLimit": {
+    "requestsPerMinute": 50,
+    "maxRetries": 3,
+    "initialDelayMs": 1000
+  },
+  "channels": [
+    {
+      "channelId": "SLACK_CHANNEL_ID",
+      "mode": "threads_only",
+      "enabled": false
+    }
+  ]
+}

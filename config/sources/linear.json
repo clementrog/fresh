@@ -1,0 +1,15 @@
+{
+  "source": "linear",
+  "enabled": true,
+  "storeRawText": false,
+  "retentionDays": 30,
+  "rateLimit": {
+    "requestsPerMinute": 30,
+    "maxRetries": 3,
+    "initialDelayMs": 1000
+  },
+  "workspaceIds": [],
+  "includeIssues": true,
+  "includeProjectUpdates": true,
+  "includeIssueComments": false
+}

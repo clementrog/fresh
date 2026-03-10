@@ -1,0 +1,12 @@
+{
+  "source": "market-findings",
+  "enabled": true,
+  "storeRawText": true,
+  "retentionDays": 30,
+  "rateLimit": {
+    "requestsPerMinute": 5,
+    "maxRetries": 1,
+    "initialDelayMs": 1000
+  },
+  "directory": "./editorial/market-findings"
+}
