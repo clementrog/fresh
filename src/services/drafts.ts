@@ -1,6 +1,7 @@
 import type { ContentOpportunity, DraftV1, EvidenceReference, ProfileSnapshot } from "../domain/types.js";
 import { draftOutputSchema, llmDraftSafetySchema } from "../config/schema.js";
 import { createDeterministicId } from "../lib/ids.js";
+import { scopeEvidenceReferences } from "./evidence.js";
 import { LlmClient } from "./llm.js";
 import { assessSensitivity } from "./sensitivity.js";
 
@@ -11,19 +12,22 @@ export async function maybeGenerateDraft(params: {
   clusterConflict: boolean;
   sensitivityRulesMarkdown: string;
   doctrine?: string;
-}): Promise<{ draft: DraftV1 | null; usage: import("./llm.js").LlmUsage }> {
+}): Promise<{
+  draft: DraftV1 | null;
+  usageEvents: Array<{ step: "draft-generation" | "draft-sensitivity"; usage: import("./llm.js").LlmUsage }>;
+}> {
   const { opportunity, profile, llmClient, clusterConflict, sensitivityRulesMarkdown, doctrine } = params;
 
   if (opportunity.readiness !== "Draft candidate") {
-    return { draft: null, usage: zeroUsage() };
+    return { draft: null, usageEvents: [{ step: "draft-generation", usage: zeroUsage() }] };
   }
 
   if (clusterConflict || opportunity.routingStatus === "Needs routing") {
-    return { draft: null, usage: zeroUsage() };
+    return { draft: null, usageEvents: [{ step: "draft-generation", usage: zeroUsage() }] };
   }
 
   if (opportunity.primaryEvidence.excerpt.length === 0) {
-    return { draft: null, usage: zeroUsage() };
+    return { draft: null, usageEvents: [{ step: "draft-generation", usage: zeroUsage() }] };
   }
 
   const llm = await llmClient.generateStructured({
@@ -88,17 +92,23 @@ export async function maybeGenerateDraft(params: {
   if (safetyCheck.assessment.blocked || safetyCheck.assessment.categories.length > 0) {
     return {
       draft: null,
-      usage: {
-        ...llm.usage,
-        mode: llm.mode,
-        error: safetyCheck.assessment.rationale
-      }
+      usageEvents: [
+        { step: "draft-generation", usage: llm.usage },
+        {
+          step: "draft-sensitivity",
+          usage: {
+            ...safetyCheck.usage,
+            error: safetyCheck.assessment.rationale
+          }
+        }
+      ]
     };
   }
 
+  const draftId = createDeterministicId("draft", [opportunity.id, profile.profileId, new Date().toISOString().slice(0, 10)]);
   return {
     draft: {
-      id: createDeterministicId("draft", [opportunity.id, profile.profileId, new Date().toISOString().slice(0, 10)]),
+      id: draftId,
       opportunityId: opportunity.id,
       profileId: opportunity.ownerProfile ?? profile.profileId,
       proposedTitle: sanitizeDraftField(output.proposedTitle),
@@ -108,12 +118,15 @@ export async function maybeGenerateDraft(params: {
       whatItIsNotAbout: sanitizeDraftField(output.whatItIsNotAbout),
       visualIdea: sanitizeDraftField(output.visualIdea),
       firstDraftText: sanitizeDraftField(output.firstDraftText),
-      sourceEvidence: [opportunity.primaryEvidence],
+      sourceEvidence: scopeEvidenceReferences("draft", draftId, opportunity.evidence),
       confidenceScore: output.confidenceScore,
       language: "fr",
       createdAt: new Date().toISOString()
     },
-    usage: llm.usage
+    usageEvents: [
+      { step: "draft-generation", usage: llm.usage },
+      { step: "draft-sensitivity", usage: safetyCheck.usage }
+    ]
   };
 }
 
@@ -140,9 +153,10 @@ function sanitizeDraftField(text: string) {
 
 function zeroUsage() {
   return {
-    mode: "fallback" as const,
+    mode: "provider" as const,
     promptTokens: 0,
     completionTokens: 0,
-    estimatedCostUsd: 0
+    estimatedCostUsd: 0,
+    skipped: true
   };
 }

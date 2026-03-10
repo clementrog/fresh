@@ -18,7 +18,13 @@ import type {
   SyncRun
 } from "./domain/types.js";
 import { hashParts } from "./lib/ids.js";
-import { buildEvidenceReferences } from "./services/evidence.js";
+import {
+  buildEvidenceReferences,
+  dedupeEvidenceReferences,
+  evidenceSignature,
+  scopeEvidenceReferences,
+  selectPrimaryEvidence
+} from "./services/evidence.js";
 import { maybeGenerateDraft } from "./services/drafts.js";
 import { buildThemeClusters, markObviousDuplicates } from "./services/dedupe.js";
 import type { LlmUsage } from "./services/llm.js";
@@ -48,7 +54,7 @@ export class EditorialSignalEngineApp {
 
   constructor(private readonly env: AppEnv, private readonly logger: LoggerLike) {
     this.llmClient = new LlmClient(env, logger);
-    this.notion = new NotionService(env.NOTION_TOKEN, env.NOTION_PARENT_PAGE_ID);
+    this.notion = new NotionService(env.NOTION_TOKEN, env.NOTION_PARENT_PAGE_ID, { bindings: this.repositories });
     this.slack = new SlackService(env);
   }
 
@@ -73,6 +79,8 @@ export class EditorialSignalEngineApp {
         return this.cleanupRetention(context);
       case "backfill":
         return this.backfill(context);
+      case "repair:opportunity-evidence":
+        return this.repairOpportunityEvidence(context);
       default:
         throw new Error(`Unsupported command: ${command satisfies never}`);
     }
@@ -245,17 +253,24 @@ export class EditorialSignalEngineApp {
           this.logger.error({ error, opportunityId: opportunity.id }, "Draft generation failed");
           return {
             draft: null,
-            usage: {
-              mode: "fallback" as const,
-              promptTokens: 0,
-              completionTokens: 0,
-              estimatedCostUsd: 0,
-              error: error instanceof Error ? error.message : "Unknown draft generation error"
-            }
+            usageEvents: [
+              {
+                step: "draft-generation" as const,
+                usage: {
+                  mode: "fallback" as const,
+                  promptTokens: 0,
+                  completionTokens: 0,
+                  estimatedCostUsd: 0,
+                  error: error instanceof Error ? error.message : "Unknown draft generation error"
+                }
+              }
+            ]
           };
         });
 
-        this.recordUsage(run, costs, draft.usage, `${opportunity.id}:draft`, fallbackSteps);
+        for (const usageEvent of draft.usageEvents) {
+          this.recordUsage(run, costs, usageEvent.usage, `${opportunity.id}:${usageEvent.step}`, fallbackSteps);
+        }
         if (!draft.draft) {
           continue;
         }
@@ -302,14 +317,49 @@ export class EditorialSignalEngineApp {
 
     try {
       const opportunityRows = await this.repositories.listOpportunitiesForDigest();
-      const opportunities = opportunityRows
+      const digestCandidates = opportunityRows
         .filter((opportunity) => opportunity.routingStatus !== "Needs routing" && opportunity.status !== "Selected")
-        .map((opportunity) => this.mapOpportunityRow(opportunity));
-
-      if (!context.dryRun) {
-        await this.slack.sendDigest(opportunities);
+        .map((row) => ({
+          row,
+          opportunity: this.mapOpportunityRow(row)
+        }));
+      const missingNotion = digestCandidates
+        .filter(({ opportunity }) => !opportunity.notionPageId)
+        .map(({ opportunity }) => opportunity.id);
+      if (missingNotion.length > 0) {
+        run.warnings.push(`Digest skipped ${missingNotion.length} opportunities without Notion pages`);
       }
-      const finished = finalizeRun(run, "completed", `Digest prepared for ${opportunities.length} opportunities`);
+
+      const changedOpportunities = digestCandidates
+        .filter(({ opportunity, row }) => Boolean(opportunity.notionPageId) && (!row.lastDigestAt || row.updatedAt > row.lastDigestAt))
+        .map(({ opportunity }) => opportunity);
+
+      if (!context.dryRun && changedOpportunities.length > 0) {
+        await this.slack.sendDigest(changedOpportunities);
+        const digestedRows = await this.repositories.markOpportunitiesDigested(
+          changedOpportunities.map((opportunity) => opportunity.id),
+          context.now
+        );
+        const notionFailures: string[] = [];
+        for (const row of digestedRows) {
+          try {
+            const opportunity = this.mapOpportunityRow(row);
+            const syncResult = await this.notion.syncOpportunity(opportunity);
+            if (syncResult) {
+              run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
+              await this.repositories.updateOpportunityNotionSync(opportunity.id, syncResult.notionPageId, opportunity.notionPageFingerprint);
+            }
+          } catch (error) {
+            this.logger.error({ error, opportunityId: row.id }, "Opportunity digest write-back failed");
+            notionFailures.push(row.id);
+          }
+        }
+
+        if (notionFailures.length > 0) {
+          throw new Error(`Slack digest sent, but write-back failed for opportunities: ${notionFailures.join(", ")}`);
+        }
+      }
+      const finished = finalizeRun(run, "completed", `Digest prepared for ${changedOpportunities.length} opportunities`);
       await this.finishRun(finished, [], context);
     } catch (error) {
       const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown digest error");
@@ -382,6 +432,92 @@ export class EditorialSignalEngineApp {
       await this.finishRun(finished, [], context);
     } catch (error) {
       const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown retention cleanup error");
+      await this.finishRun(failed, [], context);
+      throw error;
+    }
+  }
+
+  private async repairOpportunityEvidence(context: RunContext) {
+    const run = createRun("repair:opportunity-evidence");
+    if (!context.dryRun) {
+      await this.repositories.createSyncRun(run);
+    }
+
+    try {
+      const rows = await this.repositories.listOpportunitiesForEvidenceRepair();
+      let repaired = 0;
+      const unrecoverable: string[] = [];
+
+      for (const row of rows) {
+        const currentEvidenceCount = row.evidence.length;
+        const expectedEvidenceCount = row.supportingEvidenceCount + 1;
+        const needsRepair =
+          row.primaryEvidenceId === null ||
+          currentEvidenceCount !== expectedEvidenceCount ||
+          (currentEvidenceCount === 1 && row.supportingEvidenceCount > 0);
+        if (!needsRepair) {
+          continue;
+        }
+
+        const rebuiltSourceEvidence = dedupeEvidenceReferences(
+          row.relatedSignals.flatMap((item) => item.signal.evidence.map(mapStoredEvidence))
+        );
+        if (rebuiltSourceEvidence.length === 0) {
+          unrecoverable.push(row.id);
+          this.logger.warn?.({ opportunityId: row.id }, "Opportunity evidence repair skipped because no source evidence could be rebuilt");
+          continue;
+        }
+
+        const rebuiltEvidence = scopeEvidenceReferences("opportunity", row.id, rebuiltSourceEvidence);
+        const preferredPrimarySignature = row.primaryEvidence
+          ? evidenceSignature(mapStoredEvidence(row.primaryEvidence))
+          : row.evidence[0]
+            ? evidenceSignature(mapStoredEvidence(row.evidence[0]))
+            : undefined;
+        const primaryEvidence = selectPrimaryEvidence(rebuiltEvidence, {
+          signature: preferredPrimarySignature
+        });
+        if (!primaryEvidence) {
+          unrecoverable.push(row.id);
+          this.logger.warn?.({ opportunityId: row.id }, "Opportunity evidence repair skipped because no primary evidence could be selected");
+          continue;
+        }
+
+        repaired += 1;
+        if (context.dryRun) {
+          continue;
+        }
+
+        const repairedRow = await this.repositories.repairOpportunityEvidence({
+          opportunityId: row.id,
+          evidence: rebuiltEvidence,
+          primaryEvidenceId: primaryEvidence.id,
+          supportingEvidenceCount: Math.max(0, rebuiltEvidence.length - 1),
+          evidenceFreshness: primaryEvidence.freshnessScore
+        });
+
+        if (repairedRow.notionPageId) {
+          const opportunity = this.mapOpportunityRow(repairedRow);
+          const syncResult = await this.notion.syncOpportunity(opportunity);
+          if (syncResult) {
+            run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
+            await this.repositories.updateOpportunityNotionSync(opportunity.id, syncResult.notionPageId, opportunity.notionPageFingerprint);
+          }
+        }
+      }
+
+      if (unrecoverable.length > 0) {
+        run.warnings.push(`Opportunity evidence repair could not rebuild ${unrecoverable.length} opportunities`);
+      }
+
+      const finished = finalizeRun(
+        run,
+        "completed",
+        `Opportunity evidence repair evaluated ${rows.length} opportunities and repaired ${repaired}`
+      );
+      await this.finishRun(finished, [], context);
+    } catch (error) {
+      const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown repair error");
       await this.finishRun(failed, [], context);
       throw error;
     }
@@ -474,12 +610,29 @@ export class EditorialSignalEngineApp {
   }
 
   private recordUsage(run: SyncRun, costs: Array<ReturnType<typeof createCostEntry>>, usage: LlmUsage, step: string, fallbackSteps: Set<string>) {
+    if (usage.skipped) {
+      return;
+    }
+
+    const stats = run.llmStats.byStep[step] ?? {
+      calls: 0,
+      fallbacks: 0,
+      validationFailures: 0
+    };
+    stats.calls += 1;
+    run.llmStats.byStep[step] = stats;
+    run.llmStats.totalCalls += 1;
+
     if (usage.mode === "fallback") {
       run.counters.llmFallbacks += 1;
+      run.llmStats.totalFallbacks += 1;
+      stats.fallbacks += 1;
       fallbackSteps.add(step);
     }
     if (usage.error) {
       run.counters.llmValidationFailures += 1;
+      run.llmStats.totalValidationFailures += 1;
+      stats.validationFailures += 1;
     }
     costs.push(
       createCostEntry({
@@ -495,9 +648,9 @@ export class EditorialSignalEngineApp {
   }
 
   private applyFallbackThresholds(run: SyncRun, fallbackSteps: Set<string>) {
-    const totalLlmCalls = run.counters.signalsCreated + run.counters.opportunitiesCreated + run.counters.draftsCreated + run.counters.sensitivityBlocked;
-    const fallbackRate = totalLlmCalls === 0 ? 0 : run.counters.llmFallbacks / totalLlmCalls;
-    if (run.counters.llmFallbacks > 5 || fallbackRate > 0.2) {
+    const totalLlmCalls = run.llmStats.totalCalls;
+    const fallbackRate = totalLlmCalls === 0 ? 0 : run.llmStats.totalFallbacks / totalLlmCalls;
+    if (run.llmStats.totalFallbacks > 5 || fallbackRate > 0.2) {
       run.warnings.push("LLM fallback threshold exceeded");
       const dangerousFallback = [...fallbackSteps].some((step) => step.includes("draft") || step.includes("sensitivity"));
       if (dangerousFallback) {
@@ -550,9 +703,25 @@ export class EditorialSignalEngineApp {
     editorialOwner: string | null;
     selectedAt: Date | null;
     lastDigestAt: Date | null;
+    updatedAt: Date;
+    primaryEvidenceId: string | null;
     v1HistoryJson: unknown;
     notionPageId?: string | null;
     notionPageFingerprint?: string;
+    primaryEvidence?: {
+      id: string;
+      source: string;
+      sourceItemId: string;
+      sourceUrl: string;
+      timestamp: Date;
+      excerpt: string;
+      excerptHash: string;
+      speakerOrAuthor: string | null;
+      freshnessScore: number;
+    } | null;
+    relatedSignals: Array<{
+      signalId: string;
+    }>;
     evidence: Array<{
       id: string;
       source: string;
@@ -565,7 +734,15 @@ export class EditorialSignalEngineApp {
       freshnessScore: number;
     }>;
   }): ContentOpportunity {
-    const primaryEvidence = row.evidence[0];
+    const evidence = row.evidence.map(mapStoredEvidence);
+    const primaryEvidence = row.primaryEvidence
+      ? mapStoredEvidence(row.primaryEvidence)
+      : selectPrimaryEvidence(evidence, {
+          id: row.primaryEvidenceId ?? undefined,
+          signature: row.primaryEvidenceId
+            ? evidenceSignature(evidence.find((item) => item.id === row.primaryEvidenceId) ?? row.evidence[0] ?? { sourceItemId: "", excerptHash: "" })
+            : undefined
+        });
     if (!primaryEvidence) {
       throw new Error(`Opportunity ${row.id} is missing evidence`);
     }
@@ -580,21 +757,12 @@ export class EditorialSignalEngineApp {
       whyNow: row.whyNow,
       whatItIsAbout: row.whatItIsAbout,
       whatItIsNotAbout: row.whatItIsNotAbout,
-      relatedSignalIds: [],
-      primaryEvidence: {
-        id: primaryEvidence.id,
-        source: primaryEvidence.source as EvidenceReference["source"],
-        sourceItemId: primaryEvidence.sourceItemId,
-        sourceUrl: primaryEvidence.sourceUrl,
-        timestamp: primaryEvidence.timestamp.toISOString(),
-        excerpt: primaryEvidence.excerpt,
-        excerptHash: primaryEvidence.excerptHash,
-        speakerOrAuthor: primaryEvidence.speakerOrAuthor ?? undefined,
-        freshnessScore: primaryEvidence.freshnessScore
-      },
-      supportingEvidenceCount: row.supportingEvidenceCount,
+      relatedSignalIds: row.relatedSignals.map((item) => item.signalId),
+      evidence,
+      primaryEvidence,
+      supportingEvidenceCount: Math.max(0, evidence.length - 1),
       evidenceFreshness: row.evidenceFreshness,
-      evidenceExcerpts: row.evidence.map((item) => item.excerpt),
+      evidenceExcerpts: evidence.map((item) => item.excerpt),
       routingStatus: row.routingStatus as ContentOpportunity["routingStatus"],
       readiness: row.readiness as ContentOpportunity["readiness"],
       status: row.status as ContentOpportunity["status"],
@@ -631,4 +799,28 @@ function expectStringArray(value: unknown) {
     throw new Error("Expected persisted JSON array");
   }
   return value.map((item) => String(item));
+}
+
+function mapStoredEvidence(row: {
+  id: string;
+  source: string;
+  sourceItemId: string;
+  sourceUrl: string;
+  timestamp: Date;
+  excerpt: string;
+  excerptHash: string;
+  speakerOrAuthor: string | null;
+  freshnessScore: number;
+}): EvidenceReference {
+  return {
+    id: row.id,
+    source: row.source as EvidenceReference["source"],
+    sourceItemId: row.sourceItemId,
+    sourceUrl: row.sourceUrl,
+    timestamp: row.timestamp.toISOString(),
+    excerpt: row.excerpt,
+    excerptHash: row.excerptHash,
+    speakerOrAuthor: row.speakerOrAuthor ?? undefined,
+    freshnessScore: row.freshnessScore
+  };
 }

@@ -1,5 +1,6 @@
 import type { ContentOpportunity, EditorialSignal, TerritoryAssignment } from "../domain/types.js";
 import { createDeterministicId, hashParts } from "../lib/ids.js";
+import { evidenceSignature, scopeEvidenceReferences, selectPrimaryEvidence } from "./evidence.js";
 
 export function maybeCreateOpportunity(params: {
   signal: EditorialSignal;
@@ -23,8 +24,15 @@ export function maybeCreateOpportunity(params: {
   if (signal.confidence < confidenceThreshold) return null;
   if (signal.evidence.length < evidenceRichnessThreshold) return null;
 
-  const primaryEvidence = signal.evidence[0];
   const sourceFingerprint = hashParts([...signal.sourceItemIds.sort(), assignment.profileId ?? "unassigned", signal.suggestedAngle]);
+  const evidence = scopeEvidenceReferences("opportunity", sourceFingerprint, signal.evidence);
+  const primaryEvidence = selectPrimaryEvidence(evidence, {
+    signature: signal.evidence[0] ? evidenceSignature(signal.evidence[0]) : undefined
+  });
+  if (!primaryEvidence) {
+    return null;
+  }
+
   return {
     id: createDeterministicId("opportunity", [sourceFingerprint]),
     sourceFingerprint,
@@ -36,10 +44,11 @@ export function maybeCreateOpportunity(params: {
     whatItIsAbout: signal.summary,
     whatItIsNotAbout: "A generic thought-leadership take without direct evidence.",
     relatedSignalIds: [signal.id],
+    evidence,
     primaryEvidence,
-    supportingEvidenceCount: Math.max(0, signal.evidence.length - 1),
+    supportingEvidenceCount: Math.max(0, evidence.length - 1),
     evidenceFreshness: primaryEvidence.freshnessScore,
-    evidenceExcerpts: signal.evidence.map((item) => item.excerpt),
+    evidenceExcerpts: evidence.map((item) => item.excerpt),
     routingStatus: "Routed",
     readiness: "Opportunity only",
     status: "To review",

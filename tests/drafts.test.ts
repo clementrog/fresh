@@ -74,8 +74,30 @@ describe("draft generation", () => {
         whatItIsAbout: "Client proof requirements",
         whatItIsNotAbout: "Generic sales advice",
         relatedSignalIds: ["signal_1"],
+        evidence: [
+          {
+            id: "opportunity-e1",
+            source: "slack",
+            sourceItemId: "1",
+            sourceUrl: "https://example.com",
+            timestamp: new Date().toISOString(),
+            excerpt: "A client asked for roadmap proof and salary data.",
+            excerptHash: "hash",
+            freshnessScore: 0.9
+          },
+          {
+            id: "opportunity-e2",
+            source: "linear",
+            sourceItemId: "2",
+            sourceUrl: "https://example.com/2",
+            timestamp: new Date().toISOString(),
+            excerpt: "The same concern showed up in the account review.",
+            excerptHash: "hash-2",
+            freshnessScore: 0.7
+          }
+        ],
         primaryEvidence: {
-          id: "e1",
+          id: "opportunity-e1",
           source: "slack",
           sourceItemId: "1",
           sourceUrl: "https://example.com",
@@ -113,5 +135,6 @@ describe("draft generation", () => {
     });
 
     expect(result.draft).toBeNull();
+    expect(result.usageEvents).toHaveLength(2);
   });
 });

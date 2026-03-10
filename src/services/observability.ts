@@ -1,4 +1,4 @@
-import type { CostLedgerEntry, SyncRun, SyncRunCounters } from "../domain/types.js";
+import type { CostLedgerEntry, LlmRunStats, SyncRun, SyncRunCounters } from "../domain/types.js";
 import { createId } from "../lib/ids.js";
 
 export function createRun(runType: SyncRun["runType"], source?: SyncRun["source"]): SyncRun {
@@ -9,6 +9,7 @@ export function createRun(runType: SyncRun["runType"], source?: SyncRun["source"
     status: "running",
     startedAt: new Date().toISOString(),
     counters: emptyCounters(),
+    llmStats: emptyLlmStats(),
     warnings: [],
     notionPageFingerprint: `${runType}:${new Date().toISOString()}`
   };
@@ -41,6 +42,15 @@ export function addCounters(base: SyncRunCounters, delta: Partial<SyncRunCounter
     llmValidationFailures: base.llmValidationFailures + (delta.llmValidationFailures ?? 0),
     notionCreates: base.notionCreates + (delta.notionCreates ?? 0),
     notionUpdates: base.notionUpdates + (delta.notionUpdates ?? 0)
+  };
+}
+
+export function emptyLlmStats(): LlmRunStats {
+  return {
+    totalCalls: 0,
+    totalFallbacks: 0,
+    totalValidationFailures: 0,
+    byStep: {}
   };
 }
 

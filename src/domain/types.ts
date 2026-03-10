@@ -84,7 +84,8 @@ export type RunType =
   | "selection:scan"
   | "profile:weekly-recompute"
   | "cleanup:retention"
-  | "backfill";
+  | "backfill"
+  | "repair:opportunity-evidence";
 
 export interface RateLimitConfig {
   requestsPerMinute: number;
@@ -277,6 +278,7 @@ export interface ContentOpportunity {
   whatItIsAbout: string;
   whatItIsNotAbout: string;
   relatedSignalIds: string[];
+  evidence: EvidenceReference[];
   primaryEvidence: EvidenceReference;
   supportingEvidenceCount: number;
   evidenceFreshness: number;
@@ -323,6 +325,19 @@ export interface SyncRunCounters {
   notionUpdates: number;
 }
 
+export interface LlmStepStats {
+  calls: number;
+  fallbacks: number;
+  validationFailures: number;
+}
+
+export interface LlmRunStats {
+  totalCalls: number;
+  totalFallbacks: number;
+  totalValidationFailures: number;
+  byStep: Record<string, LlmStepStats>;
+}
+
 export interface SyncRun {
   id: string;
   runType: RunType;
@@ -331,6 +346,7 @@ export interface SyncRun {
   startedAt: string;
   finishedAt?: string;
   counters: SyncRunCounters;
+  llmStats: LlmRunStats;
   warnings: string[];
   notes?: string;
   notionPageId?: string;
@@ -369,6 +385,14 @@ export interface NotionSelectionRow {
 export interface NotionSyncResult {
   notionPageId: string;
   action: "created" | "updated";
+}
+
+export interface NotionDatabaseBinding {
+  name: string;
+  parentPageId: string;
+  databaseId: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface SourceConnector<TConfig extends ConnectorConfig = ConnectorConfig> {

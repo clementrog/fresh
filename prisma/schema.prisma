@@ -192,6 +192,17 @@ model OpportunitySignal {
   @@id([opportunityId, signalId])
 }
 
+model NotionDatabaseBinding {
+  id           String   @id
+  name         String
+  parentPageId String
+  databaseId   String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([parentPageId, name])
+}
+
 model Draft {
   id               String   @id
   opportunityId    String
@@ -221,6 +232,7 @@ model SyncRun {
   countersJson     Json
   warningsJson     Json
   notes            String?
+  llmStatsJson     Json?
   tokenTotalsJson  Json?
   notionPageId     String?
   notionPageFingerprint String

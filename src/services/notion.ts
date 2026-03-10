@@ -22,16 +22,26 @@ export const REQUIRED_DATABASES = [
 type RequiredDatabase = (typeof REQUIRED_DATABASES)[number];
 type NotionClientLike = Client;
 
+export type NotionBindingStore = {
+  getNotionDatabaseBinding(parentPageId: string, name: RequiredDatabase): Promise<{ databaseId: string } | null>;
+  upsertNotionDatabaseBinding(parentPageId: string, name: RequiredDatabase, databaseId: string): Promise<unknown>;
+};
+
 export class NotionService {
   private readonly client: NotionClientLike | null;
   private readonly databaseCache = new Map<RequiredDatabase, string>();
+  private readonly bindings?: NotionBindingStore;
 
   constructor(
     private readonly token: string,
     private readonly parentPageId: string,
-    client?: NotionClientLike
+    options: {
+      client?: NotionClientLike;
+      bindings?: NotionBindingStore;
+    } = {}
   ) {
-    this.client = client ?? (token ? new Client({ auth: token }) : null);
+    this.client = options.client ?? (token ? new Client({ auth: token }) : null);
+    this.bindings = options.bindings;
   }
 
   isEnabled() {
@@ -138,14 +148,14 @@ export class NotionService {
         "What it is not about": richTextProperty(opportunity.whatItIsNotAbout),
         "Source of origin": richTextProperty(opportunity.primaryEvidence.source),
         "Related signals": richTextProperty(opportunity.relatedSignalIds.join(", ")),
-        "Evidence count": numberProperty(opportunity.supportingEvidenceCount + 1),
+        "Evidence count": numberProperty(opportunity.evidence.length),
         Readiness: selectProperty(opportunity.readiness),
         "Suggested format": richTextProperty(opportunity.suggestedFormat),
         "V1 draft": richTextProperty(draft?.firstDraftText ?? opportunity.v1History.at(-1) ?? ""),
         Status: selectProperty(opportunity.status),
         "Editorial notes": richTextProperty(""),
         "Primary evidence": richTextProperty(opportunity.primaryEvidence.excerpt),
-        "Supporting evidence count": numberProperty(opportunity.supportingEvidenceCount),
+        "Supporting evidence count": numberProperty(Math.max(0, opportunity.evidence.length - 1)),
         "Evidence freshness": numberProperty(opportunity.evidenceFreshness),
         "Evidence excerpts": richTextProperty(opportunity.evidenceExcerpts.join("\n\n")),
         "Routing status": richTextProperty(opportunity.routingStatus),
@@ -203,7 +213,7 @@ export class NotionService {
         "Finished at": run.finishedAt ? dateProperty(run.finishedAt) : emptyDateProperty(),
         "Step-level counts": richTextProperty(JSON.stringify(run.counters)),
         "Warning flags": richTextProperty(run.warnings.join(", ")),
-        "Token and cost totals": richTextProperty(""),
+        "Token and cost totals": richTextProperty(JSON.stringify(run.llmStats)),
         "Run fingerprint": richTextProperty(run.notionPageFingerprint)
       }
     });
@@ -337,23 +347,26 @@ export class NotionService {
       return cached;
     }
 
-    const response = await this.client.search({
-      query: name,
-      filter: {
-        value: "database",
-        property: "object"
+    const bound = this.bindings ? await this.bindings.getNotionDatabaseBinding(this.parentPageId, name) : null;
+    if (bound?.databaseId) {
+      const valid = await this.verifyDatabaseBinding(name, bound.databaseId);
+      if (!valid) {
+        throw new Error(`Persisted Notion database binding for "${name}" is invalid or no longer under the configured parent page.`);
       }
-    });
 
-    const existing = response.results.find((result) => {
-      if (result.object !== "database") return false;
-      const typedResult = result as any;
-      const title = typedResult.title.map((entry: { plain_text: string }) => entry.plain_text).join("");
-      return title === name;
-    });
+      this.databaseCache.set(name, bound.databaseId);
+      return bound.databaseId;
+    }
 
-    if (existing && existing.object === "database") {
+    const matches = await this.findDatabasesUnderParent(name);
+    if (matches.length > 1) {
+      throw new Error(`Multiple Notion databases named "${name}" were found under the configured parent page.`);
+    }
+
+    if (matches.length === 1) {
+      const existing = matches[0];
       this.databaseCache.set(name, existing.id);
+      await this.bindings?.upsertNotionDatabaseBinding(this.parentPageId, name, existing.id);
       return existing.id;
     }
 
@@ -369,6 +382,7 @@ export class NotionService {
     });
 
     this.databaseCache.set(name, created.id);
+    await this.bindings?.upsertNotionDatabaseBinding(this.parentPageId, name, created.id);
     return created.id;
   }
 
@@ -382,7 +396,7 @@ export class NotionService {
         property: "object"
       }
     });
-    if (response.results.some((result) => result.object === "page")) {
+    if (response.results.some((result) => result.object === "page" && isUnderParentPage(result, this.parentPageId))) {
       return;
     }
 
@@ -406,6 +420,37 @@ export class NotionService {
         }
       }))
     });
+  }
+
+  private async verifyDatabaseBinding(name: RequiredDatabase, databaseId: string) {
+    if (!this.client) {
+      return false;
+    }
+
+    try {
+      const result = await this.client.databases.retrieve({
+        database_id: databaseId
+      });
+      return isExactDatabaseName(result, name) && isUnderParentPage(result, this.parentPageId);
+    } catch {
+      return false;
+    }
+  }
+
+  private async findDatabasesUnderParent(name: RequiredDatabase) {
+    if (!this.client) {
+      return [];
+    }
+
+    const response = await this.client.search({
+      query: name,
+      filter: {
+        value: "database",
+        property: "object"
+      }
+    });
+
+    return response.results.filter((result) => isExactDatabaseName(result, name) && isUnderParentPage(result, this.parentPageId));
   }
 }
 
@@ -573,6 +618,25 @@ function emptyDateProperty() {
   return {
     date: null
   };
+}
+
+function isExactDatabaseName(result: unknown, name: RequiredDatabase) {
+  if (!result || typeof result !== "object" || (result as { object?: string }).object !== "database") {
+    return false;
+  }
+
+  const typedResult = result as { title?: Array<{ plain_text?: string }> };
+  const title = typedResult.title?.map((entry) => entry.plain_text ?? "").join("") ?? "";
+  return title === name;
+}
+
+function isUnderParentPage(result: unknown, parentPageId: string) {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+
+  const parent = (result as { parent?: { type?: string; page_id?: string } }).parent;
+  return parent?.type === "page_id" && parent.page_id === parentPageId;
 }
 
 function urlProperty(value: string) {

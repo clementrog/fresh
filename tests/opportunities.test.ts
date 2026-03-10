@@ -66,6 +66,9 @@ describe("opportunity gating", () => {
 
     expect(opportunity).not.toBeNull();
     expect(opportunity?.readiness).toBe("Opportunity only");
+    expect(opportunity?.evidence).toHaveLength(2);
+    expect(opportunity?.supportingEvidenceCount).toBe(1);
+    expect(opportunity?.primaryEvidence.id).not.toBe(signal.evidence[0].id);
   });
 
   it("promotes evidence-rich opportunities to draft candidate", () => {

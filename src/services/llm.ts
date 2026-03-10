@@ -7,6 +7,7 @@ export interface LlmUsage {
   promptTokens: number;
   completionTokens: number;
   estimatedCostUsd: number;
+  skipped?: boolean;
   error?: string;
 }
 

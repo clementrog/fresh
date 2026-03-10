@@ -7,20 +7,71 @@ import type {
   DraftV1,
   EditorialSignal,
   EvidenceReference,
+  NotionDatabaseBinding,
   NormalizedSourceItem,
   ProfileBase,
   ProfileLearnedLayer,
   SyncRun,
   ThemeCluster
 } from "../domain/types.js";
+import { createDeterministicId } from "../lib/ids.js";
 
 type PrismaTransaction = Omit<
   PrismaClient,
   "$connect" | "$disconnect" | "$on" | "$transaction" | "$extends" | "$use"
 >;
 
+const opportunityInclude = {
+  evidence: true,
+  primaryEvidence: true,
+  relatedSignals: true
+} satisfies Prisma.OpportunityInclude;
+
 export class RepositoryBundle {
   constructor(private readonly prisma: PrismaClient) {}
+
+  async getNotionDatabaseBinding(parentPageId: string, name: string): Promise<NotionDatabaseBinding | null> {
+    const binding = await this.prisma.notionDatabaseBinding.findUnique({
+      where: {
+        parentPageId_name: {
+          parentPageId,
+          name
+        }
+      }
+    });
+
+    if (!binding) {
+      return null;
+    }
+
+    return {
+      name: binding.name,
+      parentPageId: binding.parentPageId,
+      databaseId: binding.databaseId,
+      createdAt: binding.createdAt.toISOString(),
+      updatedAt: binding.updatedAt.toISOString()
+    };
+  }
+
+  async upsertNotionDatabaseBinding(parentPageId: string, name: string, databaseId: string, tx: PrismaTransaction = this.prisma) {
+    return tx.notionDatabaseBinding.upsert({
+      where: {
+        parentPageId_name: {
+          parentPageId,
+          name
+        }
+      },
+      create: {
+        id: createDeterministicId("notion-db", [parentPageId, name]),
+        parentPageId,
+        name,
+        databaseId
+      },
+      update: {
+        databaseId
+      }
+    });
+  }
 
   async getCursor(source: string) {
     const cursor = await this.prisma.sourceCursor.findUnique({
@@ -278,6 +329,7 @@ export class RepositoryBundle {
   }
 
   async upsertOpportunity(opportunity: ContentOpportunity, tx: PrismaTransaction = this.prisma) {
+    const supportingEvidenceCount = Math.max(0, opportunity.evidence.length - 1);
     return tx.opportunity.upsert({
       where: { id: opportunity.id },
       create: {
@@ -294,7 +346,7 @@ export class RepositoryBundle {
         readiness: opportunity.readiness,
         status: opportunity.status,
         suggestedFormat: opportunity.suggestedFormat,
-        supportingEvidenceCount: opportunity.supportingEvidenceCount,
+        supportingEvidenceCount,
         evidenceFreshness: opportunity.evidenceFreshness,
         editorialOwner: opportunity.editorialOwner,
         selectedAt: opportunity.selectedAt ? new Date(opportunity.selectedAt) : null,
@@ -316,7 +368,7 @@ export class RepositoryBundle {
         readiness: opportunity.readiness,
         status: opportunity.status,
         suggestedFormat: opportunity.suggestedFormat,
-        supportingEvidenceCount: opportunity.supportingEvidenceCount,
+        supportingEvidenceCount,
         evidenceFreshness: opportunity.evidenceFreshness,
         editorialOwner: opportunity.editorialOwner,
         selectedAt: opportunity.selectedAt ? new Date(opportunity.selectedAt) : null,
@@ -341,15 +393,18 @@ export class RepositoryBundle {
   async replaceOpportunityRelations(
     opportunityId: string,
     evidence: EvidenceReference[],
-    signalIds: string[],
+    primaryEvidenceId: string | null,
+    signalIds: string[] | null,
     tx: PrismaTransaction = this.prisma
   ) {
     await tx.evidenceReference.deleteMany({
       where: { opportunityId }
     });
-    await tx.opportunitySignal.deleteMany({
-      where: { opportunityId }
-    });
+    if (signalIds !== null) {
+      await tx.opportunitySignal.deleteMany({
+        where: { opportunityId }
+      });
+    }
 
     if (evidence.length > 0) {
       await tx.evidenceReference.createMany({
@@ -368,7 +423,7 @@ export class RepositoryBundle {
       });
     }
 
-    if (signalIds.length > 0) {
+    if (signalIds && signalIds.length > 0) {
       await tx.opportunitySignal.createMany({
         data: signalIds.map((signalId) => ({
           opportunityId,
@@ -376,6 +431,13 @@ export class RepositoryBundle {
         }))
       });
     }
+
+    await tx.opportunity.update({
+      where: { id: opportunityId },
+      data: {
+        primaryEvidenceId
+      }
+    });
   }
 
   async createDraft(draft: DraftV1, tx: PrismaTransaction = this.prisma) {
@@ -425,6 +487,7 @@ export class RepositoryBundle {
         startedAt: new Date(run.startedAt),
         finishedAt: run.finishedAt ? new Date(run.finishedAt) : null,
         countersJson: toJson(run.counters),
+        llmStatsJson: toJson(run.llmStats),
         warningsJson: toJson(run.warnings),
         notes: run.notes,
         notionPageId: run.notionPageId,
@@ -440,6 +503,7 @@ export class RepositoryBundle {
         status: run.status,
         finishedAt: run.finishedAt ? new Date(run.finishedAt) : null,
         countersJson: toJson(run.counters),
+        llmStatsJson: toJson(run.llmStats),
         warningsJson: toJson(run.warnings),
         notes: run.notes,
         notionPageId: run.notionPageId,
@@ -493,7 +557,7 @@ export class RepositoryBundle {
   async persistOpportunityGraph(opportunity: ContentOpportunity, signalIds: string[]) {
     return this.prisma.$transaction(async (tx) => {
       await this.upsertOpportunity(opportunity, tx);
-      await this.replaceOpportunityRelations(opportunity.id, [opportunity.primaryEvidence], signalIds, tx);
+      await this.replaceOpportunityRelations(opportunity.id, opportunity.evidence, opportunity.primaryEvidence.id, signalIds, tx);
     });
   }
 
@@ -519,9 +583,7 @@ export class RepositoryBundle {
           in: ["To review", "Ready for V1", "V1 generated"]
         }
       },
-      include: {
-        evidence: true
-      },
+      include: opportunityInclude,
       orderBy: {
         updatedAt: "desc"
       }
@@ -552,9 +614,7 @@ export class RepositoryBundle {
   async findOpportunityByNotionPageId(notionPageId: string) {
     return this.prisma.opportunity.findFirst({
       where: { notionPageId },
-      include: {
-        evidence: true
-      }
+      include: opportunityInclude
     });
   }
 
@@ -566,9 +626,88 @@ export class RepositoryBundle {
         selectedAt: new Date(),
         status: "Selected"
       },
+      include: opportunityInclude
+    });
+  }
+
+  async markOpportunitiesDigested(opportunityIds: string[], digestedAt: Date) {
+    if (opportunityIds.length === 0) {
+      return [];
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.opportunity.updateMany({
+        where: {
+          id: {
+            in: opportunityIds
+          }
+        },
+        data: {
+          lastDigestAt: digestedAt
+        }
+      });
+
+      return tx.opportunity.findMany({
+        where: {
+          id: {
+            in: opportunityIds
+          }
+        },
+        include: opportunityInclude,
+        orderBy: {
+          updatedAt: "desc"
+        }
+      });
+    });
+  }
+
+  async listOpportunitiesForEvidenceRepair() {
+    return this.prisma.opportunity.findMany({
       include: {
-        evidence: true
+        ...opportunityInclude,
+        relatedSignals: {
+          include: {
+            signal: {
+              include: {
+                evidence: true
+              }
+            }
+          }
+        }
+      },
+      orderBy: {
+        updatedAt: "desc"
       }
+    });
+  }
+
+  async repairOpportunityEvidence(params: {
+    opportunityId: string;
+    evidence: EvidenceReference[];
+    primaryEvidenceId: string;
+    supportingEvidenceCount: number;
+    evidenceFreshness: number;
+  }) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.opportunity.update({
+        where: { id: params.opportunityId },
+        data: {
+          supportingEvidenceCount: params.supportingEvidenceCount,
+          evidenceFreshness: params.evidenceFreshness
+        }
+      });
+      await this.replaceOpportunityRelations(
+        params.opportunityId,
+        params.evidence,
+        params.primaryEvidenceId,
+        null,
+        tx
+      );
+
+      return tx.opportunity.findUniqueOrThrow({
+        where: { id: params.opportunityId },
+        include: opportunityInclude
+      });
     });
   }
 

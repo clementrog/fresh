@@ -13,7 +13,10 @@ import { BaseConnector } from "./base.js";
 export class SlackConnector extends BaseConnector<SlackSourceConfig> {
   readonly source = "slack" as const;
 
-  constructor(private readonly env: AppEnv) {
+  constructor(
+    private readonly env: AppEnv,
+    private readonly createClient: (token: string) => WebClient = (token) => new WebClient(token)
+  ) {
     super();
   }
 
@@ -22,7 +25,7 @@ export class SlackConnector extends BaseConnector<SlackSourceConfig> {
       return [];
     }
 
-    const client = new WebClient(this.env.SLACK_BOT_TOKEN);
+    const client = this.createClient(this.env.SLACK_BOT_TOKEN);
     const items: RawSourceItem[] = [];
 
     for (const channel of config.channels.filter((entry) => entry.enabled)) {
@@ -61,14 +64,7 @@ export class SlackConnector extends BaseConnector<SlackSourceConfig> {
           });
 
           if ((channel.mode === "full" || channel.mode === "threads_only") && message.thread_ts && message.reply_count) {
-            const replies = await this.executeWithRateLimit(config, () =>
-              client.conversations.replies({
-                channel: channel.channelId,
-                ts: message.thread_ts as string,
-                limit: 200
-              })
-            );
-            for (const reply of replies.messages ?? []) {
+            for (const reply of await this.fetchAllReplies(client, config, channel.channelId, message.thread_ts as string, cursor)) {
               if (typeof reply.ts !== "string" || reply.ts === message.ts) {
                 continue;
               }
@@ -137,6 +133,33 @@ export class SlackConnector extends BaseConnector<SlackSourceConfig> {
       dryRun: false,
       now: range.to
     });
+  }
+
+  private async fetchAllReplies(client: WebClient, config: SlackSourceConfig, channelId: string, threadTs: string, cursor: string | null) {
+    const replies = new Map<string, any>();
+    let nextCursor: string | undefined;
+
+    do {
+      const response = await this.executeWithRateLimit(config, () =>
+        client.conversations.replies({
+          channel: channelId,
+          ts: threadTs,
+          oldest: cursor ?? undefined,
+          limit: 200,
+          cursor: nextCursor
+        })
+      );
+
+      for (const reply of response.messages ?? []) {
+        if (typeof reply.ts === "string") {
+          replies.set(reply.ts, reply);
+        }
+      }
+
+      nextCursor = response.response_metadata?.next_cursor || undefined;
+    } while (nextCursor);
+
+    return [...replies.values()];
   }
 }
 
