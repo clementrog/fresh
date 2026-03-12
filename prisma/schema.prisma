@@ -70,6 +70,7 @@ model EvidenceReference {
   sourceItem  SourceItem   @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
   primaryForOpportunities Opportunity[] @relation("PrimaryOpportunityEvidence")
 
+  @@unique([opportunityId, id])
   @@index([excerptHash])
 }
 
@@ -176,6 +177,7 @@ model Opportunity {
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
+  /// The live database also enforces, via raw SQL migration, that this evidence row belongs to the same opportunity.
   primaryEvidence EvidenceReference?   @relation("PrimaryOpportunityEvidence", fields: [primaryEvidenceId], references: [id], onDelete: SetNull)
   evidence        EvidenceReference[]
   relatedSignals  OpportunitySignal[]
@@ -201,6 +203,20 @@ model NotionDatabaseBinding {
   updatedAt    DateTime @updatedAt
 
   @@unique([parentPageId, name])
+}
+
+model DigestDispatch {
+  id                 String   @id
+  digestKey          String   @unique
+  status             String
+  channel            String
+  opportunityIdsJson Json
+  slackMessageTs     String?
+  sentAt             DateTime?
+  leaseExpiresAt     DateTime?
+  error              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 }
 
 model Draft {

@@ -2,6 +2,7 @@ import { Client } from "@notionhq/client";
 
 import type { AppEnv } from "../config/env.js";
 import type {
+  ProfileId,
   NormalizedSourceItem,
   NotionSourceConfig,
   RawSourceItem,
@@ -90,8 +91,47 @@ export class NotionConnector extends BaseConnector<NotionSourceConfig> {
       last_edited_time?: string;
       properties?: Record<string, unknown>;
     };
-    const title = extractNotionTitle(page.properties ?? {}) || `Notion page ${page.id}`;
+    const properties = page.properties ?? {};
     const content = await this.fetchPageContent(page.id, config);
+    const marketInsight = extractMarketInsight(properties, content);
+    if (marketInsight) {
+      const sourceItemId = page.id;
+      return {
+        source: "notion",
+        sourceItemId,
+        externalId: `notion:${sourceItemId}`,
+        sourceFingerprint: hashParts([
+          "notion",
+          "market-insight",
+          sourceItemId,
+          marketInsight.title,
+          marketInsight.theme,
+          marketInsight.occurredAt,
+          marketInsight.text
+        ]),
+        sourceUrl: marketInsight.sourceUrl || page.url || "",
+        title: marketInsight.title,
+        text: marketInsight.text,
+        summary: marketInsight.summary,
+        occurredAt: marketInsight.occurredAt,
+        ingestedAt: context.now.toISOString(),
+        metadata: {
+          sourceType: rawItem.payload.sourceType,
+          parentDatabaseId: rawItem.payload.parentDatabaseId,
+          properties,
+          storeRawText: config.storeRawText,
+          notionKind: "market-insight",
+          theme: marketInsight.theme,
+          sourceTypeLabel: marketInsight.sourceType,
+          profileHint: marketInsight.profileHint
+        },
+        rawPayload: rawItem.payload,
+        rawText: config.storeRawText ? marketInsight.text : null,
+        chunks: marketInsight.chunks
+      };
+    }
+
+    const title = extractNotionTitle(properties) || `Notion page ${page.id}`;
     const text = content || title;
     const sourceItemId = page.id;
     return {
@@ -108,7 +148,7 @@ export class NotionConnector extends BaseConnector<NotionSourceConfig> {
       metadata: {
         sourceType: rawItem.payload.sourceType,
         parentDatabaseId: rawItem.payload.parentDatabaseId,
-        properties: page.properties,
+        properties,
         storeRawText: config.storeRawText
       },
       rawPayload: rawItem.payload,
@@ -183,4 +223,116 @@ function extractBlockText(block: Record<string, unknown>) {
   }
 
   return "";
+}
+
+function extractMarketInsight(properties: Record<string, unknown>, content: string) {
+  const insightTitle = extractTitleProperty(properties, "Insight");
+  const theme = extractSelectProperty(properties, "Theme");
+  const sourceType = extractSelectProperty(properties, "Source type");
+  const sourceUrl = extractUrlProperty(properties, "Source URL");
+  const occurredAt = extractDateProperty(properties, "Timestamp");
+
+  if (!insightTitle || !theme) {
+    return null;
+  }
+
+  const summary = [
+    `Theme: ${theme}.`,
+    sourceType ? `Source type: ${sourceType}.` : "",
+    content ? truncateContent(content, 220) : "Structured market insight captured in Notion."
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const chunks = [
+    insightTitle,
+    `Theme: ${theme}`,
+    sourceType ? `Source type: ${sourceType}` : "",
+    content
+  ]
+    .filter((entry) => entry.trim().length > 0)
+    .map((entry) => entry.trim());
+
+  const text = [
+    insightTitle,
+    theme ? `Theme: ${theme}` : "",
+    sourceType ? `Source type: ${sourceType}` : "",
+    sourceUrl ? `Source URL: ${sourceUrl}` : "",
+    content
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  return {
+    title: insightTitle,
+    theme,
+    sourceType,
+    sourceUrl,
+    occurredAt,
+    summary,
+    text,
+    chunks,
+    profileHint: inferMarketInsightProfileHint(theme, `${insightTitle}\n${content}`)
+  };
+}
+
+function extractTitleProperty(properties: Record<string, unknown>, propertyName: string) {
+  const property = properties[propertyName] as { type?: string; title?: Array<{ plain_text?: string }> } | undefined;
+  if (property?.type !== "title") {
+    return "";
+  }
+  return (property.title ?? []).map((item) => item.plain_text ?? "").join("").trim();
+}
+
+function extractSelectProperty(properties: Record<string, unknown>, propertyName: string) {
+  const property = properties[propertyName] as { type?: string; select?: { name?: string | null } | null } | undefined;
+  if (property?.type !== "select") {
+    return "";
+  }
+  return property.select?.name?.trim() ?? "";
+}
+
+function extractUrlProperty(properties: Record<string, unknown>, propertyName: string) {
+  const property = properties[propertyName] as { type?: string; url?: string | null } | undefined;
+  if (property?.type !== "url") {
+    return "";
+  }
+  return property.url?.trim() ?? "";
+}
+
+function extractDateProperty(properties: Record<string, unknown>, propertyName: string) {
+  const property = properties[propertyName] as { type?: string; date?: { start?: string | null } | null } | undefined;
+  if (property?.type !== "date") {
+    return "";
+  }
+  return property.date?.start?.trim() ?? "";
+}
+
+function truncateContent(content: string, maxLength: number) {
+  if (content.length <= maxLength) {
+    return content;
+  }
+  return `${content.slice(0, maxLength - 3)}...`;
+}
+
+function inferMarketInsightProfileHint(theme: string, text: string): ProfileId | undefined {
+  const haystack = `${theme}\n${text}`.toLowerCase();
+
+  if (/\b(strategy|strategic|market|vision|mobilisation|2026)\b/.test(haystack)) {
+    return "baptiste";
+  }
+
+  if (/\b(dsn|case law|pay transparency|payroll|cost of work|compliance|fiabilité|réglement|reglement)\b/.test(haystack)) {
+    return "thomas";
+  }
+
+  if (/\b(objection|buyer|commercial|sales|adoption)\b/.test(haystack)) {
+    return "quentin";
+  }
+
+  if (/\b(genai|ai|produit|product|feedback|usage|ux)\b/.test(haystack)) {
+    return "virginie";
+  }
+
+  return "linc-corporate";
 }

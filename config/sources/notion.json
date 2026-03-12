@@ -9,7 +9,9 @@
     "initialDelayMs": 1000
   },
   "pageAllowlist": [],
-  "databaseAllowlist": [],
+  "databaseAllowlist": [
+    "f3595464-713a-41d6-9897-5d9e0aaa065f"
+  ],
   "excludedDatabaseNames": [
     "Signal Feed",
     "Content Opportunities",

@@ -1,12 +1,16 @@
 ---
 id: market-finding-001
-finding: Les équipes veulent des preuves d'adoption plus que des promesses produit.
+finding: Les acheteurs B2B veulent des preuves d'usage terrain avant de croire une promesse produit.
 theme: Adoption
-source: Internal market notes
-confidence: 0.8
+source: Sales and onboarding synthesis
+confidence: 0.86
 possibleOwner: quentin
-editorialAngle: Montrer comment une objection commerciale récurrente révèle une attente marché.
+editorialAngle: Montrer comment la demande de preuve d'usage révèle un vrai changement dans les critères de décision.
 status: New
-updatedAt: 2026-03-10T09:00:00.000Z
+updatedAt: 2026-03-12T12:55:00.000Z
 ---
-Sur plusieurs échanges récents, le sujet n'est pas la fonctionnalité en soi, mais la preuve qu'elle sera adoptée durablement par le terrain.
+Dans plusieurs conversations récentes, la question n'est pas "quelles fonctionnalités sont disponibles ?" mais "où est la preuve que les équipes vont vraiment s'en servir ?".
+
+Le point récurrent n'est pas l'intérêt théorique du produit. Le vrai critère de décision devient la démonstration d'un usage simple, concret et répété par le terrain.
+
+Autrement dit: sans preuve d'adoption visible, la promesse produit perd de sa crédibilité.

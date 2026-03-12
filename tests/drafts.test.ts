@@ -17,6 +17,7 @@ describe("draft generation", () => {
       LINEAR_API_KEY: "",
       DEFAULT_TIMEZONE: "Europe/Paris",
       LLM_MODEL: "test",
+      LLM_TIMEOUT_MS: 100,
       LOG_LEVEL: "info"
     }, undefined, async () =>
       ({

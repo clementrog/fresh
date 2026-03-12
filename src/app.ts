@@ -46,16 +46,33 @@ type LoggerLike = {
 };
 
 export class EditorialSignalEngineApp {
-  private readonly prisma = getPrisma();
-  private readonly repositories = new RepositoryBundle(this.prisma);
+  private readonly prisma;
+  private readonly repositories;
   private readonly llmClient: LlmClient;
   private readonly notion: NotionService;
   private readonly slack: SlackService;
 
-  constructor(private readonly env: AppEnv, private readonly logger: LoggerLike) {
-    this.llmClient = new LlmClient(env, logger);
-    this.notion = new NotionService(env.NOTION_TOKEN, env.NOTION_PARENT_PAGE_ID, { bindings: this.repositories });
-    this.slack = new SlackService(env);
+  constructor(
+    private readonly env: AppEnv,
+    private readonly logger: LoggerLike,
+    deps: Partial<{
+      prisma: ReturnType<typeof getPrisma>;
+      repositories: RepositoryBundle;
+      llmClient: LlmClient;
+      notion: NotionService;
+      slack: SlackService;
+    }> = {}
+  ) {
+    this.prisma = deps.prisma ?? getPrisma();
+    this.repositories = deps.repositories ?? new RepositoryBundle(this.prisma);
+    this.llmClient = deps.llmClient ?? new LlmClient(env, logger);
+    this.notion =
+      deps.notion ??
+      new NotionService(env.NOTION_TOKEN, env.NOTION_PARENT_PAGE_ID, {
+        bindings: this.repositories,
+        onWarning: (warning) => this.logger.warn?.({ warning }, "Notion self-heal warning")
+      });
+    this.slack = deps.slack ?? new SlackService(env);
   }
 
   async run(command: RunType, options: { dryRun?: boolean } = {}) {
@@ -316,9 +333,16 @@ export class EditorialSignalEngineApp {
     }
 
     try {
+      const channelId = context.dryRun ? null : await this.slack.resolveDigestChannelId();
+      if (!context.dryRun && !channelId) {
+        throw new Error("Slack digest could not resolve a delivery channel.");
+      }
+
+      const blockedOpportunityIds = channelId ? await this.recoverDigestDispatches(channelId, run, context) : new Set<string>();
       const opportunityRows = await this.repositories.listOpportunitiesForDigest();
       const digestCandidates = opportunityRows
         .filter((opportunity) => opportunity.routingStatus !== "Needs routing" && opportunity.status !== "Selected")
+        .filter((row) => !blockedOpportunityIds.has(row.id))
         .map((row) => ({
           row,
           opportunity: this.mapOpportunityRow(row)
@@ -330,36 +354,101 @@ export class EditorialSignalEngineApp {
         run.warnings.push(`Digest skipped ${missingNotion.length} opportunities without Notion pages`);
       }
 
-      const changedOpportunities = digestCandidates
-        .filter(({ opportunity, row }) => Boolean(opportunity.notionPageId) && (!row.lastDigestAt || row.updatedAt > row.lastDigestAt))
-        .map(({ opportunity }) => opportunity);
+      const deliveryEntries = pickDigestDeliverySet(
+        digestCandidates.filter(({ opportunity, row }) => Boolean(opportunity.notionPageId) && (!row.lastDigestAt || row.updatedAt > row.lastDigestAt))
+      );
+      const deliveryOpportunities = deliveryEntries.map(({ opportunity }) => opportunity);
 
-      if (!context.dryRun && changedOpportunities.length > 0) {
-        await this.slack.sendDigest(changedOpportunities);
-        const digestedRows = await this.repositories.markOpportunitiesDigested(
-          changedOpportunities.map((opportunity) => opportunity.id),
-          context.now
+      if (!context.dryRun && channelId && deliveryEntries.length > 0) {
+        const digestKey = buildDigestKey(
+          deliveryEntries.map(({ row }) => ({
+            id: row.id,
+            updatedAt: row.updatedAt.toISOString()
+          })),
+          channelId
         );
-        const notionFailures: string[] = [];
-        for (const row of digestedRows) {
+        const dispatchAttempt = await this.repositories.acquireDigestDispatch({
+          digestKey,
+          channel: channelId,
+          opportunityIds: deliveryOpportunities.map((opportunity) => opportunity.id),
+          now: context.now,
+          leaseMs: 10 * 60 * 1000
+        });
+
+        if (dispatchAttempt.action === "already_sent") {
+          const finished = finalizeRun(run, "completed", `Digest ${digestKey} already sent`);
+          await this.finishRun(finished, [], context);
+          return;
+        }
+
+        if (dispatchAttempt.action === "inflight") {
+          run.warnings.push(`Digest ${digestKey} is already pending in another worker`);
+          const finished = finalizeRun(run, "completed", `Digest ${digestKey} skipped because another worker holds the lease`);
+          await this.finishRun(finished, [], context);
+          return;
+        }
+
+        let digestedRows: Awaited<ReturnType<RepositoryBundle["finalizeDigestDispatch"]>>["opportunities"] | null = null;
+        const reconciled = await this.slack.findRecentDigestByKey({
+          channelId,
+          digestKey
+        });
+        if (reconciled) {
           try {
-            const opportunity = this.mapOpportunityRow(row);
-            const syncResult = await this.notion.syncOpportunity(opportunity);
-            if (syncResult) {
-              run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
-              await this.repositories.updateOpportunityNotionSync(opportunity.id, syncResult.notionPageId, opportunity.notionPageFingerprint);
+            const finalized = await this.repositories.finalizeDigestDispatch({
+              digestKey,
+              slackMessageTs: reconciled.ts,
+              sentAt: context.now,
+              opportunityIds: deliveryOpportunities.map((opportunity) => opportunity.id)
+            });
+            digestedRows = finalized.opportunities;
+            run.warnings.push(`Digest ${digestKey} was reconciled from Slack history after a previous incomplete write-back`);
+          } catch (error) {
+            this.logger.error({ error, digestKey }, "Digest reconciliation failed after Slack history match");
+            run.warnings.push(`Digest ${digestKey} was already sent to Slack but DB reconciliation still failed`);
+            await this.sendOperationalAlertSafely(
+              `Digest ${digestKey} was found in Slack history but DB reconciliation failed. Manual check recommended.`
+            );
+          }
+        } else {
+          let slackResult: Awaited<ReturnType<SlackService["sendDigest"]>> | null = null;
+          try {
+            slackResult = await this.slack.sendDigest({
+              channelId,
+              digestKey,
+              opportunities: deliveryOpportunities
+            });
+            if (!slackResult || !slackResult.ts) {
+              throw new Error("Slack digest send did not return a Slack message timestamp.");
             }
           } catch (error) {
-            this.logger.error({ error, opportunityId: row.id }, "Opportunity digest write-back failed");
-            notionFailures.push(row.id);
+            await this.repositories.markDigestDispatchFailed(
+              digestKey,
+              error instanceof Error ? error.message : "Slack digest send failed"
+            );
+            throw error;
+          }
+
+          try {
+            const finalized = await this.repositories.finalizeDigestDispatch({
+              digestKey,
+              slackMessageTs: slackResult.ts,
+              sentAt: context.now,
+              opportunityIds: deliveryOpportunities.map((opportunity) => opportunity.id)
+            });
+            digestedRows = finalized.opportunities;
+          } catch (error) {
+            this.logger.error({ error, digestKey }, "Slack digest sent but DB reconciliation failed");
+            run.warnings.push(`Digest ${digestKey} was sent to Slack but DB reconciliation failed`);
+            await this.sendOperationalAlertSafely(
+              `Digest ${digestKey} was sent, but DB reconciliation failed. The next run will reconcile from Slack history.`
+            );
           }
         }
 
-        if (notionFailures.length > 0) {
-          throw new Error(`Slack digest sent, but write-back failed for opportunities: ${notionFailures.join(", ")}`);
-        }
+        await this.syncDigestedOpportunityRows(digestedRows ?? [], run);
       }
-      const finished = finalizeRun(run, "completed", `Digest prepared for ${changedOpportunities.length} opportunities`);
+      const finished = finalizeRun(run, "completed", `Digest prepared for ${deliveryOpportunities.length} opportunities`);
       await this.finishRun(finished, [], context);
     } catch (error) {
       const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown digest error");
@@ -444,64 +533,85 @@ export class EditorialSignalEngineApp {
     }
 
     try {
-      const rows = await this.repositories.listOpportunitiesForEvidenceRepair();
+      let scanned = 0;
+      let candidates = 0;
       let repaired = 0;
+      let skipped = 0;
+      let clonedEvidenceRows = 0;
+      let lastSeenId: string | undefined;
       const unrecoverable: string[] = [];
+      let validationFailures = 0;
 
-      for (const row of rows) {
-        const currentEvidenceCount = row.evidence.length;
-        const expectedEvidenceCount = row.supportingEvidenceCount + 1;
-        const needsRepair =
-          row.primaryEvidenceId === null ||
-          currentEvidenceCount !== expectedEvidenceCount ||
-          (currentEvidenceCount === 1 && row.supportingEvidenceCount > 0);
-        if (!needsRepair) {
-          continue;
-        }
-
-        const rebuiltSourceEvidence = dedupeEvidenceReferences(
-          row.relatedSignals.flatMap((item) => item.signal.evidence.map(mapStoredEvidence))
-        );
-        if (rebuiltSourceEvidence.length === 0) {
-          unrecoverable.push(row.id);
-          this.logger.warn?.({ opportunityId: row.id }, "Opportunity evidence repair skipped because no source evidence could be rebuilt");
-          continue;
-        }
-
-        const rebuiltEvidence = scopeEvidenceReferences("opportunity", row.id, rebuiltSourceEvidence);
-        const preferredPrimarySignature = row.primaryEvidence
-          ? evidenceSignature(mapStoredEvidence(row.primaryEvidence))
-          : row.evidence[0]
-            ? evidenceSignature(mapStoredEvidence(row.evidence[0]))
-            : undefined;
-        const primaryEvidence = selectPrimaryEvidence(rebuiltEvidence, {
-          signature: preferredPrimarySignature
+      while (true) {
+        const rows = await this.repositories.listOpportunitiesForEvidenceRepairBatch({
+          afterId: lastSeenId,
+          take: 50
         });
-        if (!primaryEvidence) {
-          unrecoverable.push(row.id);
-          this.logger.warn?.({ opportunityId: row.id }, "Opportunity evidence repair skipped because no primary evidence could be selected");
-          continue;
+        if (rows.length === 0) {
+          break;
         }
 
-        repaired += 1;
-        if (context.dryRun) {
-          continue;
-        }
+        for (const row of rows) {
+          lastSeenId = row.id;
+          scanned += 1;
+          const needsRepair = !isOpportunityEvidenceAlreadyRepaired(row);
+          if (!needsRepair) {
+            skipped += 1;
+            continue;
+          }
 
-        const repairedRow = await this.repositories.repairOpportunityEvidence({
-          opportunityId: row.id,
-          evidence: rebuiltEvidence,
-          primaryEvidenceId: primaryEvidence.id,
-          supportingEvidenceCount: Math.max(0, rebuiltEvidence.length - 1),
-          evidenceFreshness: primaryEvidence.freshnessScore
-        });
+          candidates += 1;
 
-        if (repairedRow.notionPageId) {
-          const opportunity = this.mapOpportunityRow(repairedRow);
-          const syncResult = await this.notion.syncOpportunity(opportunity);
-          if (syncResult) {
-            run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
-            await this.repositories.updateOpportunityNotionSync(opportunity.id, syncResult.notionPageId, opportunity.notionPageFingerprint);
+          if (!canRebuildOpportunityEvidence(row)) {
+            unrecoverable.push(row.id);
+            this.logger.warn?.({ opportunityId: row.id }, "Opportunity evidence repair skipped because no source evidence could be rebuilt");
+            continue;
+          }
+
+          const rebuiltSourceEvidence = dedupeEvidenceReferences(
+            row.relatedSignals.flatMap((item) => item.signal.evidence.map(mapStoredEvidence))
+          );
+          const rebuiltEvidence = scopeEvidenceReferences("opportunity", row.id, rebuiltSourceEvidence);
+          clonedEvidenceRows += rebuiltEvidence.length;
+          const preferredPrimarySignature = row.primaryEvidence
+            ? evidenceSignature(mapStoredEvidence(row.primaryEvidence))
+            : row.evidence[0]
+              ? evidenceSignature(mapStoredEvidence(row.evidence[0]))
+              : undefined;
+          const primaryEvidence = selectPrimaryEvidence(rebuiltEvidence, {
+            signature: preferredPrimarySignature
+          });
+          if (!primaryEvidence) {
+            unrecoverable.push(row.id);
+            validationFailures += 1;
+            this.logger.warn?.({ opportunityId: row.id }, "Opportunity evidence repair skipped because no primary evidence could be selected");
+            continue;
+          }
+
+          repaired += 1;
+          if (context.dryRun) {
+            continue;
+          }
+
+          const repairedRow = await this.repositories.repairOpportunityEvidence({
+            opportunityId: row.id,
+            evidence: rebuiltEvidence,
+            primaryEvidenceId: primaryEvidence.id,
+            supportingEvidenceCount: Math.max(0, rebuiltEvidence.length - 1),
+            evidenceFreshness: primaryEvidence.freshnessScore
+          });
+
+          if (repairedRow.notionPageId) {
+            const opportunity = this.mapOpportunityRow(repairedRow);
+            const syncResult = await this.notion.syncOpportunity(opportunity);
+            if (syncResult) {
+              run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
+              await this.repositories.updateOpportunityNotionSync(opportunity.id, syncResult.notionPageId, opportunity.notionPageFingerprint);
+            }
+          }
+
+          if (!isOpportunityEvidenceAlreadyRepaired(repairedRow)) {
+            throw new Error(`Opportunity ${row.id} failed post-repair validation.`);
           }
         }
       }
@@ -509,11 +619,24 @@ export class EditorialSignalEngineApp {
       if (unrecoverable.length > 0) {
         run.warnings.push(`Opportunity evidence repair could not rebuild ${unrecoverable.length} opportunities`);
       }
+      this.logger.info(
+        {
+          scanned,
+          candidates,
+          repaired,
+          skipped,
+          clonedEvidenceRows,
+          unrecoverable: unrecoverable.length,
+          validationFailures,
+          dryRun: context.dryRun
+        },
+        "Opportunity evidence repair summary"
+      );
 
       const finished = finalizeRun(
         run,
         "completed",
-        `Opportunity evidence repair evaluated ${rows.length} opportunities and repaired ${repaired}`
+        `Opportunity evidence repair scanned ${scanned} opportunities and repaired ${repaired}`
       );
       await this.finishRun(finished, [], context);
     } catch (error) {
@@ -607,6 +730,148 @@ export class EditorialSignalEngineApp {
     }
 
     return snapshots;
+  }
+
+  private async recoverDigestDispatches(channelId: string, run: SyncRun, context: RunContext) {
+    const blockedOpportunityIds = new Set<string>();
+    const dispatches = await this.repositories.listRecoverableDigestDispatches(channelId, context.now, 20);
+
+    for (const dispatch of dispatches) {
+      const trackBlocked = () => {
+        for (const opportunityId of dispatch.opportunityIds) {
+          blockedOpportunityIds.add(opportunityId);
+        }
+      };
+
+      const reconciled = await this.slack.findRecentDigestByKey({
+        channelId,
+        digestKey: dispatch.digestKey
+      });
+      if (reconciled) {
+        try {
+          const finalized = await this.repositories.finalizeDigestDispatch({
+            digestKey: dispatch.digestKey,
+            slackMessageTs: reconciled.ts,
+            sentAt: context.now,
+            opportunityIds: dispatch.opportunityIds
+          });
+          run.warnings.push(`Recovered digest ${dispatch.digestKey} from Slack history before sending a new digest`);
+          await this.syncDigestedOpportunityRows(finalized.opportunities, run);
+          continue;
+        } catch (error) {
+          this.logger.error({ error, digestKey: dispatch.digestKey }, "Digest recovery reconciliation failed");
+          run.warnings.push(`Digest ${dispatch.digestKey} was found in Slack history but DB reconciliation still failed`);
+          trackBlocked();
+          await this.sendOperationalAlertSafely(
+            `Digest ${dispatch.digestKey} was found in Slack history but DB reconciliation failed during recovery.`
+          );
+          continue;
+        }
+      }
+
+      const leaseActive = dispatch.status === "pending" && dispatch.leaseExpiresAt && new Date(dispatch.leaseExpiresAt) > context.now;
+      if (leaseActive) {
+        trackBlocked();
+        continue;
+      }
+
+      const recoveryRows = await this.repositories.findOpportunitiesByIds(dispatch.opportunityIds);
+      const foundIds = new Set(recoveryRows.map((row) => row.id));
+      const missingIds = dispatch.opportunityIds.filter((opportunityId) => !foundIds.has(opportunityId));
+      if (missingIds.length > 0) {
+        await this.repositories.markDigestDispatchFailed(
+          dispatch.digestKey,
+          `Recovery skipped because opportunities are missing: ${missingIds.join(", ")}`
+        );
+        run.warnings.push(`Digest ${dispatch.digestKey} could not be recovered because some opportunities no longer exist`);
+        trackBlocked();
+        await this.sendOperationalAlertSafely(
+          `Digest ${dispatch.digestKey} could not be recovered because opportunities are missing: ${missingIds.join(", ")}`
+        );
+        continue;
+      }
+
+      const rowsById = new Map(recoveryRows.map((row) => [row.id, row]));
+      const orderedRows = dispatch.opportunityIds.map((opportunityId) => rowsById.get(opportunityId)).filter(Boolean);
+      const invalidRows = orderedRows.filter((row) => !row?.notionPageId);
+      if (invalidRows.length > 0) {
+        await this.repositories.markDigestDispatchFailed(
+          dispatch.digestKey,
+          `Recovery skipped because opportunities are missing Notion pages: ${invalidRows.map((row) => row!.id).join(", ")}`
+        );
+        run.warnings.push(`Digest ${dispatch.digestKey} could not be recovered because some opportunities are missing Notion pages`);
+        trackBlocked();
+        await this.sendOperationalAlertSafely(
+          `Digest ${dispatch.digestKey} could not be recovered because opportunities are missing Notion pages: ${invalidRows.map((row) => row!.id).join(", ")}`
+        );
+        continue;
+      }
+
+      try {
+        const slackResult = await this.slack.sendDigest({
+          channelId,
+          digestKey: dispatch.digestKey,
+          opportunities: orderedRows.map((row) => this.mapOpportunityRow(row!))
+        });
+        if (!slackResult || !slackResult.ts) {
+          throw new Error("Slack digest recovery send did not return a Slack message timestamp.");
+        }
+
+        const finalized = await this.repositories.finalizeDigestDispatch({
+          digestKey: dispatch.digestKey,
+          slackMessageTs: slackResult.ts,
+          sentAt: context.now,
+          opportunityIds: dispatch.opportunityIds
+        });
+        run.warnings.push(`Retried digest ${dispatch.digestKey} from the recovery queue before building a new digest`);
+        await this.syncDigestedOpportunityRows(finalized.opportunities, run);
+      } catch (error) {
+        await this.repositories.markDigestDispatchFailed(
+          dispatch.digestKey,
+          error instanceof Error ? error.message : "Digest recovery resend failed"
+        );
+        trackBlocked();
+        this.logger.error({ error, digestKey: dispatch.digestKey }, "Digest recovery resend failed");
+        run.warnings.push(`Digest ${dispatch.digestKey} recovery resend failed`);
+        await this.sendOperationalAlertSafely(
+          `Digest ${dispatch.digestKey} recovery resend failed and will stay blocked until the next run.`
+        );
+      }
+    }
+
+    return blockedOpportunityIds;
+  }
+
+  private async syncDigestedOpportunityRows(
+    rows: Awaited<ReturnType<RepositoryBundle["findOpportunitiesByIds"]>>,
+    run: SyncRun
+  ) {
+    const notionFailures: string[] = [];
+    for (const row of rows) {
+      try {
+        const opportunity = this.mapOpportunityRow(row);
+        const syncResult = await this.notion.syncOpportunity(opportunity);
+        if (syncResult) {
+          run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
+          await this.repositories.updateOpportunityNotionSync(opportunity.id, syncResult.notionPageId, opportunity.notionPageFingerprint);
+        }
+      } catch (error) {
+        this.logger.error({ error, opportunityId: row.id }, "Opportunity digest write-back failed");
+        notionFailures.push(row.id);
+      }
+    }
+
+    if (notionFailures.length > 0) {
+      run.warnings.push(`Notion digest sync failed for opportunities: ${notionFailures.join(", ")}`);
+    }
+  }
+
+  private async sendOperationalAlertSafely(text: string) {
+    try {
+      await this.slack.sendOperationalAlert(text);
+    } catch (error) {
+      this.logger.error({ error, text }, "Slack operational alert failed");
+    }
   }
 
   private recordUsage(run: SyncRun, costs: Array<ReturnType<typeof createCostEntry>>, usage: LlmUsage, step: string, fallbackSteps: Set<string>) {
@@ -823,4 +1088,89 @@ function mapStoredEvidence(row: {
     speakerOrAuthor: row.speakerOrAuthor ?? undefined,
     freshnessScore: row.freshnessScore
   };
+}
+
+function buildDigestKey(items: Array<{ id: string; updatedAt: string }>, channel: string) {
+  return hashParts([
+    channel,
+    ...items
+      .slice()
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .flatMap((item) => [item.id, item.updatedAt])
+  ]);
+}
+
+function pickDigestDeliverySet<TEntry extends { row: { id: string; ownerProfile: string | null; updatedAt: Date } }>(entries: TEntry[]) {
+  const grouped = new Map<string, TEntry[]>();
+  for (const entry of entries) {
+    const key = entry.row.ownerProfile ?? "unassigned";
+    grouped.set(key, [...(grouped.get(key) ?? []), entry]);
+  }
+
+  return [...grouped.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .flatMap(([, profileEntries]) =>
+      profileEntries
+        .slice()
+        .sort((left, right) => {
+          const updatedAtDiff = right.row.updatedAt.getTime() - left.row.updatedAt.getTime();
+          if (updatedAtDiff !== 0) {
+            return updatedAtDiff;
+          }
+          return left.row.id.localeCompare(right.row.id);
+        })
+        .slice(0, 5)
+    );
+}
+
+function isOpportunityEvidenceAlreadyRepaired(row: {
+  id: string;
+  primaryEvidenceId: string | null;
+  supportingEvidenceCount: number;
+  evidence: Array<{
+    id: string;
+    source: string;
+    sourceItemId: string;
+    sourceUrl: string;
+    timestamp: Date;
+    excerpt: string;
+    excerptHash: string;
+    speakerOrAuthor: string | null;
+    freshnessScore: number;
+  }>;
+  primaryEvidence?: {
+    id: string;
+  } | null;
+}) {
+  if (row.evidence.length === 0 || !row.primaryEvidenceId || !row.primaryEvidence || row.primaryEvidence.id !== row.primaryEvidenceId) {
+    return false;
+  }
+
+  if (row.supportingEvidenceCount + 1 !== row.evidence.length) {
+    return false;
+  }
+
+  const mappedEvidence = row.evidence.map(mapStoredEvidence);
+  const expectedIds = new Set(scopeEvidenceReferences("opportunity", row.id, mappedEvidence).map((item) => item.id));
+  return mappedEvidence.every((item) => expectedIds.has(item.id));
+}
+
+function canRebuildOpportunityEvidence(row: {
+  relatedSignals: Array<{
+    signal: {
+      evidence: Array<{
+        id: string;
+        source: string;
+        sourceItemId: string;
+        sourceUrl: string;
+        timestamp: Date;
+        excerpt: string;
+        excerptHash: string;
+        speakerOrAuthor: string | null;
+        freshnessScore: number;
+      }>;
+    };
+  }>;
+}) {
+  return row.relatedSignals.some((item) => item.signal.evidence.length > 0);
 }

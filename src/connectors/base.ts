@@ -8,6 +8,10 @@ export abstract class BaseConnector<TConfig extends ConnectorConfig> implements 
   abstract readonly source: TConfig["source"];
   private lastRequestAt = 0;
 
+  protected async pause(ms: number) {
+    await sleep(ms);
+  }
+
   async healthcheck(config: TConfig): Promise<HealthcheckResult> {
     return {
       source: this.source,
@@ -24,7 +28,7 @@ export abstract class BaseConnector<TConfig extends ConnectorConfig> implements 
     const minDelayMs = Math.ceil(60000 / Math.max(1, config.rateLimit.requestsPerMinute));
     const elapsed = Date.now() - this.lastRequestAt;
     if (elapsed < minDelayMs) {
-      await sleep(minDelayMs - elapsed);
+      await this.pause(minDelayMs - elapsed);
     }
 
     for (let attempt = 0; attempt <= config.rateLimit.maxRetries; attempt += 1) {
@@ -38,7 +42,7 @@ export abstract class BaseConnector<TConfig extends ConnectorConfig> implements 
           throw error;
         }
 
-        await sleep(config.rateLimit.initialDelayMs * (attempt + 1));
+        await this.pause(config.rateLimit.initialDelayMs * (attempt + 1));
       }
     }
 

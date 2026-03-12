@@ -21,7 +21,8 @@
     "selection:scan": "tsx src/cli.ts selection:scan",
     "profile:weekly-recompute": "tsx src/cli.ts profile:weekly-recompute",
     "cleanup:retention": "tsx src/cli.ts cleanup:retention",
-    "backfill": "tsx src/cli.ts backfill"
+    "backfill": "tsx src/cli.ts backfill",
+    "repair:opportunity-evidence": "tsx src/cli.ts repair:opportunity-evidence"
   },
   "dependencies": {
     "@notionhq/client": "^2.3.0",

@@ -22,6 +22,7 @@ export const envSchema = z.object({
   LINEAR_API_KEY: z.string().default(""),
   DEFAULT_TIMEZONE: z.string().default("Europe/Paris"),
   LLM_MODEL: z.string().default("gpt-4.1-mini"),
+  LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(45000),
   LOG_LEVEL: z.string().default("info")
 });
 

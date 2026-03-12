@@ -17,6 +17,7 @@ describe("slack service", () => {
         LINEAR_API_KEY: "",
         DEFAULT_TIMEZONE: "Europe/Paris",
         LLM_MODEL: "test",
+        LLM_TIMEOUT_MS: 100,
         LOG_LEVEL: "info"
       },
       {
@@ -26,8 +27,10 @@ describe("slack service", () => {
       } as never
     );
 
-    await service.sendDigest([
-      {
+    await service.sendDigest({
+      channelId: "D123",
+      digestKey: "digest-key-1",
+      opportunities: [{
         id: "opp_1",
         sourceFingerprint: "opp-fp-1",
         title: "Proof-led angle",
@@ -71,8 +74,8 @@ describe("slack service", () => {
         v1History: [],
         notionPageId: "12345678-1234-1234-1234-1234567890ab",
         notionPageFingerprint: "opp-fp-1"
-      }
-    ]);
+      }]
+    });
 
     expect(postMessage).toHaveBeenCalledTimes(1);
     const calls = postMessage.mock.calls as unknown as Array<[{
@@ -84,7 +87,58 @@ describe("slack service", () => {
       throw new Error("Expected Slack payload");
     }
     expect(payload.text).toContain("Editorial opportunities digest");
+    expect(payload.text).toContain("Digest key: digest-key-1");
     expect(JSON.stringify(payload.blocks)).toContain("Fresh field proof is piling up this week.");
     expect(JSON.stringify(payload.blocks)).toContain("https://www.notion.so/123456781234123412341234567890ab");
+    expect(JSON.stringify(payload.blocks)).toContain("digest-key:digest-key-1");
+  });
+
+  it("paginates Slack history when reconciling a digest by key", async () => {
+    const conversationsHistory = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ ts: "111.111", text: "something else" }],
+        response_metadata: {
+          next_cursor: "page-2"
+        }
+      })
+      .mockResolvedValueOnce({
+        messages: [{ ts: "222.222", text: "Digest key: digest-key-2" }],
+        response_metadata: {}
+      });
+    const service = new SlackService(
+      {
+        DATABASE_URL: "",
+        NOTION_TOKEN: "",
+        NOTION_PARENT_PAGE_ID: "parent-page",
+        SLACK_BOT_TOKEN: "token",
+        SLACK_EDITORIAL_OPERATOR_ID: "U123",
+        OPENAI_API_KEY: "",
+        CLAAP_API_KEY: "",
+        LINEAR_API_KEY: "",
+        DEFAULT_TIMEZONE: "Europe/Paris",
+        LLM_MODEL: "test",
+        LLM_TIMEOUT_MS: 100,
+        LOG_LEVEL: "info"
+      },
+      {
+        conversations: {
+          history: conversationsHistory,
+          open: vi.fn(async () => ({ channel: { id: "D123" } }))
+        }
+      } as never
+    );
+
+    const channelId = await service.resolveDigestChannelId();
+    const result = await service.findRecentDigestByKey({
+      channelId: channelId ?? "D123",
+      digestKey: "digest-key-2"
+    });
+
+    expect(conversationsHistory).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({
+      ts: "222.222",
+      channel: "D123"
+    });
   });
 });

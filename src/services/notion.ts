@@ -25,23 +25,29 @@ type NotionClientLike = Client;
 export type NotionBindingStore = {
   getNotionDatabaseBinding(parentPageId: string, name: RequiredDatabase): Promise<{ databaseId: string } | null>;
   upsertNotionDatabaseBinding(parentPageId: string, name: RequiredDatabase, databaseId: string): Promise<unknown>;
+  clearNotionDatabaseBinding(parentPageId: string, name: RequiredDatabase): Promise<unknown>;
 };
 
 export class NotionService {
   private readonly client: NotionClientLike | null;
   private readonly databaseCache = new Map<RequiredDatabase, string>();
   private readonly bindings?: NotionBindingStore;
+  private readonly warningSink?: (warning: string) => void;
+  private readonly parentPageId: string;
 
   constructor(
     private readonly token: string,
-    private readonly parentPageId: string,
+    parentPageId: string,
     options: {
       client?: NotionClientLike;
       bindings?: NotionBindingStore;
+      onWarning?: (warning: string) => void;
     } = {}
   ) {
     this.client = options.client ?? (token ? new Client({ auth: token }) : null);
     this.bindings = options.bindings;
+    this.warningSink = options.onWarning;
+    this.parentPageId = normalizeNotionId(parentPageId);
   }
 
   isEnabled() {
@@ -283,39 +289,64 @@ export class NotionService {
     if (!this.client) {
       return null;
     }
-    const databaseId = await this.ensureDatabase(params.databaseName);
+    let knownPageId = params.notionPageId;
 
-    if (params.notionPageId) {
-      await this.client.pages.update({
-        page_id: params.notionPageId,
-        properties: params.properties as any
-      });
-      return {
-        notionPageId: params.notionPageId,
-        action: "updated"
-      };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const databaseId = await this.ensureDatabase(params.databaseName);
+
+      try {
+        if (knownPageId) {
+          try {
+            await this.client.pages.update({
+              page_id: knownPageId,
+              properties: params.properties as any
+            });
+            return {
+              notionPageId: knownPageId,
+              action: "updated"
+            };
+          } catch (error) {
+            if (!isNotionObjectNotFoundError(error)) {
+              throw error;
+            }
+
+            this.emitWarning(`Stale Notion page reference detected for ${params.databaseName}; recreating the page.`);
+            knownPageId = undefined;
+          }
+        }
+
+        const existing = await this.findPageByFingerprint(databaseId, params.fingerprintProperty, params.fingerprint);
+        if (existing) {
+          await this.client.pages.update({
+            page_id: existing,
+            properties: params.properties as any
+          });
+          return {
+            notionPageId: existing,
+            action: "updated"
+          };
+        }
+
+        const created = await this.client.pages.create({
+          parent: { database_id: databaseId },
+          properties: params.properties as any
+        });
+        return {
+          notionPageId: created.id,
+          action: "created"
+        };
+      } catch (error) {
+        if (attempt === 0 && isNotionDatabaseNotFoundError(error)) {
+          await this.clearBinding(params.databaseName, `Stale Notion database binding recovered for ${params.databaseName}.`);
+          knownPageId = undefined;
+          continue;
+        }
+
+        throw error;
+      }
     }
 
-    const existing = await this.findPageByFingerprint(databaseId, params.fingerprintProperty, params.fingerprint);
-    if (existing) {
-      await this.client.pages.update({
-        page_id: existing,
-        properties: params.properties as any
-      });
-      return {
-        notionPageId: existing,
-        action: "updated"
-      };
-    }
-
-    const created = await this.client.pages.create({
-      parent: { database_id: databaseId },
-      properties: params.properties as any
-    });
-    return {
-      notionPageId: created.id,
-      action: "created"
-    };
+    throw new Error(`Notion upsert failed for database ${params.databaseName}.`);
   }
 
   private async findPageByFingerprint(databaseId: string, propertyName: string, fingerprint: string) {
@@ -349,13 +380,14 @@ export class NotionService {
 
     const bound = this.bindings ? await this.bindings.getNotionDatabaseBinding(this.parentPageId, name) : null;
     if (bound?.databaseId) {
-      const valid = await this.verifyDatabaseBinding(name, bound.databaseId);
-      if (!valid) {
-        throw new Error(`Persisted Notion database binding for "${name}" is invalid or no longer under the configured parent page.`);
+      const state = await this.verifyDatabaseBinding(name, bound.databaseId);
+      if (state === "valid") {
+        this.databaseCache.set(name, bound.databaseId);
+        return bound.databaseId;
       }
-
-      this.databaseCache.set(name, bound.databaseId);
-      return bound.databaseId;
+      if (state === "stale") {
+        await this.clearBinding(name, `Stale Notion database binding recovered for ${name}.`);
+      }
     }
 
     const matches = await this.findDatabasesUnderParent(name);
@@ -400,40 +432,51 @@ export class NotionService {
       return;
     }
 
-    await this.client.pages.create({
-      parent: { page_id: this.parentPageId },
-      properties: {
-        title: titleProperty(title)
-      },
-      children: manualReviewViewSpecs().map((spec) => ({
-        object: "block",
-        type: "bulleted_list_item",
-        bulleted_list_item: {
-          rich_text: [
-            {
-              type: "text",
-              text: {
-                content: `${spec.name}: ${spec.description}`
+    try {
+      await this.client.pages.create({
+        parent: { page_id: this.parentPageId },
+        properties: {
+          title: titleProperty(title)
+        },
+        children: manualReviewViewSpecs().map((spec) => ({
+          object: "block",
+          type: "bulleted_list_item",
+          bulleted_list_item: {
+            rich_text: [
+              {
+                type: "text",
+                text: {
+                  content: `${spec.name}: ${spec.description}`
+                }
               }
-            }
-          ]
-        }
-      }))
-    });
+            ]
+          }
+        }))
+      });
+    } catch (error) {
+      if (isNotionObjectNotFoundError(error)) {
+        this.emitWarning("Skipping Operations Guide creation because the configured Notion parent cannot accept child pages.");
+        return;
+      }
+      throw error;
+    }
   }
 
   private async verifyDatabaseBinding(name: RequiredDatabase, databaseId: string) {
     if (!this.client) {
-      return false;
+      return "stale" as const;
     }
 
     try {
       const result = await this.client.databases.retrieve({
         database_id: databaseId
       });
-      return isExactDatabaseName(result, name) && isUnderParentPage(result, this.parentPageId);
-    } catch {
-      return false;
+      return isExactDatabaseName(result, name) && isUnderParentPage(result, this.parentPageId) ? ("valid" as const) : ("stale" as const);
+    } catch (error) {
+      if (isNotionDatabaseNotFoundError(error)) {
+        return "stale" as const;
+      }
+      throw error;
     }
   }
 
@@ -451,6 +494,16 @@ export class NotionService {
     });
 
     return response.results.filter((result) => isExactDatabaseName(result, name) && isUnderParentPage(result, this.parentPageId));
+  }
+
+  private async clearBinding(name: RequiredDatabase, warning: string) {
+    this.databaseCache.delete(name);
+    await this.bindings?.clearNotionDatabaseBinding(this.parentPageId, name);
+    this.emitWarning(warning);
+  }
+
+  private emitWarning(warning: string) {
+    this.warningSink?.(warning);
   }
 }
 
@@ -636,7 +689,57 @@ function isUnderParentPage(result: unknown, parentPageId: string) {
   }
 
   const parent = (result as { parent?: { type?: string; page_id?: string } }).parent;
-  return parent?.type === "page_id" && parent.page_id === parentPageId;
+  return parent?.type === "page_id" && normalizeNotionId(parent.page_id ?? "") === normalizeNotionId(parentPageId);
+}
+
+function normalizeNotionId(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  const hyphenatedMatch = trimmed.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/);
+  if (hyphenatedMatch) {
+    return hyphenatedMatch[0].toLowerCase();
+  }
+
+  const compactMatch = trimmed.match(/([0-9a-fA-F]{32})(?:\b|$)/);
+  if (!compactMatch) {
+    return trimmed;
+  }
+
+  const compact = compactMatch[1].toLowerCase();
+  return `${compact.slice(0, 8)}-${compact.slice(8, 12)}-${compact.slice(12, 16)}-${compact.slice(16, 20)}-${compact.slice(20)}`;
+}
+
+function isNotionObjectNotFoundError(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const typedError = error as {
+    status?: number;
+    code?: string;
+    body?: string;
+    message?: string;
+  };
+  const status = typedError.status;
+  const code = typedError.code;
+  const details = `${typedError.message ?? ""} ${typedError.body ?? ""}`.toLowerCase();
+  return code === "object_not_found" || status === 404 || (status === 400 && details.includes("not found"));
+}
+
+function isNotionDatabaseNotFoundError(error: unknown) {
+  if (!isNotionObjectNotFoundError(error)) {
+    return false;
+  }
+
+  const typedError = error as {
+    body?: string;
+    message?: string;
+  };
+  const details = `${typedError.message ?? ""} ${typedError.body ?? ""}`.toLowerCase();
+  return details.length === 0 || details.includes("database") || details.includes("object not found");
 }
 
 function urlProperty(value: string) {

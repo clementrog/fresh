@@ -15,9 +15,14 @@ export class SlackConnector extends BaseConnector<SlackSourceConfig> {
 
   constructor(
     private readonly env: AppEnv,
-    private readonly createClient: (token: string) => WebClient = (token) => new WebClient(token)
+    private readonly createClient: (token: string) => WebClient = (token) => new WebClient(token),
+    private readonly sleepImpl: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   ) {
     super();
+  }
+
+  protected override async pause(ms: number) {
+    await this.sleepImpl(ms);
   }
 
   override async fetchSince(cursor: string | null, config: SlackSourceConfig, _context: RunContext): Promise<RawSourceItem[]> {
@@ -31,13 +36,15 @@ export class SlackConnector extends BaseConnector<SlackSourceConfig> {
     for (const channel of config.channels.filter((entry) => entry.enabled)) {
       let nextCursor: string | undefined;
       do {
-        const history = await this.executeWithRateLimit(config, () =>
-          client.conversations.history({
-            channel: channel.channelId,
-            oldest: cursor ?? undefined,
-            limit: 200,
-            cursor: nextCursor
-          })
+        const history = await this.executeSlackOperation(config, () =>
+          this.executeWithRateLimit(config, () =>
+            client.conversations.history({
+              channel: channel.channelId,
+              oldest: cursor ?? undefined,
+              limit: 200,
+              cursor: nextCursor
+            }),
+          false)
         );
 
         for (const message of history.messages ?? []) {
@@ -140,14 +147,16 @@ export class SlackConnector extends BaseConnector<SlackSourceConfig> {
     let nextCursor: string | undefined;
 
     do {
-      const response = await this.executeWithRateLimit(config, () =>
-        client.conversations.replies({
-          channel: channelId,
-          ts: threadTs,
-          oldest: cursor ?? undefined,
-          limit: 200,
-          cursor: nextCursor
-        })
+      const response = await this.executeSlackOperation(config, () =>
+        this.executeWithRateLimit(config, () =>
+          client.conversations.replies({
+            channel: channelId,
+            ts: threadTs,
+            oldest: cursor ?? undefined,
+            limit: 200,
+            cursor: nextCursor
+          }),
+        false)
       );
 
       for (const reply of response.messages ?? []) {
@@ -161,9 +170,62 @@ export class SlackConnector extends BaseConnector<SlackSourceConfig> {
 
     return [...replies.values()];
   }
+
+  private async executeSlackOperation<TResult>(config: SlackSourceConfig, operation: () => Promise<TResult>) {
+    for (let attempt = 0; attempt <= config.rateLimit.maxRetries + 2; attempt += 1) {
+      try {
+        return await operation();
+      } catch (error) {
+        const retryAfterMs = getSlackRetryAfterMs(error);
+        if (retryAfterMs === null) {
+          throw error;
+        }
+
+        const backoffMs = retryAfterMs + config.rateLimit.initialDelayMs * attempt;
+        await this.pause(backoffMs);
+      }
+    }
+
+    throw new Error("Slack operation exceeded retry budget after repeated rate limits.");
+  }
 }
 
 function slackTsToIso(ts: string) {
   const millis = Number.parseFloat(ts) * 1000;
   return new Date(Number.isFinite(millis) ? millis : Date.now()).toISOString();
+}
+
+function getSlackRetryAfterMs(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+
+  const typedError = error as {
+    statusCode?: number;
+    data?: { retryAfter?: number; retry_after?: number };
+    headers?: Record<string, string | number | undefined> | { get?: (name: string) => string | null };
+  };
+  if (typedError.statusCode !== 429) {
+    return null;
+  }
+
+  const retryAfterFromData = typedError.data?.retryAfter ?? typedError.data?.retry_after;
+  if (typeof retryAfterFromData === "number" && Number.isFinite(retryAfterFromData)) {
+    return retryAfterFromData * 1000;
+  }
+
+  if (typedError.headers && "get" in typedError.headers && typeof typedError.headers.get === "function") {
+    const headerValue = typedError.headers.get("retry-after");
+    const parsed = Number(headerValue);
+    if (Number.isFinite(parsed)) {
+      return parsed * 1000;
+    }
+  }
+
+  const headerValue =
+    typedError.headers && !("get" in typedError.headers)
+      ? (typedError.headers as Record<string, string | number | undefined>)["retry-after"]
+      : undefined;
+  const parsed = Number(headerValue);
+  return Number.isFinite(parsed) ? parsed * 1000 : null;
 }

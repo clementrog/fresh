@@ -395,6 +395,21 @@ export interface NotionDatabaseBinding {
   updatedAt?: string;
 }
 
+export type DigestDispatchStatus = "pending" | "sent" | "failed";
+
+export interface DigestDispatch {
+  digestKey: string;
+  status: DigestDispatchStatus;
+  channel: string;
+  opportunityIds: string[];
+  slackMessageTs?: string;
+  sentAt?: string;
+  leaseExpiresAt?: string;
+  error?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface SourceConnector<TConfig extends ConnectorConfig = ConnectorConfig> {
   readonly source: SourceKind;
   healthcheck(config: TConfig): Promise<HealthcheckResult>;

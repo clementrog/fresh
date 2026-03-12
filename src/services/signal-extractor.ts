@@ -9,6 +9,11 @@ export async function extractSignalFromItem(
   llmClient: LlmClient,
   doctrine?: string
 ): Promise<{ signal: EditorialSignal; usage: import("./llm.js").LlmUsage }> {
+  const marketInsightSignal = buildMarketInsightSignal(item, evidence);
+  if (marketInsightSignal) {
+    return marketInsightSignal;
+  }
+
   const llm = await llmClient.generateStructured({
     step: "signal-extraction",
     system: "Extract one editorial signal from the provided evidence-backed internal source. Return structured JSON only.",
@@ -43,6 +48,58 @@ export async function extractSignalFromItem(
       notionPageFingerprint: sourceFingerprint
     },
     usage: llm.usage
+  };
+}
+
+function buildMarketInsightSignal(item: NormalizedSourceItem, evidence: EvidenceReference[]) {
+  if (item.metadata.notionKind !== "market-insight") {
+    return null;
+  }
+
+  const theme = String(item.metadata.theme ?? "Market insight");
+  const sourceType = String(item.metadata.sourceTypeLabel ?? "");
+  const probableOwnerProfile = item.metadata.profileHint as EditorialSignal["probableOwnerProfile"] | undefined;
+  const type = inferMarketInsightType(`${item.title}\n${item.summary}\n${item.text}`);
+  const freshness = evidence[0]?.freshnessScore ?? 0.6;
+  const confidence = sourceType ? 0.86 : 0.8;
+  const suggestedAngle = [
+    `Partir du theme "${theme}" et montrer ce qu'il revele dans les criteres de decision actuels.`,
+    sourceType ? `Ancrer le point de vue sur une source de type ${sourceType.toLowerCase()}.` : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const sourceFingerprint = hashParts(["notion-market-insight", item.externalId, theme, type]);
+
+  return {
+    signal: {
+      id: createDeterministicId("signal", [sourceFingerprint]),
+      sourceFingerprint,
+      title: item.title,
+      summary: item.summary,
+      type,
+      freshness,
+      confidence,
+      probableOwnerProfile,
+      suggestedAngle,
+      status: "New" as const,
+      evidence,
+      sourceItemIds: [item.externalId],
+      sensitivity: {
+        blocked: false,
+        categories: [],
+        rationale: "Not assessed yet",
+        stageOneMatchedRules: [],
+        stageTwoScore: 0
+      },
+      notionPageFingerprint: sourceFingerprint
+    },
+    usage: {
+      mode: "provider" as const,
+      promptTokens: 0,
+      completionTokens: 0,
+      estimatedCostUsd: 0,
+      skipped: true
+    }
   };
 }
 
@@ -81,4 +138,18 @@ function suggestAngle(type: SignalType) {
     default:
       return "Extract the underlying lesson and connect it to a specific Linc perspective.";
   }
+}
+
+function inferMarketInsightType(text: string): SignalType {
+  const lower = text.toLowerCase();
+  if (/\b(objection|proof|adoption|buyer)\b/.test(lower)) {
+    return "market-pattern";
+  }
+  if (/\b(feedback|usage|product|ux)\b/.test(lower)) {
+    return "product-insight";
+  }
+  if (/\b(case law|regulation|reglement|dsn|pay transparency)\b/.test(lower)) {
+    return "process-lesson";
+  }
+  return "market-pattern";
 }

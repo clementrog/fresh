@@ -14,6 +14,22 @@ export async function resolveTerritory(
   signal: EditorialSignal,
   llmClient: LlmClient
 ): Promise<{ assignment: TerritoryAssignment; usage: import("./llm.js").LlmUsage }> {
+  if (signal.probableOwnerProfile) {
+    const direct = directAssignment(signal.probableOwnerProfile, signal);
+    if (direct) {
+      return {
+        assignment: direct,
+        usage: {
+          mode: "provider",
+          promptTokens: 0,
+          completionTokens: 0,
+          estimatedCostUsd: 0,
+          skipped: true
+        }
+      };
+    }
+  }
+
   const llm = await llmClient.generateStructured({
     step: "territory-assignment",
     system: "Assign the signal to the most legitimate editorial territory or mark it as needs routing. Return structured JSON only.",
@@ -27,6 +43,21 @@ export async function resolveTerritory(
     assignment: llm.output,
     usage: llm.usage
   };
+}
+
+function directAssignment(profileId: NonNullable<EditorialSignal["probableOwnerProfile"]>, signal: EditorialSignal) {
+  const rule = TERRITORY_RULES.find((entry) => entry.profileId === profileId);
+  if (!rule) {
+    return null;
+  }
+
+  return {
+    profileId,
+    territory: rule.territory,
+    confidence: Math.max(0.82, signal.confidence),
+    needsRouting: false,
+    rationale: `Matched directly from the source-specific profile hint for ${rule.territory}.`
+  } satisfies TerritoryAssignment;
 }
 
 function heuristicTerritory(signal: EditorialSignal) {

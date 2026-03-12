@@ -4,6 +4,7 @@ import type { PrismaClient } from "@prisma/client";
 import type {
   ContentOpportunity,
   CostLedgerEntry,
+  DigestDispatch,
   DraftV1,
   EditorialSignal,
   EvidenceReference,
@@ -69,6 +70,153 @@ export class RepositoryBundle {
       },
       update: {
         databaseId
+      }
+    });
+  }
+
+  async clearNotionDatabaseBinding(parentPageId: string, name: string, tx: PrismaTransaction = this.prisma) {
+    await tx.notionDatabaseBinding.deleteMany({
+      where: {
+        parentPageId,
+        name
+      }
+    });
+  }
+
+  async acquireDigestDispatch(params: {
+    digestKey: string;
+    channel: string;
+    opportunityIds: string[];
+    now: Date;
+    leaseMs: number;
+  }): Promise<{ action: "acquired" | "already_sent" | "inflight"; dispatch: DigestDispatch }> {
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.digestDispatch.findUnique({
+        where: { digestKey: params.digestKey }
+      });
+
+      if (existing?.status === "sent") {
+        return {
+          action: "already_sent" as const,
+          dispatch: mapDigestDispatch(existing)
+        };
+      }
+
+      if (existing?.status === "pending" && existing.leaseExpiresAt && existing.leaseExpiresAt > params.now) {
+        return {
+          action: "inflight" as const,
+          dispatch: mapDigestDispatch(existing)
+        };
+      }
+
+      const leaseExpiresAt = new Date(params.now.getTime() + params.leaseMs);
+      const dispatch = existing
+        ? await tx.digestDispatch.update({
+            where: { digestKey: params.digestKey },
+            data: {
+              status: "pending",
+              channel: params.channel,
+              opportunityIdsJson: toJson(params.opportunityIds),
+              leaseExpiresAt,
+              slackMessageTs: null,
+              sentAt: null,
+              error: null
+            }
+          })
+        : await tx.digestDispatch.create({
+            data: {
+              id: createDeterministicId("digest-dispatch", [params.digestKey]),
+              digestKey: params.digestKey,
+              status: "pending",
+              channel: params.channel,
+              opportunityIdsJson: toJson(params.opportunityIds),
+              leaseExpiresAt
+            }
+          });
+
+      return {
+        action: "acquired" as const,
+        dispatch: mapDigestDispatch(dispatch)
+      };
+    });
+  }
+
+  async finalizeDigestDispatch(params: {
+    digestKey: string;
+    slackMessageTs: string;
+    sentAt: Date;
+    opportunityIds: string[];
+  }) {
+    return this.prisma.$transaction(async (tx) => {
+      const dispatch = await tx.digestDispatch.update({
+        where: { digestKey: params.digestKey },
+        data: {
+          status: "sent",
+          slackMessageTs: params.slackMessageTs,
+          sentAt: params.sentAt,
+          leaseExpiresAt: null,
+          error: null
+        }
+      });
+
+      await tx.opportunity.updateMany({
+        where: {
+          id: {
+            in: params.opportunityIds
+          }
+        },
+        data: {
+          lastDigestAt: params.sentAt
+        }
+      });
+
+      const opportunities = await tx.opportunity.findMany({
+        where: {
+          id: {
+            in: params.opportunityIds
+          }
+        },
+        include: opportunityInclude,
+        orderBy: {
+          updatedAt: "desc"
+        }
+      });
+
+      return {
+        dispatch: mapDigestDispatch(dispatch),
+        opportunities
+      };
+    });
+  }
+
+  async listRecoverableDigestDispatches(channel: string, now: Date, take: number) {
+    const lookback = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const dispatches = await this.prisma.digestDispatch.findMany({
+      where: {
+        channel,
+        status: {
+          in: ["pending", "failed"]
+        },
+        createdAt: {
+          gte: lookback
+        }
+      },
+      orderBy: {
+        createdAt: "asc"
+      },
+      take
+    });
+
+    return dispatches.map(mapDigestDispatch);
+  }
+
+  async markDigestDispatchFailed(digestKey: string, error: string, tx: PrismaTransaction = this.prisma) {
+    return tx.digestDispatch.updateMany({
+      where: { digestKey },
+      data: {
+        status: "failed",
+        error,
+        leaseExpiresAt: null
       }
     });
   }
@@ -397,6 +545,8 @@ export class RepositoryBundle {
     signalIds: string[] | null,
     tx: PrismaTransaction = this.prisma
   ) {
+    validateOpportunityPrimaryEvidence(evidence, primaryEvidenceId);
+
     await tx.evidenceReference.deleteMany({
       where: { opportunityId }
     });
@@ -590,6 +740,24 @@ export class RepositoryBundle {
     });
   }
 
+  async findOpportunitiesByIds(ids: string[]) {
+    if (ids.length === 0) {
+      return [];
+    }
+
+    return this.prisma.opportunity.findMany({
+      where: {
+        id: {
+          in: ids
+        }
+      },
+      include: opportunityInclude,
+      orderBy: {
+        updatedAt: "desc"
+      }
+    });
+  }
+
   async listProfiles() {
     const [bases, learnedLayers] = await Promise.all([
       this.prisma.profileBase.findMany(),
@@ -661,8 +829,15 @@ export class RepositoryBundle {
     });
   }
 
-  async listOpportunitiesForEvidenceRepair() {
+  async listOpportunitiesForEvidenceRepairBatch(params: { afterId?: string; take: number }) {
     return this.prisma.opportunity.findMany({
+      ...(params.afterId
+        ? {
+            cursor: { id: params.afterId },
+            skip: 1
+          }
+        : {}),
+      take: params.take,
       include: {
         ...opportunityInclude,
         relatedSignals: {
@@ -676,7 +851,7 @@ export class RepositoryBundle {
         }
       },
       orderBy: {
-        updatedAt: "desc"
+        id: "asc"
       }
     });
   }
@@ -741,4 +916,55 @@ function toJson(value: unknown): Prisma.InputJsonValue {
 
 function nullableJson(value: unknown): Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput {
   return value === null ? Prisma.JsonNull : toJson(value);
+}
+
+function mapDigestDispatch(dispatch: {
+  digestKey: string;
+  status: string;
+  channel: string;
+  opportunityIdsJson: unknown;
+  slackMessageTs: string | null;
+  sentAt: Date | null;
+  leaseExpiresAt: Date | null;
+  error: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): DigestDispatch {
+  return {
+    digestKey: dispatch.digestKey,
+    status: dispatch.status as DigestDispatch["status"],
+    channel: dispatch.channel,
+    opportunityIds: expectStringArray(dispatch.opportunityIdsJson),
+    slackMessageTs: dispatch.slackMessageTs ?? undefined,
+    sentAt: dispatch.sentAt?.toISOString(),
+    leaseExpiresAt: dispatch.leaseExpiresAt?.toISOString(),
+    error: dispatch.error ?? undefined,
+    createdAt: dispatch.createdAt.toISOString(),
+    updatedAt: dispatch.updatedAt.toISOString()
+  };
+}
+
+export function validateOpportunityPrimaryEvidence(evidence: EvidenceReference[], primaryEvidenceId: string | null) {
+  if (evidence.length === 0) {
+    if (primaryEvidenceId !== null) {
+      throw new Error("Primary evidence id must be null when opportunity evidence is empty.");
+    }
+    return;
+  }
+
+  if (!primaryEvidenceId) {
+    throw new Error("Primary evidence id is required when opportunity evidence exists.");
+  }
+
+  if (!evidence.some((item) => item.id === primaryEvidenceId)) {
+    throw new Error("Primary evidence id must reference an evidence row owned by the opportunity.");
+  }
+}
+
+function expectStringArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    throw new Error("Expected persisted JSON array");
+  }
+
+  return value.map((item) => String(item));
 }
