@@ -24,8 +24,12 @@ const env = {
 describe("market insights notion ingestion", () => {
   it("normalizes market insight database rows into structured source material", async () => {
     const connector = new NotionConnector(env);
+    let pageContentCalls = 0;
     (connector as unknown as { fetchPageContent: () => Promise<string> }).fetchPageContent = async () =>
-      "Buyers now ask for visible proof of field adoption before trusting the promise.";
+      {
+        pageContentCalls += 1;
+        return "Buyers now ask for visible proof of field adoption before trusting the promise.";
+      };
 
     const rawItem: RawSourceItem = {
       id: "page-1",
@@ -87,11 +91,11 @@ describe("market insights notion ingestion", () => {
     expect(normalized.metadata.notionKind).toBe("market-insight");
     expect(normalized.metadata.theme).toBe("Strategic synthesis 2026");
     expect(normalized.metadata.profileHint).toBe("baptiste");
+    expect(pageContentCalls).toBe(0);
     expect(normalized.chunks).toEqual([
       "Buyers want proof of adoption",
       "Theme: Strategic synthesis 2026",
-      "Source type: Synthesis",
-      "Buyers now ask for visible proof of field adoption before trusting the promise."
+      "Source type: Synthesis"
     ]);
   });
 
@@ -155,5 +159,72 @@ describe("market insights notion ingestion", () => {
     expect(territory.usage.skipped).toBe(true);
     expect(territory.assignment.profileId).toBe("baptiste");
     expect(territory.assignment.needsRouting).toBe(false);
+  });
+
+  it("keeps market insight rows on the structured path even when Theme is blank", async () => {
+    const connector = new NotionConnector(env);
+
+    const rawItem: RawSourceItem = {
+      id: "page-2",
+      cursor: "2026-03-12T12:00:00.000Z",
+      payload: {
+        sourceType: "database",
+        parentDatabaseId: "f3595464-713a-41d6-9897-5d9e0aaa065f",
+        page: {
+          id: "page-2",
+          url: "https://www.notion.so/page-2",
+          last_edited_time: "2026-03-12T12:00:00.000Z",
+          properties: {
+            Insight: {
+              type: "title",
+              title: [{ plain_text: "A labor update without an explicit theme" }]
+            },
+            Theme: {
+              type: "select",
+              select: null
+            },
+            "Source type": {
+              type: "select",
+              select: { name: "Secondary" }
+            },
+            "Source URL": {
+              type: "url",
+              url: "https://example.com/labor-update"
+            },
+            Timestamp: {
+              type: "date",
+              date: { start: "2026-03-12" }
+            }
+          }
+        }
+      }
+    };
+    const config = {
+      source: "notion" as const,
+      enabled: true,
+      storeRawText: false,
+      retentionDays: 30,
+      rateLimit: {
+        requestsPerMinute: 30,
+        maxRetries: 3,
+        initialDelayMs: 10
+      },
+      pageAllowlist: [],
+      databaseAllowlist: ["f3595464-713a-41d6-9897-5d9e0aaa065f"],
+      excludedDatabaseNames: []
+    };
+
+    const normalized = await connector.normalize(rawItem, config, {
+      dryRun: false,
+      now: new Date("2026-03-12T12:30:00.000Z")
+    });
+
+    expect(normalized.metadata.notionKind).toBe("market-insight");
+    expect(normalized.metadata.theme).toBe("General");
+    expect(normalized.chunks).toEqual([
+      "A labor update without an explicit theme",
+      "Theme: General",
+      "Source type: Secondary"
+    ]);
   });
 });

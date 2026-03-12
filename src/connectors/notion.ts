@@ -92,43 +92,15 @@ export class NotionConnector extends BaseConnector<NotionSourceConfig> {
       properties?: Record<string, unknown>;
     };
     const properties = page.properties ?? {};
+    const marketInsightFromProperties = extractMarketInsight(properties, "");
+    if (marketInsightFromProperties && !config.storeRawText) {
+      return this.buildMarketInsightSourceItem(page, rawItem, config, context, marketInsightFromProperties, "");
+    }
+
     const content = await this.fetchPageContent(page.id, config);
     const marketInsight = extractMarketInsight(properties, content);
     if (marketInsight) {
-      const sourceItemId = page.id;
-      return {
-        source: "notion",
-        sourceItemId,
-        externalId: `notion:${sourceItemId}`,
-        sourceFingerprint: hashParts([
-          "notion",
-          "market-insight",
-          sourceItemId,
-          marketInsight.title,
-          marketInsight.theme,
-          marketInsight.occurredAt,
-          marketInsight.text
-        ]),
-        sourceUrl: marketInsight.sourceUrl || page.url || "",
-        title: marketInsight.title,
-        text: marketInsight.text,
-        summary: marketInsight.summary,
-        occurredAt: marketInsight.occurredAt,
-        ingestedAt: context.now.toISOString(),
-        metadata: {
-          sourceType: rawItem.payload.sourceType,
-          parentDatabaseId: rawItem.payload.parentDatabaseId,
-          properties,
-          storeRawText: config.storeRawText,
-          notionKind: "market-insight",
-          theme: marketInsight.theme,
-          sourceTypeLabel: marketInsight.sourceType,
-          profileHint: marketInsight.profileHint
-        },
-        rawPayload: rawItem.payload,
-        rawText: config.storeRawText ? marketInsight.text : null,
-        chunks: marketInsight.chunks
-      };
+      return this.buildMarketInsightSourceItem(page, rawItem, config, context, marketInsight, content);
     }
 
     const title = extractNotionTitle(properties) || `Notion page ${page.id}`;
@@ -193,6 +165,58 @@ export class NotionConnector extends BaseConnector<NotionSourceConfig> {
 
     return lines.join("\n").slice(0, 6000);
   }
+
+  private buildMarketInsightSourceItem(
+    page: {
+      id: string;
+      url?: string;
+      properties?: Record<string, unknown>;
+    },
+    rawItem: RawSourceItem,
+    config: NotionSourceConfig,
+    context: RunContext,
+    marketInsight: ReturnType<typeof extractMarketInsight>,
+    content: string
+  ): NormalizedSourceItem {
+    if (!marketInsight) {
+      throw new Error("Expected structured market insight payload");
+    }
+
+    const sourceItemId = page.id;
+    return {
+      source: "notion",
+      sourceItemId,
+      externalId: `notion:${sourceItemId}`,
+      sourceFingerprint: hashParts([
+        "notion",
+        "market-insight",
+        sourceItemId,
+        marketInsight.title,
+        marketInsight.theme,
+        marketInsight.occurredAt,
+        marketInsight.text
+      ]),
+      sourceUrl: marketInsight.sourceUrl || page.url || "",
+      title: marketInsight.title,
+      text: marketInsight.text,
+      summary: marketInsight.summary,
+      occurredAt: marketInsight.occurredAt,
+      ingestedAt: context.now.toISOString(),
+      metadata: {
+        sourceType: rawItem.payload.sourceType,
+        parentDatabaseId: rawItem.payload.parentDatabaseId,
+        properties: page.properties ?? {},
+        storeRawText: config.storeRawText,
+        notionKind: "market-insight",
+        theme: marketInsight.theme,
+        sourceTypeLabel: marketInsight.sourceType,
+        profileHint: marketInsight.profileHint
+      },
+      rawPayload: rawItem.payload,
+      rawText: config.storeRawText ? marketInsight.text : null,
+      chunks: marketInsight.chunks
+    };
+  }
 }
 
 function extractNotionTitle(properties: Record<string, unknown>) {
@@ -227,12 +251,12 @@ function extractBlockText(block: Record<string, unknown>) {
 
 function extractMarketInsight(properties: Record<string, unknown>, content: string) {
   const insightTitle = extractTitleProperty(properties, "Insight");
-  const theme = extractSelectProperty(properties, "Theme");
+  const theme = extractSelectProperty(properties, "Theme") || "General";
   const sourceType = extractSelectProperty(properties, "Source type");
   const sourceUrl = extractUrlProperty(properties, "Source URL");
   const occurredAt = extractDateProperty(properties, "Timestamp");
 
-  if (!insightTitle || !theme) {
+  if (!insightTitle) {
     return null;
   }
 
