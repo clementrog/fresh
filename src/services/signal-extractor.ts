@@ -13,6 +13,10 @@ export async function extractSignalFromItem(
   if (marketInsightSignal) {
     return marketInsightSignal;
   }
+  const claapSignal = buildClaapSignal(item, evidence);
+  if (claapSignal) {
+    return claapSignal;
+  }
 
   const llm = await llmClient.generateStructured({
     step: "signal-extraction",
@@ -48,6 +52,60 @@ export async function extractSignalFromItem(
       notionPageFingerprint: sourceFingerprint
     },
     usage: llm.usage
+  };
+}
+
+function buildClaapSignal(item: NormalizedSourceItem, evidence: EvidenceReference[]) {
+  if (item.metadata.notionKind !== "claap-signal") {
+    return null;
+  }
+
+  const signalType = inferClaapSignalType(String(item.metadata.signalTypeLabel ?? ""));
+  const theme = String(item.metadata.theme ?? "General");
+  const probableOwnerProfile = item.metadata.profileHint as EditorialSignal["probableOwnerProfile"] | undefined;
+  const hookCandidate = String(item.metadata.hookCandidate ?? "").trim();
+  const whyItMatters = String(item.metadata.whyItMatters ?? "").trim();
+  const confidence = Number(item.metadata.confidenceScore ?? 0.78);
+  const freshness = evidence[0]?.freshnessScore ?? 0.65;
+  const suggestedAngle = [
+    hookCandidate,
+    whyItMatters ? `S'appuyer sur ce signal de terrain pour montrer pourquoi il compte maintenant.` : "",
+    `Theme: ${theme}.`
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const sourceFingerprint = hashParts(["notion-claap-signal", item.externalId, signalType, theme, hookCandidate || item.title]);
+
+  return {
+    signal: {
+      id: createDeterministicId("signal", [sourceFingerprint]),
+      sourceFingerprint,
+      title: item.title,
+      summary: item.summary,
+      type: signalType,
+      freshness,
+      confidence,
+      probableOwnerProfile,
+      suggestedAngle,
+      status: "New" as const,
+      evidence,
+      sourceItemIds: [item.externalId],
+      sensitivity: {
+        blocked: false,
+        categories: [],
+        rationale: "Not assessed yet",
+        stageOneMatchedRules: [],
+        stageTwoScore: 0
+      },
+      notionPageFingerprint: sourceFingerprint
+    },
+    usage: {
+      mode: "provider" as const,
+      promptTokens: 0,
+      completionTokens: 0,
+      estimatedCostUsd: 0,
+      skipped: true
+    }
   };
 }
 
@@ -152,4 +210,27 @@ function inferMarketInsightType(text: string): SignalType {
     return "process-lesson";
   }
   return "market-pattern";
+}
+
+function inferClaapSignalType(label: string): SignalType {
+  const normalized = label.toLowerCase();
+  if (normalized.includes("pain point")) {
+    return "friction";
+  }
+  if (normalized.includes("objection")) {
+    return "objection";
+  }
+  if (normalized.includes("market language")) {
+    return "user-language";
+  }
+  if (normalized.includes("usage insight")) {
+    return "product-insight";
+  }
+  if (normalized.includes("operational friction")) {
+    return "friction";
+  }
+  if (normalized.includes("proof point")) {
+    return "decision-rationale";
+  }
+  return "decision-rationale";
 }

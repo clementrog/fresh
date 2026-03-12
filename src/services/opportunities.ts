@@ -42,7 +42,7 @@ export function maybeCreateOpportunity(params: {
     angle: signal.suggestedAngle,
     whyNow: `Fresh evidence score ${(signal.freshness * 100).toFixed(0)} with ${signal.evidence.length} supporting excerpts.`,
     whatItIsAbout: signal.summary,
-    whatItIsNotAbout: "A generic thought-leadership take without direct evidence.",
+    whatItIsNotAbout: describeWhatItIsNotAbout(signal),
     relatedSignalIds: [signal.id],
     evidence,
     primaryEvidence,
@@ -82,4 +82,24 @@ function suggestFormat(signal: EditorialSignal) {
     return "Short insight + explanation";
   }
   return "Narrative lesson post";
+}
+
+function describeWhatItIsNotAbout(signal: EditorialSignal) {
+  switch (signal.type) {
+    case "objection":
+    case "adoption-blocker":
+      return "A generic sales pep talk or a feature list without real field objections.";
+    case "friction":
+    case "process-lesson":
+      return "A vague complaint about operations without concrete proof from the field.";
+    case "market-pattern":
+    case "decision-rationale":
+    case "tradeoff":
+      return "A broad trend comment that lacks a sharp point of view or real evidence.";
+    case "user-language":
+    case "quote":
+      return "An isolated quote with no editorial lesson behind it.";
+    default:
+      return "A generic thought-leadership take without direct evidence.";
+  }
 }

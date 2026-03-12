@@ -96,6 +96,10 @@ export class NotionConnector extends BaseConnector<NotionSourceConfig> {
     if (marketInsightFromProperties && !config.storeRawText) {
       return this.buildMarketInsightSourceItem(page, rawItem, config, context, marketInsightFromProperties, "");
     }
+    const claapSignalFromProperties = extractClaapSignal(properties);
+    if (claapSignalFromProperties && !config.storeRawText) {
+      return this.buildClaapSignalSourceItem(page, rawItem, config, context, claapSignalFromProperties);
+    }
 
     const content = await this.fetchPageContent(page.id, config);
     const marketInsight = extractMarketInsight(properties, content);
@@ -217,6 +221,64 @@ export class NotionConnector extends BaseConnector<NotionSourceConfig> {
       chunks: marketInsight.chunks
     };
   }
+
+  private buildClaapSignalSourceItem(
+    page: {
+      id: string;
+      url?: string;
+      properties?: Record<string, unknown>;
+    },
+    rawItem: RawSourceItem,
+    config: NotionSourceConfig,
+    context: RunContext,
+    claapSignal: ReturnType<typeof extractClaapSignal>
+  ): NormalizedSourceItem {
+    if (!claapSignal) {
+      throw new Error("Expected structured Claap signal payload");
+    }
+
+    const sourceItemId = page.id;
+    return {
+      source: "notion",
+      sourceItemId,
+      externalId: `notion:${sourceItemId}`,
+      sourceFingerprint: hashParts([
+        "notion",
+        "claap-signal",
+        sourceItemId,
+        claapSignal.title,
+        claapSignal.signalType,
+        claapSignal.theme,
+        claapSignal.occurredAt
+      ]),
+      sourceUrl: claapSignal.transcriptUrl || page.url || "",
+      title: claapSignal.title,
+      text: claapSignal.text,
+      summary: claapSignal.summary,
+      authorName: claapSignal.speakerContext || undefined,
+      occurredAt: claapSignal.occurredAt,
+      ingestedAt: context.now.toISOString(),
+      metadata: {
+        sourceType: rawItem.payload.sourceType,
+        parentDatabaseId: rawItem.payload.parentDatabaseId,
+        properties: page.properties ?? {},
+        storeRawText: config.storeRawText,
+        notionKind: "claap-signal",
+        theme: claapSignal.theme,
+        signalTypeLabel: claapSignal.signalType,
+        profileHint: claapSignal.profileHint,
+        hookCandidate: claapSignal.hookCandidate,
+        whyItMatters: claapSignal.whyItMatters,
+        confidenceLabel: claapSignal.confidenceLabel,
+        confidenceScore: claapSignal.confidenceScore,
+        transcriptTitle: claapSignal.transcriptTitle,
+        speakerContext: claapSignal.speakerContext
+      },
+      rawPayload: rawItem.payload,
+      rawText: config.storeRawText ? claapSignal.text : null,
+      chunks: claapSignal.excerpts
+    };
+  }
 }
 
 function extractNotionTitle(properties: Record<string, unknown>) {
@@ -300,12 +362,80 @@ function extractMarketInsight(properties: Record<string, unknown>, content: stri
   };
 }
 
+function extractClaapSignal(properties: Record<string, unknown>) {
+  const title = extractNotionTitle(properties);
+  const summary = extractRichTextProperty(properties, "Signal summary");
+  const hookCandidate = extractRichTextProperty(properties, "Hook candidate");
+  const whyItMatters = extractRichTextProperty(properties, "Why it matters");
+  const excerptsField = extractRichTextProperty(properties, "Claap excerpts");
+  const excerpts = splitStructuredExcerpts(excerptsField);
+  const transcriptUrl = extractUrlProperty(properties, "Transcript URL");
+  const occurredAt = extractDateProperty(properties, "Source date");
+  const signalType = extractSelectProperty(properties, "Signal type") || "Proof point";
+  const theme = extractSelectProperty(properties, "Theme") || "General";
+  const profileHint = normalizeProfileHint(extractSelectProperty(properties, "Persona hint"));
+  const confidenceLabel = extractSelectProperty(properties, "Confidence") || "Medium";
+  const transcriptTitle = extractRichTextProperty(properties, "Transcript title");
+  const speakerContext = extractRichTextProperty(properties, "Speaker / context");
+
+  if (!title || !summary || excerpts.length === 0) {
+    return null;
+  }
+
+  const text = [
+    `Signal title: ${title}`,
+    hookCandidate ? `Hook candidate: ${hookCandidate}` : "",
+    `Signal summary: ${summary}`,
+    whyItMatters ? `Why it matters: ${whyItMatters}` : "",
+    transcriptTitle ? `Transcript title: ${transcriptTitle}` : "",
+    speakerContext ? `Speaker / context: ${speakerContext}` : "",
+    `Signal type: ${signalType}`,
+    `Theme: ${theme}`,
+    transcriptUrl ? `Transcript URL: ${transcriptUrl}` : "",
+    "Claap excerpts:",
+    ...excerpts.map((excerpt) => `- ${excerpt}`)
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return {
+    title,
+    summary: [
+      summary,
+      whyItMatters ? `Why it matters: ${whyItMatters}` : ""
+    ]
+      .filter(Boolean)
+      .join(" "),
+    text,
+    excerpts,
+    hookCandidate,
+    whyItMatters,
+    transcriptUrl,
+    occurredAt: occurredAt || new Date().toISOString(),
+    signalType,
+    theme,
+    profileHint,
+    confidenceLabel,
+    confidenceScore: mapConfidenceLabelToScore(confidenceLabel),
+    transcriptTitle,
+    speakerContext
+  };
+}
+
 function extractTitleProperty(properties: Record<string, unknown>, propertyName: string) {
   const property = properties[propertyName] as { type?: string; title?: Array<{ plain_text?: string }> } | undefined;
   if (property?.type !== "title") {
     return "";
   }
   return (property.title ?? []).map((item) => item.plain_text ?? "").join("").trim();
+}
+
+function extractRichTextProperty(properties: Record<string, unknown>, propertyName: string) {
+  const property = properties[propertyName] as { type?: string; rich_text?: Array<{ plain_text?: string }> } | undefined;
+  if (property?.type !== "rich_text") {
+    return "";
+  }
+  return (property.rich_text ?? []).map((item) => item.plain_text ?? "").join("").trim();
 }
 
 function extractSelectProperty(properties: Record<string, unknown>, propertyName: string) {
@@ -337,6 +467,45 @@ function truncateContent(content: string, maxLength: number) {
     return content;
   }
   return `${content.slice(0, maxLength - 3)}...`;
+}
+
+function splitStructuredExcerpts(value: string) {
+  return value
+    .split(/\n+/)
+    .map((entry) => entry.replace(/^[-*]\s*/, "").trim())
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+function mapConfidenceLabelToScore(label: string) {
+  switch (label.toLowerCase()) {
+    case "high":
+      return 0.9;
+    case "low":
+      return 0.62;
+    default:
+      return 0.78;
+  }
+}
+
+function normalizeProfileHint(value: string): ProfileId | undefined {
+  const normalized = value.trim().toLowerCase();
+  switch (normalized) {
+    case "baptiste":
+      return "baptiste";
+    case "thomas":
+      return "thomas";
+    case "virginie":
+      return "virginie";
+    case "quentin":
+      return "quentin";
+    case "linc corporate":
+    case "linc-corporate":
+    case "linc":
+      return "linc-corporate";
+    default:
+      return undefined;
+  }
 }
 
 function inferMarketInsightProfileHint(theme: string, text: string): ProfileId | undefined {
