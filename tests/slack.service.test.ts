@@ -72,6 +72,7 @@ describe("slack service", () => {
         suggestedFormat: "Narrative lesson post",
         lastDigestAt: undefined,
         v1History: [],
+        enrichmentLog: [],
         notionPageId: "12345678-1234-1234-1234-1234567890ab",
         notionPageFingerprint: "opp-fp-1"
       }]

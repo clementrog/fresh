@@ -11,6 +11,8 @@ import {
   SOURCE_KINDS
 } from "../domain/types.js";
 
+const llmProviderSchema = z.enum(["openai", "anthropic"]);
+
 export const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   NOTION_TOKEN: z.string().default(""),
@@ -18,11 +20,20 @@ export const envSchema = z.object({
   SLACK_BOT_TOKEN: z.string().default(""),
   SLACK_EDITORIAL_OPERATOR_ID: z.string().default(""),
   OPENAI_API_KEY: z.string().default(""),
+  ANTHROPIC_API_KEY: z.string().default(""),
+  TAVILY_API_KEY: z.string().default(""),
   CLAAP_API_KEY: z.string().default(""),
   LINEAR_API_KEY: z.string().default(""),
   DEFAULT_TIMEZONE: z.string().default("Europe/Paris"),
+  DEFAULT_COMPANY_SLUG: z.string().default("default"),
+  DEFAULT_COMPANY_NAME: z.string().default("Default Company"),
+  INTELLIGENCE_LLM_PROVIDER: llmProviderSchema.default("anthropic"),
+  INTELLIGENCE_LLM_MODEL: z.string().default("claude-3-7-sonnet-latest"),
+  DRAFT_LLM_PROVIDER: llmProviderSchema.default("openai"),
+  DRAFT_LLM_MODEL: z.string().default("gpt-5"),
   LLM_MODEL: z.string().default("gpt-4.1-mini"),
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(45000),
+  HTTP_PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.string().default("info")
 });
 
@@ -146,3 +157,32 @@ export const notionDatabaseNameSchema = z.enum([
 ]);
 
 export const supportedSourceSchema = z.enum(SOURCE_KINDS);
+
+export const screeningItemSchema = z.object({
+  sourceItemId: z.string(),
+  decision: z.enum(["skip", "retain"]),
+  rationale: z.string(),
+  ownerSuggestion: z.string().optional(),
+  createOrEnrich: z.enum(["create", "enrich", "unknown"]),
+  relevanceScore: z.number().min(0).max(1),
+  sensitivityFlag: z.boolean(),
+  sensitivityCategories: z.array(z.string())
+});
+export const screeningBatchSchema = z.object({
+  items: z.array(screeningItemSchema)
+});
+
+export const createEnrichDecisionSchema = z.object({
+  action: z.enum(["create", "enrich", "skip"]),
+  targetOpportunityId: z.string().optional(),
+  rationale: z.string(),
+  title: z.string().min(1),
+  ownerDisplayName: z.string().optional(),
+  territory: z.string().min(1),
+  angle: z.string().min(1),
+  whyNow: z.string().min(1),
+  whatItIsAbout: z.string().min(1),
+  whatItIsNotAbout: z.string().min(1),
+  suggestedFormat: z.string().min(1),
+  confidence: z.number().min(0).max(1)
+});

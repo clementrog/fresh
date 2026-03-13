@@ -169,7 +169,7 @@ export class LinearConnector extends BaseConnector<LinearSourceConfig> {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: this.env.LINEAR_API_KEY
+          Authorization: this.env.LINEAR_API_KEY ?? ""
         },
         body: JSON.stringify({ query, variables })
       })

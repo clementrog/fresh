@@ -6,6 +6,7 @@ import {
 } from "zod";
 
 import type { AppEnv } from "../config/env.js";
+import type { LlmProvider } from "../domain/types.js";
 
 export interface LlmUsage {
   mode: "provider" | "fallback";
@@ -39,70 +40,43 @@ export class LlmClient {
     system: string;
     prompt: string;
     schema: ZodSchema<T>;
+    provider?: LlmProvider;
+    model?: string;
     allowFallback: boolean;
     fallback: () => T;
   }): Promise<LlmStructuredResponse<T>> {
-    if (!this.env.OPENAI_API_KEY) {
+    const provider = params.provider ?? this.resolveProvider(params.step);
+    const model = params.model ?? this.resolveModel(params.step, provider);
+    const providerKey = provider === "anthropic" ? this.env.ANTHROPIC_API_KEY : this.env.OPENAI_API_KEY;
+
+    if (!providerKey) {
       if (!params.allowFallback) {
-        throw new Error("Missing OPENAI_API_KEY");
+        throw new Error(`Missing API key for ${provider}`);
       }
-      return this.buildFallback(params, "Missing OPENAI_API_KEY");
+      return this.buildFallback(params, `Missing API key for ${provider}`);
     }
 
     try {
-      const signal = buildTimeoutSignal(this.env.LLM_TIMEOUT_MS);
-      const response = await this.fetchImpl("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        signal,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.env.OPENAI_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: this.env.LLM_MODEL,
-          response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: schemaNameForStep(params.step),
-              strict: true,
-              schema: zodToJsonSchema(params.schema)
-            }
-          },
-          messages: [
-            {
-              role: "system",
-              content: params.system
-            },
-            {
-              role: "user",
-              content: params.prompt
-            }
-          ]
-        })
+      const { content, promptTokens, completionTokens } = await this.requestStructuredContent({
+        provider,
+        model,
+        step: params.step,
+        system: params.system,
+        prompt: params.prompt,
+        schema: params.schema
       });
-
-      if (!response.ok) {
-        throw new Error(`LLM request failed with ${response.status}`);
-      }
-
-      const payload = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-        usage?: { prompt_tokens?: number; completion_tokens?: number };
-      };
-      const content = payload.choices?.[0]?.message?.content;
-      if (!content) {
-        throw new Error("LLM response did not include content");
-      }
 
       const parsedJson = JSON.parse(content) as unknown;
       const validated = params.schema.parse(parsedJson);
       const usage: LlmUsage = {
         mode: "provider",
-        promptTokens: payload.usage?.prompt_tokens ?? Math.ceil(params.prompt.length / 4),
-        completionTokens: payload.usage?.completion_tokens ?? Math.ceil(content.length / 4),
+        promptTokens,
+        completionTokens,
         estimatedCostUsd: estimateCostUsd(
-          payload.usage?.prompt_tokens ?? Math.ceil(params.prompt.length / 4),
-          payload.usage?.completion_tokens ?? Math.ceil(content.length / 4)
+          provider,
+          model,
+          promptTokens,
+          completionTokens
         )
       };
 
@@ -120,6 +94,168 @@ export class LlmClient {
 
       return this.buildFallback(params, message);
     }
+  }
+
+  private async requestStructuredContent<T>(params: {
+    provider: LlmProvider;
+    model: string;
+    step: string;
+    system: string;
+    prompt: string;
+    schema: ZodSchema<T>;
+  }) {
+    return params.provider === "anthropic"
+      ? this.requestAnthropicStructuredContent(params)
+      : this.requestOpenAiStructuredContent(params);
+  }
+
+  private async requestOpenAiStructuredContent<T>(params: {
+    model: string;
+    step: string;
+    system: string;
+    prompt: string;
+    schema: ZodSchema<T>;
+  }) {
+    const signal = buildTimeoutSignal(this.env.LLM_TIMEOUT_MS ?? 45_000);
+    const response = await this.fetchImpl("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      signal,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.env.OPENAI_API_KEY ?? ""}`
+      },
+      body: JSON.stringify({
+        model: params.model,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: schemaNameForStep(params.step),
+            strict: true,
+            schema: zodToJsonSchema(params.schema)
+          }
+        },
+        messages: [
+          {
+            role: "system",
+            content: params.system
+          },
+          {
+            role: "user",
+            content: params.prompt
+          }
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI request failed with ${response.status}`);
+    }
+
+    const payload = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
+    const content = payload.choices?.[0]?.message?.content;
+    if (!content) {
+      throw new Error("OpenAI response did not include content");
+    }
+
+    return {
+      content,
+      promptTokens: payload.usage?.prompt_tokens ?? Math.ceil(params.prompt.length / 4),
+      completionTokens: payload.usage?.completion_tokens ?? Math.ceil(content.length / 4)
+    };
+  }
+
+  private async requestAnthropicStructuredContent(params: {
+    model: string;
+    step: string;
+    system: string;
+    prompt: string;
+    schema: ZodSchema<unknown>;
+  }) {
+    const signal = buildTimeoutSignal(this.env.LLM_TIMEOUT_MS ?? 45_000);
+    const response = await this.fetchImpl("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      signal,
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": this.env.ANTHROPIC_API_KEY ?? "",
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: params.model,
+        max_tokens: 2048,
+        system: `${params.system}\nReturn valid JSON only that matches the requested schema.`,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: [
+                  "Return JSON only. No markdown.",
+                  `Schema name: ${schemaNameForStep(params.step)}`,
+                  `JSON schema: ${JSON.stringify(zodToJsonSchema(params.schema))}`,
+                  params.prompt
+                ].join("\n\n")
+              }
+            ]
+          }
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Anthropic request failed with ${response.status}`);
+    }
+
+    const payload = (await response.json()) as {
+      content?: Array<{ type?: string; text?: string }>;
+      usage?: { input_tokens?: number; output_tokens?: number };
+    };
+    const content = payload.content
+      ?.filter((part) => part.type === "text" && typeof part.text === "string")
+      .map((part) => part.text)
+      .join("\n")
+      .trim();
+
+    if (!content) {
+      throw new Error("Anthropic response did not include text content");
+    }
+
+    return {
+      content,
+      promptTokens: payload.usage?.input_tokens ?? Math.ceil(params.prompt.length / 4),
+      completionTokens: payload.usage?.output_tokens ?? Math.ceil(content.length / 4)
+    };
+  }
+
+  private resolveProvider(step: string): LlmProvider {
+    if (step.includes("draft")) {
+      return this.env.DRAFT_LLM_PROVIDER ?? "openai";
+    }
+
+    if (this.env.INTELLIGENCE_LLM_PROVIDER) {
+      return this.env.INTELLIGENCE_LLM_PROVIDER;
+    }
+
+    return this.env.ANTHROPIC_API_KEY ? "anthropic" : "openai";
+  }
+
+  private resolveModel(step: string, provider: LlmProvider) {
+    if (step.includes("draft")) {
+      return this.env.DRAFT_LLM_MODEL ?? "gpt-5";
+    }
+
+    if (step.includes("signal") || step.includes("territory") || step.includes("sensitivity")
+        || step.includes("screening") || step.includes("create-enrich")) {
+      return this.env.INTELLIGENCE_LLM_MODEL ?? "claude-3-7-sonnet-latest";
+    }
+
+    return provider === "anthropic"
+      ? this.env.INTELLIGENCE_LLM_MODEL ?? "claude-3-7-sonnet-latest"
+      : this.env.LLM_MODEL ?? "gpt-4.1-mini";
   }
 
   private buildFallback<T>(
@@ -145,10 +281,41 @@ export class LlmClient {
   }
 }
 
-function estimateCostUsd(promptTokens: number, completionTokens: number) {
-  const promptRate = 0.0000004;
-  const completionRate = 0.0000016;
+function estimateCostUsd(provider: LlmProvider, model: string, promptTokens: number, completionTokens: number) {
+  const rates = provider === "anthropic"
+    ? inferAnthropicRates(model)
+    : inferOpenAiRates(model);
+  const promptRate = rates.promptRate;
+  const completionRate = rates.completionRate;
   return Number((promptTokens * promptRate + completionTokens * completionRate).toFixed(6));
+}
+
+function inferOpenAiRates(model: string) {
+  if (model.includes("gpt-5")) {
+    return {
+      promptRate: 0.00000125,
+      completionRate: 0.00001
+    };
+  }
+
+  return {
+    promptRate: 0.0000004,
+    completionRate: 0.0000016
+  };
+}
+
+function inferAnthropicRates(model: string) {
+  if (model.includes("sonnet")) {
+    return {
+      promptRate: 0.000003,
+      completionRate: 0.000015
+    };
+  }
+
+  return {
+    promptRate: 0.000003,
+    completionRate: 0.000015
+  };
 }
 
 function buildTimeoutSignal(timeoutMs: number) {

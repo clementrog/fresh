@@ -9,15 +9,20 @@ datasource db {
 
 model SourceCursor {
   id         String   @id
+  companyId  String?
   source     String
   cursor     String?
   updatedAt  DateTime @updatedAt
 
-  @@unique([source])
+  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, source])
+  @@index([companyId, source])
 }
 
 model SourceItem {
   id               String   @id
+  companyId         String
   source           String
   sourceItemId     String
   externalId       String
@@ -39,14 +44,18 @@ model SourceItem {
   cleanupEligible  Boolean  @default(false)
   notionPageId     String?
   notionPageFingerprint String?
+  processedAt      DateTime?
+  screeningResultJson Json?
 
   evidenceReferences EvidenceReference[]
   signalSourceItems  SignalSourceItem[]
+  company            Company @relation(fields: [companyId], references: [id], onDelete: SetNull)
 
-  @@unique([source, sourceItemId])
-  @@unique([fingerprint])
+  @@unique([companyId, source, sourceItemId])
+  @@unique([companyId, fingerprint])
   @@index([source, occurredAt])
   @@index([cleanupEligible, rawTextExpiresAt])
+  @@index([companyId, processedAt])
 }
 
 model EvidenceReference {
@@ -54,6 +63,7 @@ model EvidenceReference {
   signalId        String?
   opportunityId   String?
   draftId         String?
+  companyId       String?
   sourceItemId    String
   source          String
   sourceUrl       String
@@ -68,10 +78,25 @@ model EvidenceReference {
   opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
   draft       Draft?       @relation(fields: [draftId], references: [id], onDelete: Cascade)
   sourceItem  SourceItem   @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
+  company     Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
   primaryForOpportunities Opportunity[] @relation("PrimaryOpportunityEvidence")
+  opportunityLinks OpportunityEvidence[]
 
   @@unique([opportunityId, id])
   @@index([excerptHash])
+  @@index([companyId, sourceItemId])
+}
+
+model OpportunityEvidence {
+  opportunityId String
+  evidenceId    String
+  relevanceNote String   @default("")
+  createdAt     DateTime @default(now())
+
+  opportunity Opportunity       @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  evidence    EvidenceReference @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+
+  @@id([opportunityId, evidenceId])
 }
 
 model Signal {
@@ -124,6 +149,7 @@ model ThemeCluster {
 
 model ProfileBase {
   profileId            String   @id
+  companyId            String?
   role                 String
   languagePreference   String
   toneSummary          String
@@ -138,6 +164,8 @@ model ProfileBase {
   notionPageFingerprint String
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
+
+  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
 }
 
 model ProfileLearnedLayer {
@@ -153,9 +181,11 @@ model ProfileLearnedLayer {
 
 model Opportunity {
   id                      String   @id
-  sourceFingerprint       String   @unique
+  companyId               String
+  sourceFingerprint       String
   title                   String
   ownerProfile            String?
+  ownerUserId             String?
   narrativePillar         String
   angle                   String
   whyNow                  String
@@ -171,17 +201,22 @@ model Opportunity {
   editorialOwner          String?
   selectedAt              DateTime?
   lastDigestAt            DateTime?
+  enrichmentLogJson       Json     @default("[]")
   v1HistoryJson           Json
   notionPageId            String?
   notionPageFingerprint   String
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
-  /// The live database also enforces, via raw SQL migration, that this evidence row belongs to the same opportunity.
+  company         Company              @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  ownerUser       User?                @relation(fields: [ownerUserId], references: [id], onDelete: SetNull)
   primaryEvidence EvidenceReference?   @relation("PrimaryOpportunityEvidence", fields: [primaryEvidenceId], references: [id], onDelete: SetNull)
   evidence        EvidenceReference[]
+  linkedEvidence  OpportunityEvidence[]
   relatedSignals  OpportunitySignal[]
   drafts          Draft[]
+
+  @@unique([companyId, sourceFingerprint])
 }
 
 model OpportunitySignal {
@@ -196,13 +231,17 @@ model OpportunitySignal {
 
 model NotionDatabaseBinding {
   id           String   @id
+  companyId     String?
   name         String
   parentPageId String
   databaseId   String
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
   @@unique([parentPageId, name])
+  @@index([companyId, name])
 }
 
 model DigestDispatch {
@@ -221,6 +260,7 @@ model DigestDispatch {
 
 model Draft {
   id               String   @id
+  companyId        String?
   opportunityId    String
   profileId        String
   proposedTitle    String
@@ -234,12 +274,14 @@ model Draft {
   language         String
   createdAt        DateTime @default(now())
 
+  company     Company?             @relation(fields: [companyId], references: [id], onDelete: SetNull)
   opportunity Opportunity         @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
   evidence    EvidenceReference[]
 }
 
 model SyncRun {
   id               String   @id
+  companyId         String?
   runType          String
   source           String?
   status           String
@@ -254,6 +296,7 @@ model SyncRun {
   notionPageFingerprint String
   createdAt        DateTime @default(now())
 
+  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
   costEntries CostLedgerEntry[]
 }
 
@@ -269,4 +312,84 @@ model CostLedgerEntry {
   createdAt        DateTime @default(now())
 
   run SyncRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+}
+
+model Company {
+  id              String   @id
+  slug            String   @unique
+  name            String
+  defaultTimezone String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  sourceCursors          SourceCursor[]
+  sourceItems            SourceItem[]
+  profileBases           ProfileBase[]
+  opportunities          Opportunity[]
+  notionDatabaseBindings NotionDatabaseBinding[]
+  drafts                 Draft[]
+  syncRuns               SyncRun[]
+  users                  User[]
+  editorialConfigs       EditorialConfig[]
+  sourceConfigs          SourceConfig[]
+  marketQueries          MarketQuery[]
+  evidenceReferences     EvidenceReference[]
+}
+
+model User {
+  id          String   @id
+  companyId   String
+  displayName String
+  type        String
+  language    String
+  baseProfile Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  ownedOpportunities Opportunity[]
+
+  @@index([companyId])
+}
+
+model EditorialConfig {
+  id                     String   @id
+  companyId              String
+  version                Int
+  layer1CompanyLens      Json
+  layer2ContentPhilosophy Json
+  layer3LinkedInCraft    Json
+  createdAt              DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, version])
+}
+
+model SourceConfig {
+  id         String   @id
+  companyId  String
+  source     String
+  enabled    Boolean
+  configJson Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, source])
+}
+
+model MarketQuery {
+  id        String   @id
+  companyId String
+  query     String
+  enabled   Boolean
+  priority  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, enabled, priority])
 }

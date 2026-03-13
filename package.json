@@ -15,6 +15,10 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
+    "ingest:run": "tsx src/cli.ts ingest:run",
+    "intelligence:run": "tsx src/cli.ts intelligence:run",
+    "draft:generate": "tsx src/cli.ts draft:generate",
+    "server:start": "tsx src/server.ts",
     "setup:notion": "tsx src/cli.ts setup:notion",
     "sync:daily": "tsx src/cli.ts sync:daily",
     "digest:send": "tsx src/cli.ts digest:send",
@@ -25,10 +29,12 @@
     "repair:opportunity-evidence": "tsx src/cli.ts repair:opportunity-evidence"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@notionhq/client": "^2.3.0",
     "@prisma/client": "^6.5.0",
     "@slack/web-api": "^7.11.0",
     "date-fns": "^4.1.0",
+    "fastify": "^5.8.2",
     "gray-matter": "^4.0.3",
     "pino": "^9.6.0",
     "pino-pretty": "^13.0.0",

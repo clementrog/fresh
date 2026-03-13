@@ -115,6 +115,7 @@ describe("draft generation", () => {
         status: "Ready for V1",
         suggestedFormat: "Narrative lesson post",
         v1History: [],
+        enrichmentLog: [],
         notionPageFingerprint: "opp-fp-1"
       },
       profile: {

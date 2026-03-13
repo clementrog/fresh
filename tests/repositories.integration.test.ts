@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
-const hasDatabase = Boolean(process.env.DATABASE_URL);
+const hasDatabase = Boolean(process.env.DATABASE_URL) && !String(process.env.DATABASE_URL).includes("localhost:5432");
 
 describe.skipIf(!hasDatabase)("repository DB integrity", () => {
   const prisma = new PrismaClient();
@@ -19,6 +19,7 @@ describe.skipIf(!hasDatabase)("repository DB integrity", () => {
       data: [
         {
           id: sourceItemIds[0],
+          companyId: "test-company-id",
           source: "slack",
           sourceItemId: `slack-a-${suffix}`,
           externalId: `slack:${suffix}:a`,
@@ -37,6 +38,7 @@ describe.skipIf(!hasDatabase)("repository DB integrity", () => {
         },
         {
           id: sourceItemIds[1],
+          companyId: "test-company-id",
           source: "slack",
           sourceItemId: `slack-b-${suffix}`,
           externalId: `slack:${suffix}:b`,
@@ -60,6 +62,7 @@ describe.skipIf(!hasDatabase)("repository DB integrity", () => {
       data: [
         {
           id: opportunityIds[0],
+          companyId: "test-company-id",
           sourceFingerprint: `opp-fp-a-${suffix}`,
           title: "Opportunity A",
           ownerProfile: "quentin",
@@ -79,6 +82,7 @@ describe.skipIf(!hasDatabase)("repository DB integrity", () => {
         },
         {
           id: opportunityIds[1],
+          companyId: "test-company-id",
           sourceFingerprint: `opp-fp-b-${suffix}`,
           title: "Opportunity B",
           ownerProfile: "quentin",

@@ -78,6 +78,10 @@ export const SIGNAL_STATUS = [
 export type SignalStatus = (typeof SIGNAL_STATUS)[number];
 
 export type RunType =
+  | "ingest:run"
+  | "intelligence:run"
+  | "draft:generate"
+  | "server:start"
   | "setup:notion"
   | "sync:daily"
   | "digest:send"
@@ -267,11 +271,50 @@ export interface ProfileSnapshot {
   notionPageFingerprint: string;
 }
 
+export interface ScreeningResult {
+  decision: "skip" | "retain";
+  rationale: string;
+  ownerSuggestion?: string;
+  createOrEnrich: "create" | "enrich" | "unknown";
+  relevanceScore: number;
+  sensitivityFlag: boolean;
+  sensitivityCategories: string[];
+}
+
+export interface EnrichmentLogEntry {
+  createdAt: string;
+  rawSourceItemId: string;
+  evidenceIds: string[];
+  contextComment: string;
+  suggestedAngleUpdate?: string;
+  suggestedWhyNowUpdate?: string;
+  ownerSuggestionUpdate?: string;
+  confidence: number;
+  reason: string;
+}
+
+export interface CreateEnrichDecision {
+  action: "create" | "enrich" | "skip";
+  targetOpportunityId?: string;
+  rationale: string;
+  title: string;
+  ownerDisplayName?: string;
+  territory: string;
+  angle: string;
+  whyNow: string;
+  whatItIsAbout: string;
+  whatItIsNotAbout: string;
+  suggestedFormat: string;
+  confidence: number;
+}
+
 export interface ContentOpportunity {
   id: string;
   sourceFingerprint: string;
   title: string;
   ownerProfile?: ProfileId;
+  ownerUserId?: string;
+  companyId?: string;
   narrativePillar: string;
   angle: string;
   whyNow: string;
@@ -287,6 +330,7 @@ export interface ContentOpportunity {
   readiness: ContentReadiness;
   status: ContentStatus;
   suggestedFormat: string;
+  enrichmentLog: EnrichmentLogEntry[];
   editorialOwner?: string;
   selectedAt?: string;
   lastDigestAt?: string;
@@ -340,6 +384,7 @@ export interface LlmRunStats {
 
 export interface SyncRun {
   id: string;
+  companyId?: string;
   runType: RunType;
   source?: SourceKind;
   status: "running" | "completed" | "failed";
@@ -368,6 +413,61 @@ export interface CostLedgerEntry {
 export interface RunContext {
   dryRun: boolean;
   now: Date;
+  companySlug?: string;
+  opportunityId?: string;
+  port?: number;
+}
+
+export type LlmProvider = "openai" | "anthropic";
+
+export interface CompanyRecord {
+  id: string;
+  slug: string;
+  name: string;
+  defaultTimezone: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EditorialConfigRecord {
+  id: string;
+  companyId: string;
+  version: number;
+  layer1CompanyLens: Record<string, unknown>;
+  layer2ContentPhilosophy: Record<string, unknown>;
+  layer3LinkedInCraft: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface UserRecord {
+  id: string;
+  companyId: string;
+  displayName: string;
+  type: "human" | "corporate";
+  language: string;
+  baseProfile: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SourceConfigRecord {
+  id: string;
+  companyId: string;
+  source: string;
+  enabled: boolean;
+  configJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MarketQueryRecord {
+  id: string;
+  companyId: string;
+  query: string;
+  enabled: boolean;
+  priority: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface HealthcheckResult {

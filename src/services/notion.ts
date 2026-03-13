@@ -5,6 +5,7 @@ import type {
   ContentOpportunity,
   DraftV1,
   EditorialSignal,
+  EnrichmentLogEntry,
   NotionSelectionRow,
   NotionSyncResult,
   ProfileSnapshot,
@@ -12,25 +13,32 @@ import type {
 } from "../domain/types.js";
 
 export const REQUIRED_DATABASES = [
-  "Signal Feed",
   "Content Opportunities",
   "Profiles",
-  "Market Findings",
   "Sync Runs"
 ] as const;
 
+const LEGACY_DATABASES = ["Signal Feed", "Market Findings"] as const;
+
 type RequiredDatabase = (typeof REQUIRED_DATABASES)[number];
+type LegacyDatabase = (typeof LEGACY_DATABASES)[number];
+type AnyDatabase = RequiredDatabase | LegacyDatabase;
 type NotionClientLike = Client;
 
+function isRequiredDatabase(name: AnyDatabase): name is RequiredDatabase {
+  return (REQUIRED_DATABASES as readonly string[]).includes(name);
+}
+
 export type NotionBindingStore = {
-  getNotionDatabaseBinding(parentPageId: string, name: RequiredDatabase): Promise<{ databaseId: string } | null>;
-  upsertNotionDatabaseBinding(parentPageId: string, name: RequiredDatabase, databaseId: string): Promise<unknown>;
-  clearNotionDatabaseBinding(parentPageId: string, name: RequiredDatabase): Promise<unknown>;
+  getNotionDatabaseBinding(parentPageId: string, name: AnyDatabase): Promise<{ databaseId: string } | null>;
+  upsertNotionDatabaseBinding(parentPageId: string, name: AnyDatabase, databaseId: string): Promise<unknown>;
+  clearNotionDatabaseBinding(parentPageId: string, name: AnyDatabase): Promise<unknown>;
 };
 
 export class NotionService {
   private readonly client: NotionClientLike | null;
-  private readonly databaseCache = new Map<RequiredDatabase, string>();
+  private readonly databaseCache = new Map<AnyDatabase, string>();
+  private readonly schemaPatchedCache = new Set<string>();
   private readonly bindings?: NotionBindingStore;
   private readonly warningSink?: (warning: string) => void;
   private readonly parentPageId: string;
@@ -87,6 +95,11 @@ export class NotionService {
     notionPageId?: string;
     notionPageFingerprint: string;
   }): Promise<NotionSyncResult | null> {
+    const databaseId = await this.findLegacyDatabase("Market Findings");
+    if (!databaseId) {
+      this.emitWarning("Skipping Market Findings sync: database does not exist. This is expected on fresh deployments.");
+      return null;
+    }
     return this.upsertDatabasePage({
       databaseName: "Market Findings",
       notionPageId: finding.notionPageId,
@@ -107,6 +120,11 @@ export class NotionService {
   }
 
   async syncSignal(signal: EditorialSignal): Promise<NotionSyncResult | null> {
+    const databaseId = await this.findLegacyDatabase("Signal Feed");
+    if (!databaseId) {
+      this.emitWarning("Skipping Signal Feed sync: database does not exist. This is expected on fresh deployments.");
+      return null;
+    }
     const safeEvidenceExcerpts = signal.sensitivity.blocked ? [] : signal.evidence.map((item) => item.excerpt);
     return this.upsertDatabasePage({
       databaseName: "Signal Feed",
@@ -138,7 +156,13 @@ export class NotionService {
     });
   }
 
-  async syncOpportunity(opportunity: ContentOpportunity, draft?: DraftV1 | null): Promise<NotionSyncResult | null> {
+  async syncOpportunity(
+    opportunity: ContentOpportunity,
+    draft?: DraftV1 | null,
+    options?: { ownerDisplayName?: string }
+  ): Promise<NotionSyncResult | null> {
+    const ownerDisplay = options?.ownerDisplayName ?? opportunity.ownerProfile ?? "";
+    const enrichmentLogText = formatEnrichmentLog(opportunity.enrichmentLog);
     return this.upsertDatabasePage({
       databaseName: "Content Opportunities",
       notionPageId: opportunity.notionPageId,
@@ -146,34 +170,69 @@ export class NotionService {
       fingerprint: opportunity.notionPageFingerprint,
       properties: {
         Title: titleProperty(opportunity.title),
-        "Owner profile": richTextProperty(opportunity.ownerProfile ?? ""),
+        "Owner profile": richTextProperty(ownerDisplay),
         "Narrative pillar": richTextProperty(opportunity.narrativePillar),
         Angle: richTextProperty(opportunity.angle),
         "Why now": richTextProperty(opportunity.whyNow),
         "What it is about": richTextProperty(opportunity.whatItIsAbout),
         "What it is not about": richTextProperty(opportunity.whatItIsNotAbout),
         "Source of origin": richTextProperty(opportunity.primaryEvidence.source),
-        "Related signals": richTextProperty(opportunity.relatedSignalIds.join(", ")),
-        "Evidence count": numberProperty(opportunity.evidence.length),
-        Readiness: selectProperty(opportunity.readiness),
         "Suggested format": richTextProperty(opportunity.suggestedFormat),
-        "V1 draft": richTextProperty(draft?.firstDraftText ?? opportunity.v1History.at(-1) ?? ""),
-        Status: selectProperty(opportunity.status),
-        "Editorial notes": richTextProperty(""),
+        "Hook suggestion 1": richTextProperty(""),
+        "Hook suggestion 2": richTextProperty(""),
+        "Format rationale": richTextProperty(""),
+        "Evidence count": numberProperty(opportunity.evidence.length),
         "Primary evidence": richTextProperty(opportunity.primaryEvidence.excerpt),
         "Supporting evidence count": numberProperty(Math.max(0, opportunity.evidence.length - 1)),
         "Evidence freshness": numberProperty(opportunity.evidenceFreshness),
         "Evidence excerpts": richTextProperty(opportunity.evidenceExcerpts.join("\n\n")),
-        "Routing status": richTextProperty(opportunity.routingStatus),
-        "Editorial owner": richTextProperty(opportunity.editorialOwner ?? ""),
+        "Enrichment log": richTextProperty(enrichmentLogText),
+        "V1 draft": richTextProperty(draft?.firstDraftText ?? opportunity.v1History.at(-1) ?? ""),
         "Selected at": opportunity.selectedAt ? dateProperty(opportunity.selectedAt) : emptyDateProperty(),
         "Last digest at": opportunity.lastDigestAt ? dateProperty(opportunity.lastDigestAt) : emptyDateProperty(),
-        "V1 history": richTextProperty(opportunity.v1History.join("\n---\n")),
         "Opportunity fingerprint": richTextProperty(opportunity.notionPageFingerprint)
+      },
+      createOnlyProperties: {
+        Status: selectProperty(opportunity.status),
+        "Editorial notes": richTextProperty(""),
+        "Editorial owner": richTextProperty("")
       }
     });
   }
 
+  /** Sync a User record to the Profiles database. */
+  async syncUser(user: {
+    displayName: string;
+    type: string;
+    language: string;
+    baseProfile: Record<string, unknown>;
+    notionPageFingerprint: string;
+  }): Promise<NotionSyncResult | null> {
+    const bp = user.baseProfile;
+    const str = (key: string) => typeof bp[key] === "string" ? bp[key] as string : "";
+    const arr = (key: string) => Array.isArray(bp[key]) ? (bp[key] as string[]) : [];
+    return this.upsertDatabasePage({
+      databaseName: "Profiles",
+      fingerprintProperty: "Profile fingerprint",
+      fingerprint: user.notionPageFingerprint,
+      properties: {
+        "Profile name": titleProperty(user.displayName),
+        Role: richTextProperty(user.type),
+        "Language preference": richTextProperty(user.language),
+        "Tone summary": richTextProperty(str("toneSummary")),
+        "Preferred structure": richTextProperty(str("preferredStructure")),
+        "Typical phrases": richTextProperty(arr("typicalPhrases").join(", ")),
+        "Avoid rules": richTextProperty(arr("avoidRules").join("\n")),
+        "Content territories": richTextProperty(arr("contentTerritories").join(", ")),
+        "Weak-fit territories": richTextProperty(arr("weakFitTerritories").join(", ")),
+        "Sample excerpts": richTextProperty(arr("sampleExcerpts").join("\n\n")),
+        "Last refreshed": dateProperty(new Date().toISOString()),
+        "Profile fingerprint": richTextProperty(user.notionPageFingerprint)
+      }
+    });
+  }
+
+  /** @deprecated sync:daily only — use syncUser(). Removed in Phase 9. */
   async syncProfile(profile: ProfileSnapshot & { notionPageId?: string; notionPageFingerprint: string }): Promise<NotionSyncResult | null> {
     return this.upsertDatabasePage({
       databaseName: "Profiles",
@@ -280,11 +339,12 @@ export class NotionService {
   }
 
   private async upsertDatabasePage(params: {
-    databaseName: RequiredDatabase;
+    databaseName: AnyDatabase;
     notionPageId?: string;
     fingerprintProperty: string;
     fingerprint: string;
     properties: Record<string, unknown>;
+    createOnlyProperties?: Record<string, unknown>;
   }): Promise<NotionSyncResult | null> {
     if (!this.client) {
       return null;
@@ -327,9 +387,12 @@ export class NotionService {
           };
         }
 
+        const allCreateProperties = params.createOnlyProperties
+          ? { ...params.properties, ...params.createOnlyProperties }
+          : params.properties;
         const created = await this.client.pages.create({
           parent: { database_id: databaseId },
-          properties: params.properties as any
+          properties: allCreateProperties as any
         });
         return {
           notionPageId: created.id,
@@ -368,9 +431,9 @@ export class NotionService {
     return page?.id ?? null;
   }
 
-  private async ensureDatabase(name: RequiredDatabase) {
+  private async findLegacyDatabase(name: LegacyDatabase): Promise<string | null> {
     if (!this.client) {
-      return "";
+      return null;
     }
 
     const cached = this.databaseCache.get(name);
@@ -402,6 +465,60 @@ export class NotionService {
       return existing.id;
     }
 
+    return null;
+  }
+
+  private async ensureDatabase(name: AnyDatabase) {
+    if (!this.client) {
+      return "";
+    }
+
+    if (!isRequiredDatabase(name)) {
+      const legacyId = await this.findLegacyDatabase(name);
+      return legacyId ?? "";
+    }
+
+    const cached = this.databaseCache.get(name);
+    if (cached) {
+      if (!this.schemaPatchedCache.has(cached)) {
+        await this.patchDatabaseProperties(cached, name);
+        this.schemaPatchedCache.add(cached);
+      }
+      return cached;
+    }
+
+    const bound = this.bindings ? await this.bindings.getNotionDatabaseBinding(this.parentPageId, name) : null;
+    if (bound?.databaseId) {
+      const state = await this.verifyDatabaseBinding(name, bound.databaseId);
+      if (state === "valid") {
+        this.databaseCache.set(name, bound.databaseId);
+        if (!this.schemaPatchedCache.has(bound.databaseId)) {
+          await this.patchDatabaseProperties(bound.databaseId, name);
+          this.schemaPatchedCache.add(bound.databaseId);
+        }
+        return bound.databaseId;
+      }
+      if (state === "stale") {
+        await this.clearBinding(name, `Stale Notion database binding recovered for ${name}.`);
+      }
+    }
+
+    const matches = await this.findDatabasesUnderParent(name);
+    if (matches.length > 1) {
+      throw new Error(`Multiple Notion databases named "${name}" were found under the configured parent page.`);
+    }
+
+    if (matches.length === 1) {
+      const existing = matches[0];
+      this.databaseCache.set(name, existing.id);
+      await this.bindings?.upsertNotionDatabaseBinding(this.parentPageId, name, existing.id);
+      if (!this.schemaPatchedCache.has(existing.id)) {
+        await this.patchDatabaseProperties(existing.id, name);
+        this.schemaPatchedCache.add(existing.id);
+      }
+      return existing.id;
+    }
+
     const created = await this.client.databases.create({
       parent: { type: "page_id", page_id: this.parentPageId },
       title: [
@@ -414,8 +531,28 @@ export class NotionService {
     });
 
     this.databaseCache.set(name, created.id);
+    this.schemaPatchedCache.add(created.id);
     await this.bindings?.upsertNotionDatabaseBinding(this.parentPageId, name, created.id);
     return created.id;
+  }
+
+  private async patchDatabaseProperties(databaseId: string, name: RequiredDatabase) {
+    if (!this.client) return;
+    const expected = getDatabaseProperties(name);
+    const current = await this.client.databases.retrieve({ database_id: databaseId });
+    const currentProps = (current as any).properties ?? {};
+    const missing: Record<string, unknown> = {};
+    for (const [key, definition] of Object.entries(expected)) {
+      if (!currentProps[key]) {
+        missing[key] = definition;
+      }
+    }
+    if (Object.keys(missing).length > 0) {
+      await this.client.databases.update({
+        database_id: databaseId,
+        properties: missing as any
+      });
+    }
   }
 
   private async ensureOperationsGuide() {
@@ -462,7 +599,7 @@ export class NotionService {
     }
   }
 
-  private async verifyDatabaseBinding(name: RequiredDatabase, databaseId: string) {
+  private async verifyDatabaseBinding(name: AnyDatabase, databaseId: string) {
     if (!this.client) {
       return "stale" as const;
     }
@@ -480,7 +617,7 @@ export class NotionService {
     }
   }
 
-  private async findDatabasesUnderParent(name: RequiredDatabase) {
+  private async findDatabasesUnderParent(name: AnyDatabase) {
     if (!this.client) {
       return [];
     }
@@ -496,7 +633,7 @@ export class NotionService {
     return response.results.filter((result) => isExactDatabaseName(result, name) && isUnderParentPage(result, this.parentPageId));
   }
 
-  private async clearBinding(name: RequiredDatabase, warning: string) {
+  private async clearBinding(name: AnyDatabase, warning: string) {
     this.databaseCache.delete(name);
     await this.bindings?.clearNotionDatabaseBinding(this.parentPageId, name);
     this.emitWarning(warning);
@@ -509,39 +646,16 @@ export class NotionService {
 
 export function manualReviewViewSpecs() {
   return [
-    { name: "Signal Feed / Needs review", description: "Filter Signal Feed where Status = New" },
-    { name: "Signal Feed / Sensitive review", description: "Filter Signal Feed where Sensitivity status is not Clear" },
-    { name: "Content Opportunities / Needs routing", description: "Filter opportunities where Routing status = Needs routing" },
-    { name: "Content Opportunities / Ready for V1", description: "Filter opportunities where Readiness = Draft candidate" },
-    { name: "Content Opportunities / Selected", description: "Filter opportunities where Status = Selected" }
+    { name: "Content Opportunities / To review", description: "Filter where Status = To review" },
+    { name: "Content Opportunities / Picked", description: "Filter where Status = Selected" },
+    { name: "Content Opportunities / Draft ready", description: "Filter where Status = V1 generated" },
+    { name: "Content Opportunities / Rejected or Archived", description: "Filter where Status = Rejected or Archived" },
+    { name: "Sync Runs / Recent", description: "Sort by Started at descending" }
   ];
 }
 
 function getDatabaseProperties(name: RequiredDatabase) {
   switch (name) {
-    case "Signal Feed":
-      return {
-        Title: { title: {} },
-        "Date captured": { date: {} },
-        Source: { rich_text: {} },
-        "Source URL": { url: {} },
-        "Source item ID": { rich_text: {} },
-        "Raw summary": { rich_text: {} },
-        "Signal type": { select: {} },
-        Freshness: { number: { format: "number" } },
-        Confidence: { number: { format: "number" } },
-        "Owner profile": { rich_text: {} },
-        "Suggested angle": { rich_text: {} },
-        "Evidence status": { rich_text: {} },
-        "Duplicate group": { rich_text: {} },
-        Status: { select: {} },
-        "Related opportunity": { rich_text: {} },
-        "Evidence excerpts": { rich_text: {} },
-        "Evidence count": { number: { format: "number" } },
-        "Sensitivity status": { rich_text: {} },
-        "Theme cluster": { rich_text: {} },
-        "Ingestion fingerprint": { rich_text: {} }
-      };
     case "Content Opportunities":
       return {
         Title: { title: {} },
@@ -552,10 +666,11 @@ function getDatabaseProperties(name: RequiredDatabase) {
         "What it is about": { rich_text: {} },
         "What it is not about": { rich_text: {} },
         "Source of origin": { rich_text: {} },
-        "Related signals": { rich_text: {} },
         "Evidence count": { number: { format: "number" } },
-        Readiness: { select: {} },
         "Suggested format": { rich_text: {} },
+        "Hook suggestion 1": { rich_text: {} },
+        "Hook suggestion 2": { rich_text: {} },
+        "Format rationale": { rich_text: {} },
         "V1 draft": { rich_text: {} },
         Status: { select: {} },
         "Editorial notes": { rich_text: {} },
@@ -563,11 +678,10 @@ function getDatabaseProperties(name: RequiredDatabase) {
         "Supporting evidence count": { number: { format: "number" } },
         "Evidence freshness": { number: { format: "number" } },
         "Evidence excerpts": { rich_text: {} },
-        "Routing status": { rich_text: {} },
+        "Enrichment log": { rich_text: {} },
         "Editorial owner": { rich_text: {} },
         "Selected at": { date: {} },
         "Last digest at": { date: {} },
-        "V1 history": { rich_text: {} },
         "Opportunity fingerprint": { rich_text: {} }
       };
     case "Profiles":
@@ -583,22 +697,7 @@ function getDatabaseProperties(name: RequiredDatabase) {
         "Weak-fit territories": { rich_text: {} },
         "Sample excerpts": { rich_text: {} },
         "Last refreshed": { date: {} },
-        "Base source": { rich_text: {} },
-        "Learned excerpt count": { number: { format: "number" } },
-        "Weekly recomputed at": { date: {} },
         "Profile fingerprint": { rich_text: {} }
-      };
-    case "Market Findings":
-      return {
-        Finding: { title: {} },
-        Theme: { rich_text: {} },
-        Source: { rich_text: {} },
-        Confidence: { number: { format: "number" } },
-        "Possible owner": { rich_text: {} },
-        "Editorial angle": { rich_text: {} },
-        "Related opportunities": { rich_text: {} },
-        Status: { select: {} },
-        "Finding fingerprint": { rich_text: {} }
       };
     case "Sync Runs":
       return {
@@ -618,6 +717,18 @@ function getDatabaseProperties(name: RequiredDatabase) {
         "Run fingerprint": { rich_text: {} }
       };
   }
+}
+
+function formatEnrichmentLog(entries: EnrichmentLogEntry[]): string {
+  if (!entries || entries.length === 0) return "";
+  const display = entries.slice(-5);
+  const prefix = entries.length > 5 ? `[${entries.length - 5} earlier entries]\n` : "";
+  const lines = display.map((entry) => {
+    const date = entry.createdAt.slice(0, 10);
+    const evidenceCount = entry.evidenceIds.length;
+    return `[${date}] +${evidenceCount} evidence, confidence ${entry.confidence}: "${entry.contextComment}"`;
+  });
+  return prefix + lines.join("\n");
 }
 
 function titleProperty(value: string) {
@@ -673,7 +784,7 @@ function emptyDateProperty() {
   };
 }
 
-function isExactDatabaseName(result: unknown, name: RequiredDatabase) {
+function isExactDatabaseName(result: unknown, name: AnyDatabase) {
   if (!result || typeof result !== "object" || (result as { object?: string }).object !== "database") {
     return false;
   }

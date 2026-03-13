@@ -2,20 +2,32 @@ import { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 
 import type {
+  CompanyRecord,
   ContentOpportunity,
   CostLedgerEntry,
   DigestDispatch,
   DraftV1,
+  EditorialConfigRecord,
   EditorialSignal,
   EvidenceReference,
+  MarketQueryRecord,
   NotionDatabaseBinding,
   NormalizedSourceItem,
   ProfileBase,
   ProfileLearnedLayer,
+  ScreeningResult,
+  SourceConfigRecord,
   SyncRun,
-  ThemeCluster
+  ThemeCluster,
+  UserRecord
 } from "../domain/types.js";
 import { createDeterministicId } from "../lib/ids.js";
+
+export type { PrismaTransaction };
+
+export function sourceItemDbId(companyId: string, externalId: string): string {
+  return createDeterministicId("si", [companyId, externalId]);
+}
 
 type PrismaTransaction = Omit<
   PrismaClient,
@@ -25,11 +37,136 @@ type PrismaTransaction = Omit<
 const opportunityInclude = {
   evidence: true,
   primaryEvidence: true,
-  relatedSignals: true
+  relatedSignals: true,
+  linkedEvidence: { include: { evidence: true } }
 } satisfies Prisma.OpportunityInclude;
 
 export class RepositoryBundle {
   constructor(private readonly prisma: PrismaClient) {}
+
+  async ensureDefaultCompany(params: { slug: string; name: string; defaultTimezone: string }): Promise<CompanyRecord> {
+    const company = await this.prisma.company.upsert({
+      where: { slug: params.slug },
+      create: {
+        id: createDeterministicId("company", [params.slug]),
+        slug: params.slug,
+        name: params.name,
+        defaultTimezone: params.defaultTimezone
+      },
+      update: {
+        name: params.name,
+        defaultTimezone: params.defaultTimezone
+      }
+    });
+
+    return mapCompany(company);
+  }
+
+  async getCompanyBySlug(slug: string): Promise<CompanyRecord | null> {
+    const company = await this.prisma.company.findUnique({ where: { slug } });
+    return company ? mapCompany(company) : null;
+  }
+
+  async upsertUser(user: UserRecord, tx: PrismaTransaction = this.prisma) {
+    return tx.user.upsert({
+      where: { id: user.id },
+      create: {
+        id: user.id,
+        companyId: user.companyId,
+        displayName: user.displayName,
+        type: user.type,
+        language: user.language,
+        baseProfile: toJson(user.baseProfile)
+      },
+      update: {
+        companyId: user.companyId,
+        displayName: user.displayName,
+        type: user.type,
+        language: user.language,
+        baseProfile: toJson(user.baseProfile)
+      }
+    });
+  }
+
+  async upsertEditorialConfig(config: EditorialConfigRecord, tx: PrismaTransaction = this.prisma) {
+    return tx.editorialConfig.upsert({
+      where: {
+        companyId_version: {
+          companyId: config.companyId,
+          version: config.version
+        }
+      },
+      create: {
+        id: config.id,
+        companyId: config.companyId,
+        version: config.version,
+        layer1CompanyLens: toJson(config.layer1CompanyLens),
+        layer2ContentPhilosophy: toJson(config.layer2ContentPhilosophy),
+        layer3LinkedInCraft: toJson(config.layer3LinkedInCraft),
+        createdAt: new Date(config.createdAt)
+      },
+      update: {
+        layer1CompanyLens: toJson(config.layer1CompanyLens),
+        layer2ContentPhilosophy: toJson(config.layer2ContentPhilosophy),
+        layer3LinkedInCraft: toJson(config.layer3LinkedInCraft)
+      }
+    });
+  }
+
+  async getLatestEditorialConfig(companyId: string) {
+    return this.prisma.editorialConfig.findFirst({
+      where: { companyId },
+      orderBy: { version: "desc" }
+    });
+  }
+
+  async upsertSourceConfig(config: SourceConfigRecord, tx: PrismaTransaction = this.prisma) {
+    return tx.sourceConfig.upsert({
+      where: {
+        companyId_source: {
+          companyId: config.companyId,
+          source: config.source
+        }
+      },
+      create: {
+        id: config.id,
+        companyId: config.companyId,
+        source: config.source,
+        enabled: config.enabled,
+        configJson: toJson(config.configJson)
+      },
+      update: {
+        enabled: config.enabled,
+        configJson: toJson(config.configJson)
+      }
+    });
+  }
+
+  async listSourceConfigs(companyId: string) {
+    return this.prisma.sourceConfig.findMany({
+      where: { companyId, enabled: true },
+      orderBy: { source: "asc" }
+    });
+  }
+
+  async upsertMarketQuery(query: MarketQueryRecord, tx: PrismaTransaction = this.prisma) {
+    return tx.marketQuery.upsert({
+      where: { id: query.id },
+      create: {
+        id: query.id,
+        companyId: query.companyId,
+        query: query.query,
+        enabled: query.enabled,
+        priority: query.priority
+      },
+      update: {
+        companyId: query.companyId,
+        query: query.query,
+        enabled: query.enabled,
+        priority: query.priority
+      }
+    });
+  }
 
   async getNotionDatabaseBinding(parentPageId: string, name: string): Promise<NotionDatabaseBinding | null> {
     const binding = await this.prisma.notionDatabaseBinding.findUnique({
@@ -221,18 +358,39 @@ export class RepositoryBundle {
     });
   }
 
-  async getCursor(source: string) {
-    const cursor = await this.prisma.sourceCursor.findUnique({
+  async getCursor(source: string, companyId?: string) {
+    if (companyId) {
+      const cursor = await this.prisma.sourceCursor.findUnique({
+        where: {
+          companyId_source: {
+            companyId,
+            source
+          }
+        }
+      });
+      return cursor?.cursor ?? null;
+    }
+    // Fallback: find by source (for legacy callers without companyId)
+    const cursor = await this.prisma.sourceCursor.findFirst({
       where: { source }
     });
     return cursor?.cursor ?? null;
   }
 
-  async setCursor(source: string, cursor: string | null, tx: PrismaTransaction = this.prisma) {
+  async setCursor(source: string, cursor: string | null, tx: PrismaTransaction = this.prisma, companyId?: string) {
+    const id = companyId ? createDeterministicId("cursor", [companyId, source]) : source;
     return tx.sourceCursor.upsert({
-      where: { source },
+      where: companyId
+        ? {
+            companyId_source: {
+              companyId,
+              source
+            } as never
+          }
+        : { id },
       create: {
-        id: source,
+        id,
+        companyId,
         source,
         cursor
       },
@@ -242,16 +400,23 @@ export class RepositoryBundle {
     });
   }
 
-  async upsertSourceItem(item: NormalizedSourceItem, rawTextExpiresAt: Date | null, tx: PrismaTransaction = this.prisma) {
+  async upsertSourceItem(
+    item: NormalizedSourceItem,
+    rawTextExpiresAt: Date | null,
+    tx: PrismaTransaction = this.prisma,
+    companyId: string
+  ) {
     return tx.sourceItem.upsert({
       where: {
-        source_sourceItemId: {
+        companyId_source_sourceItemId: {
+          companyId,
           source: item.source,
           sourceItemId: item.sourceItemId
         }
       },
       create: {
-        id: item.externalId,
+        id: sourceItemDbId(companyId, item.externalId),
+        companyId,
         source: item.source,
         sourceItemId: item.sourceItemId,
         externalId: item.externalId,
@@ -270,9 +435,11 @@ export class RepositoryBundle {
         chunksJson: nullableJson(item.chunks ?? null),
         rawTextStored: item.rawText !== undefined && item.rawText !== null,
         rawTextExpiresAt,
-        cleanupEligible: rawTextExpiresAt !== null
+        cleanupEligible: rawTextExpiresAt !== null,
+        processedAt: null
       },
       update: {
+        companyId,
         externalId: item.externalId,
         fingerprint: item.sourceFingerprint,
         sourceUrl: item.sourceUrl,
@@ -289,8 +456,43 @@ export class RepositoryBundle {
         chunksJson: nullableJson(item.chunks ?? null),
         rawTextStored: item.rawText !== undefined && item.rawText !== null,
         rawTextExpiresAt,
-        cleanupEligible: rawTextExpiresAt !== null
+        cleanupEligible: rawTextExpiresAt !== null,
+        processedAt: null
       }
+    });
+  }
+
+  async listPendingSourceItems(params: { companyId?: string; take: number }) {
+    return this.prisma.sourceItem.findMany({
+      where: {
+        ...(params.companyId ? { companyId: params.companyId } : {}),
+        processedAt: null
+      },
+      orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
+      take: params.take
+    });
+  }
+
+  async markSourceItemsProcessed(sourceItemIds: string[], processedAt: Date, tx: PrismaTransaction = this.prisma) {
+    if (sourceItemIds.length === 0) {
+      return;
+    }
+    await tx.sourceItem.updateMany({
+      where: {
+        id: {
+          in: sourceItemIds
+        }
+      },
+      data: {
+        processedAt
+      }
+    });
+  }
+
+  async findOpportunityById(opportunityId: string) {
+    return this.prisma.opportunity.findUnique({
+      where: { id: opportunityId },
+      include: opportunityInclude
     });
   }
 
@@ -304,6 +506,7 @@ export class RepositoryBundle {
     });
   }
 
+  /** @deprecated sync:daily only - removed in Phase 9 */
   async upsertSignal(signal: EditorialSignal, tx: PrismaTransaction = this.prisma) {
     return tx.signal.upsert({
       where: { id: signal.id },
@@ -353,6 +556,7 @@ export class RepositoryBundle {
     });
   }
 
+  /** @deprecated sync:daily only - removed in Phase 9 */
   async replaceSignalRelations(
     signalId: string,
     evidence: EvidenceReference[],
@@ -393,6 +597,7 @@ export class RepositoryBundle {
     }
   }
 
+  /** @deprecated sync:daily only - removed in Phase 9 */
   async upsertThemeCluster(cluster: ThemeCluster, tx: PrismaTransaction = this.prisma) {
     return tx.themeCluster.upsert({
       where: { key: cluster.key },
@@ -482,9 +687,11 @@ export class RepositoryBundle {
       where: { id: opportunity.id },
       create: {
         id: opportunity.id,
+        companyId: opportunity.companyId ?? "",
         sourceFingerprint: opportunity.sourceFingerprint,
         title: opportunity.title,
         ownerProfile: opportunity.ownerProfile,
+        ownerUserId: opportunity.ownerUserId,
         narrativePillar: opportunity.narrativePillar,
         angle: opportunity.angle,
         whyNow: opportunity.whyNow,
@@ -504,9 +711,11 @@ export class RepositoryBundle {
         notionPageFingerprint: opportunity.notionPageFingerprint
       },
       update: {
+        companyId: opportunity.companyId ?? undefined,
         sourceFingerprint: opportunity.sourceFingerprint,
         title: opportunity.title,
         ownerProfile: opportunity.ownerProfile,
+        ownerUserId: opportunity.ownerUserId,
         narrativePillar: opportunity.narrativePillar,
         angle: opportunity.angle,
         whyNow: opportunity.whyNow,
@@ -631,6 +840,7 @@ export class RepositoryBundle {
     return tx.syncRun.create({
       data: {
         id: run.id,
+        companyId: run.companyId,
         runType: run.runType,
         source: run.source,
         status: run.status,
@@ -692,13 +902,15 @@ export class RepositoryBundle {
     });
   }
 
+  /** @deprecated sync:daily only - removed in Phase 9 */
   async persistSignalGraph(params: {
     sourceItem: NormalizedSourceItem;
     rawTextExpiresAt: Date | null;
     signal: EditorialSignal;
+    companyId?: string;
   }) {
     return this.prisma.$transaction(async (tx) => {
-      await this.upsertSourceItem(params.sourceItem, params.rawTextExpiresAt, tx);
+      await this.upsertSourceItem(params.sourceItem, params.rawTextExpiresAt, tx, params.companyId ?? "");
       await this.upsertSignal(params.signal, tx);
       await this.replaceSignalRelations(params.signal.id, params.signal.evidence, params.signal.sourceItemIds, tx);
     });
@@ -718,6 +930,7 @@ export class RepositoryBundle {
     });
   }
 
+  /** @deprecated sync:daily only - removed in Phase 9 */
   async listSignalsForClustering() {
     return this.prisma.signal.findMany({
       include: {
@@ -908,6 +1121,168 @@ export class RepositoryBundle {
       }
     });
   }
+
+  async listUsers(companyId: string) {
+    return this.prisma.user.findMany({
+      where: { companyId }
+    });
+  }
+
+  async listRecentActiveOpportunities(params: { companyId: string; take: number }) {
+    return this.prisma.opportunity.findMany({
+      where: {
+        companyId: params.companyId,
+        status: { notIn: ["Rejected", "Archived"] }
+      },
+      orderBy: { updatedAt: "desc" },
+      take: params.take,
+      include: opportunityInclude
+    });
+  }
+
+  async createOpportunityOnly(opportunity: ContentOpportunity, tx: PrismaTransaction) {
+    return tx.opportunity.create({
+      data: {
+        id: opportunity.id,
+        companyId: opportunity.companyId ?? "",
+        sourceFingerprint: opportunity.sourceFingerprint,
+        title: opportunity.title,
+        ownerProfile: opportunity.ownerProfile,
+        ownerUserId: opportunity.ownerUserId,
+        narrativePillar: opportunity.narrativePillar,
+        angle: opportunity.angle,
+        whyNow: opportunity.whyNow,
+        whatItIsAbout: opportunity.whatItIsAbout,
+        whatItIsNotAbout: opportunity.whatItIsNotAbout,
+        routingStatus: opportunity.routingStatus,
+        readiness: opportunity.readiness,
+        status: opportunity.status,
+        suggestedFormat: opportunity.suggestedFormat,
+        supportingEvidenceCount: 0,
+        evidenceFreshness: 0,
+        primaryEvidenceId: null,
+        editorialOwner: opportunity.editorialOwner,
+        selectedAt: opportunity.selectedAt ? new Date(opportunity.selectedAt) : null,
+        lastDigestAt: opportunity.lastDigestAt ? new Date(opportunity.lastDigestAt) : null,
+        enrichmentLogJson: toJson(opportunity.enrichmentLog ?? []),
+        v1HistoryJson: toJson(opportunity.v1History),
+        notionPageId: opportunity.notionPageId,
+        notionPageFingerprint: opportunity.notionPageFingerprint
+      }
+    });
+  }
+
+  async persistStandaloneEvidence(
+    params: {
+      evidence: EvidenceReference[];
+      companyId: string;
+      opportunityId: string;
+      primaryEvidenceId: string | null;
+      supportingEvidenceCount: number;
+      evidenceFreshness: number;
+      relevanceNote: string;
+    },
+    tx: PrismaTransaction
+  ) {
+    if (params.evidence.length > 0) {
+      await tx.evidenceReference.createMany({
+        data: params.evidence.map((item) => ({
+          id: item.id,
+          companyId: params.companyId,
+          sourceItemId: item.sourceItemId,
+          source: item.source,
+          sourceUrl: item.sourceUrl,
+          timestamp: new Date(item.timestamp),
+          excerpt: item.excerpt,
+          excerptHash: item.excerptHash,
+          speakerOrAuthor: item.speakerOrAuthor,
+          freshnessScore: item.freshnessScore
+        }))
+      });
+
+      await tx.opportunityEvidence.createMany({
+        data: params.evidence.map((item) => ({
+          opportunityId: params.opportunityId,
+          evidenceId: item.id,
+          relevanceNote: params.relevanceNote
+        }))
+      });
+    }
+
+    if (params.primaryEvidenceId) {
+      await validatePrimaryEvidenceOwnership(tx, params.opportunityId, params.primaryEvidenceId);
+      await tx.opportunity.update({
+        where: { id: params.opportunityId },
+        data: {
+          primaryEvidenceId: params.primaryEvidenceId,
+          supportingEvidenceCount: params.supportingEvidenceCount,
+          evidenceFreshness: params.evidenceFreshness
+        }
+      });
+    }
+  }
+
+  async enrichOpportunity(params: {
+    opportunityId: string;
+    enrichmentLogJson: unknown;
+    newEvidence: EvidenceReference[];
+    primaryEvidenceId: string | null;
+    supportingEvidenceCount: number;
+    evidenceFreshness: number;
+    companyId: string;
+    relevanceNote: string;
+  }) {
+    return this.prisma.$transaction(async (tx) => {
+      await this.persistStandaloneEvidence(
+        {
+          evidence: params.newEvidence,
+          companyId: params.companyId,
+          opportunityId: params.opportunityId,
+          primaryEvidenceId: params.primaryEvidenceId,
+          supportingEvidenceCount: params.supportingEvidenceCount,
+          evidenceFreshness: params.evidenceFreshness,
+          relevanceNote: params.relevanceNote
+        },
+        tx
+      );
+
+      await tx.opportunity.update({
+        where: { id: params.opportunityId },
+        data: {
+          enrichmentLogJson: toJson(params.enrichmentLogJson)
+        }
+      });
+    });
+  }
+
+  async saveScreeningResults(items: Array<{ id: string; result: ScreeningResult }>) {
+    for (const item of items) {
+      await this.prisma.sourceItem.update({
+        where: { id: item.id },
+        data: {
+          screeningResultJson: toJson(item.result)
+        }
+      });
+    }
+  }
+
+}
+
+async function validatePrimaryEvidenceOwnership(
+  tx: PrismaTransaction,
+  opportunityId: string,
+  primaryEvidenceId: string | null
+): Promise<void> {
+  if (!primaryEvidenceId) return;
+  const junctionLink = await tx.opportunityEvidence.findUnique({
+    where: { opportunityId_evidenceId: { opportunityId, evidenceId: primaryEvidenceId } }
+  });
+  if (junctionLink) return;
+  const fkLink = await tx.evidenceReference.findFirst({
+    where: { id: primaryEvidenceId, opportunityId }
+  });
+  if (fkLink) return;
+  throw new Error(`Primary evidence ${primaryEvidenceId} is not linked to opportunity ${opportunityId}`);
 }
 
 function toJson(value: unknown): Prisma.InputJsonValue {
@@ -941,6 +1316,24 @@ function mapDigestDispatch(dispatch: {
     error: dispatch.error ?? undefined,
     createdAt: dispatch.createdAt.toISOString(),
     updatedAt: dispatch.updatedAt.toISOString()
+  };
+}
+
+function mapCompany(company: {
+  id: string;
+  slug: string;
+  name: string;
+  defaultTimezone: string;
+  createdAt: Date;
+  updatedAt: Date;
+}): CompanyRecord {
+  return {
+    id: company.id,
+    slug: company.slug,
+    name: company.name,
+    defaultTimezone: company.defaultTimezone,
+    createdAt: company.createdAt.toISOString(),
+    updatedAt: company.updatedAt.toISOString()
   };
 }
 

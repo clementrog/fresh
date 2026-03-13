@@ -12,8 +12,35 @@ async function main() {
     throw new Error("Missing command");
   }
 
-  const dryRun = flags.includes("--dry-run");
-  await app.run(command as Parameters<typeof app.run>[0], { dryRun });
+  const parsedFlags = parseFlags(flags);
+  await app.run(command as Parameters<typeof app.run>[0], {
+    dryRun: parsedFlags["dry-run"] === "true",
+    opportunityId: parsedFlags["opportunity-id"],
+    companySlug: parsedFlags["company"] ?? env.DEFAULT_COMPANY_SLUG,
+    port: parsedFlags.port ? Number(parsedFlags.port) : undefined
+  });
+}
+
+function parseFlags(flags: string[]) {
+  const parsed: Record<string, string> = {};
+  for (let index = 0; index < flags.length; index += 1) {
+    const flag = flags[index];
+    if (!flag.startsWith("--")) {
+      continue;
+    }
+
+    const key = flag.slice(2);
+    const next = flags[index + 1];
+    if (!next || next.startsWith("--")) {
+      parsed[key] = "true";
+      continue;
+    }
+
+    parsed[key] = next;
+    index += 1;
+  }
+
+  return parsed;
 }
 
 main().catch((error) => {

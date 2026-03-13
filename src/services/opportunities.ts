@@ -8,13 +8,15 @@ export function maybeCreateOpportunity(params: {
   clusterConflict: boolean;
   confidenceThreshold?: number;
   evidenceRichnessThreshold?: number;
+  companyId?: string;
 }): ContentOpportunity | null {
   const {
     signal,
     assignment,
     clusterConflict,
     confidenceThreshold = 0.75,
-    evidenceRichnessThreshold = 2
+    evidenceRichnessThreshold = 2,
+    companyId
   } = params;
 
   if (signal.sensitivity.blocked) return null;
@@ -34,7 +36,10 @@ export function maybeCreateOpportunity(params: {
   }
 
   return {
-    id: createDeterministicId("opportunity", [sourceFingerprint]),
+    id: companyId
+      ? createDeterministicId("opportunity", [companyId, sourceFingerprint])
+      : createDeterministicId("opportunity", [sourceFingerprint]),
+    companyId,
     sourceFingerprint,
     title: signal.title,
     ownerProfile: assignment.profileId,
@@ -53,6 +58,7 @@ export function maybeCreateOpportunity(params: {
     readiness: "Opportunity only",
     status: "To review",
     suggestedFormat: suggestFormat(signal),
+    enrichmentLog: [],
     v1History: [],
     notionPageFingerprint: sourceFingerprint
   };
