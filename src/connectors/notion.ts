@@ -382,18 +382,27 @@ function extractClaapSignal(properties: Record<string, unknown>) {
     return null;
   }
 
+  const inferredProfileHint = profileHint ?? inferClaapSignalProfileHint({
+    signalType,
+    theme,
+    title,
+    summary,
+    hookCandidate,
+    whyItMatters,
+    excerpts,
+    speakerContext
+  });
+
   const text = [
-    `Signal title: ${title}`,
-    hookCandidate ? `Hook candidate: ${hookCandidate}` : "",
-    `Signal summary: ${summary}`,
-    whyItMatters ? `Why it matters: ${whyItMatters}` : "",
-    transcriptTitle ? `Transcript title: ${transcriptTitle}` : "",
-    speakerContext ? `Speaker / context: ${speakerContext}` : "",
-    `Signal type: ${signalType}`,
-    `Theme: ${theme}`,
-    transcriptUrl ? `Transcript URL: ${transcriptUrl}` : "",
-    "Claap excerpts:",
-    ...excerpts.map((excerpt) => `- ${excerpt}`)
+    title,
+    hookCandidate,
+    summary,
+    whyItMatters,
+    transcriptTitle,
+    speakerContext,
+    signalType,
+    theme,
+    ...excerpts
   ]
     .filter(Boolean)
     .join("\n");
@@ -414,7 +423,7 @@ function extractClaapSignal(properties: Record<string, unknown>) {
     occurredAt: occurredAt || new Date().toISOString(),
     signalType,
     theme,
-    profileHint,
+    profileHint: inferredProfileHint,
     confidenceLabel,
     confidenceScore: mapConfidenceLabelToScore(confidenceLabel),
     transcriptTitle,
@@ -506,6 +515,48 @@ function normalizeProfileHint(value: string): ProfileId | undefined {
     default:
       return undefined;
   }
+}
+
+function inferClaapSignalProfileHint(params: {
+  signalType: string;
+  theme: string;
+  title: string;
+  summary: string;
+  hookCandidate: string;
+  whyItMatters: string;
+  excerpts: string[];
+  speakerContext: string;
+}): ProfileId | undefined {
+  const haystack = [
+    params.signalType,
+    params.theme,
+    params.title,
+    params.summary,
+    params.hookCandidate,
+    params.whyItMatters,
+    params.speakerContext,
+    ...params.excerpts
+  ]
+    .join("\n")
+    .toLowerCase();
+
+  if (/\b(dsn|urssaf|cotisation|cotisations|bulletin|bulletins|paie|plafond|plafonds|taux|régularisation|regularisation)\b/.test(haystack)) {
+    return "thomas";
+  }
+
+  if (/\b(ux|interface|produit|product|feedback|rassurer|impactés|impactes|parcours)\b/.test(haystack)) {
+    return "virginie";
+  }
+
+  if (/\b(objection|preuve|adoption|commercial|prospect|buyer|terrain)\b/.test(haystack)) {
+    return "quentin";
+  }
+
+  if (/\b(market|marché|vision|priorité|priorite|transformation|rh 2026|stratégie|strategie)\b/.test(haystack)) {
+    return "baptiste";
+  }
+
+  return undefined;
 }
 
 function inferMarketInsightProfileHint(theme: string, text: string): ProfileId | undefined {

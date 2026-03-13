@@ -3,10 +3,10 @@ import { territoryOutputSchema } from "../config/schema.js";
 import { LlmClient } from "./llm.js";
 
 const TERRITORY_RULES = [
-  { profileId: "baptiste", territory: "vision / mobilisation", keywords: ["vision", "belief", "mobilise", "movement", "change", "vision", "mobilisation", "élan", "transformation"] },
-  { profileId: "thomas", territory: "expertise métier / fiabilité", keywords: ["expertise", "reliable", "process", "quality", "trust", "fiabilité", "métier", "processus", "qualité"] },
-  { profileId: "virginie", territory: "produit / feedback", keywords: ["product", "feedback", "ux", "feature", "iteration", "produit", "retour", "usage", "fonctionnalité"] },
-  { profileId: "quentin", territory: "terrain commercial / adoption", keywords: ["sales", "adoption", "deal", "objection", "buyer", "commercial", "adoption", "objection", "terrain", "acheteur"] },
+  { profileId: "baptiste", territory: "vision / mobilisation", keywords: ["vision", "belief", "mobilise", "movement", "change", "vision", "mobilisation", "élan", "transformation", "priorité", "priorite", "marché", "market"] },
+  { profileId: "thomas", territory: "expertise métier / fiabilité", keywords: ["expertise", "reliable", "process", "quality", "trust", "fiabilité", "métier", "processus", "qualité", "dsn", "urssaf", "cotisation", "cotisations", "bulletin", "bulletins", "paie", "plafond", "plafonds", "taux", "régularisation", "regularisation"] },
+  { profileId: "virginie", territory: "produit / feedback", keywords: ["product", "feedback", "ux", "feature", "iteration", "produit", "retour", "usage", "fonctionnalité", "interface", "rassurer", "parcours", "impactés", "impactes"] },
+  { profileId: "quentin", territory: "terrain commercial / adoption", keywords: ["sales", "adoption", "deal", "objection", "buyer", "commercial", "adoption", "objection", "terrain", "acheteur", "preuve", "prospect", "demo"] },
   { profileId: "linc-corporate", territory: "corporate proof / amplification", keywords: ["company", "team", "proof", "launch", "case study", "preuve", "équipe", "linc", "cas client"] }
 ] as const;
 

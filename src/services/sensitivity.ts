@@ -42,7 +42,7 @@ export function parseSensitivityRules(markdown: string): SensitivityRuleSet {
 }
 
 export async function assessSensitivity(
-  item: Pick<NormalizedSourceItem, "text" | "summary" | "title">,
+  item: Pick<NormalizedSourceItem, "text" | "summary" | "title"> & { metadata?: Record<string, unknown> },
   rulesMarkdown: string,
   llmClient: LlmClient
 ): Promise<{ assessment: SensitivityAssessment; usage: import("./llm.js").LlmUsage }> {
@@ -50,6 +50,7 @@ export async function assessSensitivity(
   const haystack = `${item.title}\n${item.summary}\n${item.text}`.toLowerCase();
   const matchedRules = rules.rules.filter((rule) => rule.terms.some((term) => haystack.includes(term.toLowerCase())));
   const stageOneCategories = [...new Set(matchedRules.map((rule) => rule.category))];
+  const notionKind = typeof item.metadata?.notionKind === "string" ? item.metadata.notionKind : "";
 
   const stageTwoFallback = () => {
     const heuristicCategories: SensitivityCategory[] = [];
@@ -67,6 +68,60 @@ export async function assessSensitivity(
       stageTwoScore: unique.length > 0 ? 0.9 : 0.1
     };
   };
+
+  const claapSignalStageTwoFallback = () => {
+    const heuristicCategories: SensitivityCategory[] = [];
+    if (/\b(client|customer|prospect)\b.{0,40}\b(sas|sarl|corp|inc|llc|nommé|nomme|named|specific)\b/i.test(haystack)) {
+      heuristicCategories.push("client-identifiable");
+    }
+    if (/\bsalary\b|\bcompensation\b|\bbonus\b|\bequity\b|\bsalaire\b|\brémunération\b|\bremuneration\b/i.test(haystack)) {
+      heuristicCategories.push("payroll-sensitive");
+    }
+    if (/\broadmap\b|\bunreleased\b|\bcoming soon\b|\bquick win\b|\bnot yet shipped\b|\bpas encore livré\b|\bfuture capability\b|\bprérequis technique\b/i.test(haystack)) {
+      heuristicCategories.push("roadmap-sensitive");
+    }
+    if (/\bconfidential\b|\binternal only\b|\binterne uniquement\b|\bdiscussion interne\b/i.test(haystack)) {
+      heuristicCategories.push("internal-only");
+    }
+    if (/\bcandidate\b|\binterview\b|\bhiring\b|\brecrutement\b|\bcandidat\b/i.test(haystack)) {
+      heuristicCategories.push("recruiting-sensitive");
+    }
+    if (/\brevenue\b|\bbudget\b|\bmargin\b|\bmarge\b|\bca\b/i.test(haystack)) {
+      heuristicCategories.push("financial-sensitive");
+    }
+    const unique = [...new Set(heuristicCategories)];
+    return {
+      blocked: unique.length > 0,
+      categories: unique,
+      rationale: unique.length > 0 ? "Deterministic Claap signal screening found explicit sensitive patterns." : "No explicit sensitive patterns detected in curated Claap signal.",
+      stageTwoScore: unique.length > 0 ? 0.72 : 0.08
+    };
+  };
+
+  if (notionKind === "claap-signal") {
+    const stageTwo = claapSignalStageTwoFallback();
+    const categories = [...new Set([...stageOneCategories, ...stageTwo.categories])];
+    const blocked = matchedRules.length > 0 || stageTwo.blocked;
+
+    return {
+      assessment: {
+        blocked,
+        categories,
+        rationale: blocked
+          ? `Blocked by ${matchedRules.length > 0 ? "stage 1" : ""}${matchedRules.length > 0 && stageTwo.blocked ? " and " : ""}${stageTwo.blocked ? "stage 2" : ""}. ${stageTwo.rationale}`.trim()
+          : stageTwo.rationale,
+        stageOneMatchedRules: matchedRules.map((rule) => rule.name),
+        stageTwoScore: stageTwo.stageTwoScore
+      },
+      usage: {
+        mode: "provider",
+        promptTokens: 0,
+        completionTokens: 0,
+        estimatedCostUsd: 0,
+        skipped: true
+      }
+    };
+  }
 
   let llm: { output: typeof sensitivityOutputSchema._type; usage: import("./llm.js").LlmUsage };
   try {

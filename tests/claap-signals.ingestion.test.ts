@@ -194,4 +194,90 @@ describe("claap signals notion ingestion", () => {
     expect(territory.assignment.profileId).toBe("quentin");
     expect(territory.assignment.needsRouting).toBe(false);
   });
+
+  it("infers a claap profile hint from payroll-domain language when persona hint is blank", async () => {
+    const connector = new NotionConnector(env);
+
+    const rawItem: RawSourceItem = {
+      id: "claap-page-2",
+      cursor: "2026-03-12T17:00:00.000Z",
+      payload: {
+        sourceType: "database",
+        parentDatabaseId: "f159a3dc-0211-48ba-a6f7-ca6ff6b81861",
+        page: {
+          id: "claap-page-2",
+          url: "https://www.notion.so/claap-page-2",
+          last_edited_time: "2026-03-12T17:00:00.000Z",
+          properties: {
+            "Signal title": {
+              type: "title",
+              title: [{ plain_text: "Régularisations DSN : déclôturer des mois de bulletins est un risque majeur" }]
+            },
+            "Signal summary": {
+              type: "rich_text",
+              rich_text: [{ plain_text: "Une régularisation rétroactive peut casser une chaîne de bulletins déjà clôturés." }]
+            },
+            "Hook candidate": {
+              type: "rich_text",
+              rich_text: [{ plain_text: "Le vrai sujet n'est pas la régularisation. C'est tout ce qu'elle casse derrière." }]
+            },
+            "Why it matters": {
+              type: "rich_text",
+              rich_text: [{ plain_text: "C'est un angle métier fort pour expliquer les risques de la paie rétroactive." }]
+            },
+            "Claap excerpts": {
+              type: "rich_text",
+              rich_text: [{ plain_text: "- Dès qu'on touche au bulletin passé, tout le reste saute.\n- Les taux DSN ne sont plus les bons." }]
+            },
+            "Transcript URL": {
+              type: "url",
+              url: "https://claap.io/transcript-2"
+            },
+            "Source date": {
+              type: "date",
+              date: { start: "2026-03-11" }
+            },
+            "Signal type": {
+              type: "select",
+              select: { name: "Operational friction" }
+            },
+            Theme: {
+              type: "select",
+              select: { name: "DSN" }
+            },
+            "Persona hint": {
+              type: "select",
+              select: null
+            },
+            Confidence: {
+              type: "select",
+              select: { name: "High" }
+            }
+          }
+        }
+      }
+    };
+    const config = {
+      source: "notion" as const,
+      enabled: true,
+      storeRawText: false,
+      retentionDays: 30,
+      rateLimit: {
+        requestsPerMinute: 30,
+        maxRetries: 3,
+        initialDelayMs: 10
+      },
+      pageAllowlist: [],
+      databaseAllowlist: ["f159a3dc-0211-48ba-a6f7-ca6ff6b81861"],
+      excludedDatabaseNames: []
+    };
+
+    const normalized = await connector.normalize(rawItem, config, {
+      dryRun: false,
+      now: new Date("2026-03-12T17:10:00.000Z")
+    });
+
+    expect(normalized.metadata.notionKind).toBe("claap-signal");
+    expect(normalized.metadata.profileHint).toBe("thomas");
+  });
 });
