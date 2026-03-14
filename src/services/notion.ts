@@ -284,6 +284,26 @@ export class NotionService {
     });
   }
 
+  async getEditorialNotes(notionPageId: string): Promise<string> {
+    if (!this.client) return "";
+    try {
+      const page = await this.client.pages.retrieve({ page_id: notionPageId });
+      const typedPage = page as any;
+      const editorialNotesValue = typedPage.properties?.["Editorial notes"];
+      if (editorialNotesValue?.type === "rich_text") {
+        return editorialNotesValue.rich_text
+          .map((entry: { plain_text: string }) => entry.plain_text)
+          .join("");
+      }
+      return "";
+    } catch (error) {
+      if (isNotionObjectNotFoundError(error)) {
+        return "";
+      }
+      throw error;
+    }
+  }
+
   async listSelectedOpportunities(): Promise<NotionSelectionRow[]> {
     if (!this.client) return [];
     const databaseId = await this.ensureDatabase("Content Opportunities");

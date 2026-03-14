@@ -1,4 +1,4 @@
-import { endOfDay, startOfDay, subDays } from "date-fns";
+import { subDays } from "date-fns";
 
 import { loadConnectorConfigs, loadDoctrineMarkdown, loadProfileBases, loadSensitivityMarkdown } from "./config/loaders.js";
 import type { AppEnv } from "./config/env.js";
@@ -27,7 +27,8 @@ import {
   scopeEvidenceReferences,
   selectPrimaryEvidence
 } from "./services/evidence.js";
-import { maybeGenerateDraft } from "./services/drafts.js";
+import { generateDraft } from "./services/drafts.js";
+import { NotFoundError, ForbiddenError, UnprocessableError } from "./lib/errors.js";
 import { buildThemeClusters, markObviousDuplicates } from "./services/dedupe.js";
 import type { LlmUsage } from "./services/llm.js";
 import { LlmClient } from "./services/llm.js";
@@ -316,10 +317,12 @@ export class EditorialSignalEngineApp {
 
   private async generateDraftOnDemand(context: RunContext) {
     if (!context.opportunityId) {
-      throw new Error("Missing --opportunity-id for draft:generate");
+      throw new UnprocessableError("Missing --opportunity-id for draft:generate");
     }
 
+    const company = await this.getActiveCompany(context);
     const run = createRun("draft:generate");
+    run.companyId = company.id;
     const costs: Array<ReturnType<typeof createCostEntry>> = [];
     if (!context.dryRun) {
       await this.repositories.createSyncRun(run);
@@ -328,43 +331,58 @@ export class EditorialSignalEngineApp {
     try {
       const row = await this.repositories.findOpportunityById(context.opportunityId);
       if (!row) {
-        throw new Error(`Opportunity ${context.opportunityId} not found`);
+        throw new NotFoundError(`Opportunity ${context.opportunityId} not found`);
       }
 
       const opportunity = this.mapOpportunityRow(row);
-      opportunity.readiness = "Draft candidate";
-      const staticInputs = await this.loadStaticInputs(context);
-      const profileSnapshots = await this.refreshProfiles(staticInputs.profileBases, false, context);
-      const targetProfileId = opportunity.ownerProfile ?? "linc-corporate";
-      const profile = profileSnapshots.get(targetProfileId);
-      if (!profile) {
-        throw new Error(`Profile ${targetProfileId} not found for draft generation`);
+
+      if (opportunity.companyId && opportunity.companyId !== company.id) {
+        throw new ForbiddenError(`Opportunity ${opportunity.id} does not belong to company ${company.slug}`);
       }
 
-      const draft = await maybeGenerateDraft({
+      if (opportunity.evidence.length === 0 || opportunity.primaryEvidence.excerpt.length === 0) {
+        throw new UnprocessableError(`Opportunity ${opportunity.id} has insufficient evidence for draft generation`);
+      }
+
+      const inputs = await this.loadIntelligenceInputs(company.id);
+
+      const authorUser = inputs.users.find((u) => u.id === opportunity.ownerUserId)
+        ?? inputs.users.find((u) => u.displayName === opportunity.ownerProfile);
+      if (!authorUser) {
+        throw new UnprocessableError(`No matching user found for opportunity ${opportunity.id}`);
+      }
+
+      const editorialNotes = opportunity.notionPageId
+        ? await this.notion.getEditorialNotes(opportunity.notionPageId)
+        : "";
+
+      const result = await generateDraft({
         opportunity,
-        profile,
+        user: authorUser,
         llmClient: this.llmClient,
-        clusterConflict: false,
-        sensitivityRulesMarkdown: staticInputs.sensitivityMarkdown,
-        doctrine: staticInputs.doctrineMarkdown
+        sensitivityRulesMarkdown: inputs.sensitivityMarkdown,
+        doctrineMarkdown: inputs.doctrineMarkdown,
+        editorialNotes,
+        layer3Defaults: inputs.layer3Defaults
       });
 
-      for (const usageEvent of draft.usageEvents) {
+      for (const usageEvent of result.usageEvents) {
         this.recordUsage(run, costs, usageEvent.usage, `${opportunity.id}:${usageEvent.step}`, new Set<string>());
       }
 
-      if (!draft.draft) {
-        throw new Error(`Opportunity ${opportunity.id} could not generate a safe draft`);
+      if (result.blocked || !result.draft) {
+        throw new UnprocessableError(
+          `Opportunity ${opportunity.id} blocked by sensitivity check: ${result.blockRationale ?? "unknown"}`
+        );
       }
 
       opportunity.readiness = "V1 generated";
       opportunity.status = "V1 generated";
-      opportunity.v1History = [...opportunity.v1History, draft.draft.firstDraftText];
+      opportunity.v1History = [...opportunity.v1History, result.draft.firstDraftText];
 
       if (!context.dryRun) {
-        await this.repositories.persistDraftGraph(draft.draft, opportunity);
-        const syncResult = await this.notion.syncOpportunity(opportunity, draft.draft);
+        await this.repositories.persistDraftGraph(result.draft, opportunity, company.id);
+        const syncResult = await this.notion.syncOpportunity(opportunity, result.draft);
         if (syncResult) {
           run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
           await this.repositories.updateOpportunityNotionSync(opportunity.id, syncResult.notionPageId, opportunity.notionPageFingerprint);
@@ -374,7 +392,7 @@ export class EditorialSignalEngineApp {
       run.counters.draftsCreated += 1;
       const finished = finalizeRun(run, "completed", `Draft generated for ${opportunity.id}`);
       await this.finishRun(finished, costs, context);
-      return draft.draft;
+      return result.draft;
     } catch (error) {
       const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown draft generation error");
       await this.finishRun(failed, costs, context);
@@ -522,77 +540,6 @@ export class EditorialSignalEngineApp {
           }
         }
         run.counters.opportunitiesCreated += 1;
-      }
-
-      const profileSnapshots = await this.refreshProfiles(staticInputs.profileBases, false, context);
-      for (const opportunity of opportunities) {
-        if (!opportunity.ownerProfile) {
-          continue;
-        }
-        const profile = profileSnapshots.get(opportunity.ownerProfile);
-        if (!profile) {
-          continue;
-        }
-
-        const todayStart = startOfDay(context.now);
-        const todayEnd = endOfDay(context.now);
-        const draftCount = context.dryRun
-          ? opportunities.filter((item) => item.ownerProfile === opportunity.ownerProfile && item.readiness === "V1 generated").length
-          : await this.repositories.countDraftsForProfileToday(opportunity.ownerProfile, todayStart, todayEnd);
-        if (draftCount >= 2) {
-          continue;
-        }
-
-        if (opportunity.primaryEvidence.excerpt.length === 0) {
-          continue;
-        }
-
-        const draft = await maybeGenerateDraft({
-          opportunity,
-          profile,
-          llmClient: this.llmClient,
-          clusterConflict: false,
-          sensitivityRulesMarkdown: staticInputs.sensitivityMarkdown,
-          doctrine: staticInputs.doctrineMarkdown
-        }).catch((error) => {
-          this.logger.error({ error, opportunityId: opportunity.id }, "Draft generation failed");
-          return {
-            draft: null,
-            usageEvents: [
-              {
-                step: "draft-generation" as const,
-                usage: {
-                  mode: "fallback" as const,
-                  promptTokens: 0,
-                  completionTokens: 0,
-                  estimatedCostUsd: 0,
-                  error: error instanceof Error ? error.message : "Unknown draft generation error"
-                }
-              }
-            ]
-          };
-        });
-
-        for (const usageEvent of draft.usageEvents) {
-          this.recordUsage(run, costs, usageEvent.usage, `${opportunity.id}:${usageEvent.step}`, fallbackSteps);
-        }
-        if (!draft.draft) {
-          continue;
-        }
-
-        opportunity.readiness = "V1 generated";
-        opportunity.status = "V1 generated";
-        opportunity.v1History = [...opportunity.v1History, draft.draft.firstDraftText];
-
-        if (!context.dryRun) {
-          await this.repositories.persistDraftGraph(draft.draft, opportunity);
-          const syncResult = await this.notion.syncOpportunity(opportunity, draft.draft);
-          if (syncResult) {
-            run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
-            await this.repositories.updateOpportunityNotionSync(opportunity.id, syncResult.notionPageId, opportunity.notionPageFingerprint);
-          }
-        }
-        run.counters.draftsCreated += 1;
       }
 
       if (!context.dryRun) {

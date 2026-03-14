@@ -115,13 +115,11 @@ What is complete:
 What is still transitional:
 
 - `sync:daily` still runs the old signal-centric path internally
-- the Notion cockpit still exposes old machine-oriented surfaces
-- draft generation is on-demand, but draft hardening and editorial override handling are not finished
 - full repo-wide multi-tenancy is not complete until the signal-era models are removed in Phase 9
 
 What happens next:
 
-- Phase 6: rewrite the Notion cockpit around opportunities, profiles, and runs
+- Phase 8: market research (Tavily integration)
 
 ## Transitional truths
 
@@ -671,7 +669,20 @@ Not included in Phase 6:
 
 Status:
 
-- partially implemented
+- implemented
+
+Delivered:
+
+- auto-draft block removed from `syncDaily` — daily sync no longer creates drafts
+- `generateDraftOnDemand` rewritten to use convergence-era DB-backed inputs (`loadIntelligenceInputs`)
+- company scoping: `run.companyId` set, ownership check enforced (`ForbiddenError`)
+- editorial notes integrated as first-class human overrides (read from Notion at trigger boundary)
+- new `generateDraft()` function in `drafts.ts` alongside legacy `maybeGenerateDraft`
+- enrichment-aware prompt: `opportunity.enrichmentLog` formatted into draft prompt
+- Layer 3 LinkedIn craft defaults from `EditorialConfig` included in prompt
+- custom error classes (`NotFoundError`, `ForbiddenError`, `UnprocessableError`) with HTTP status mapping
+- HTTP endpoint hardened: 200 (not 202), proper error codes (404/403/422/500), logging enabled, testable route extraction
+- anti-regression tests prove `syncDaily` cannot create drafts and draft creation only through explicit trigger
 
 Required outcomes:
 
@@ -705,27 +716,28 @@ Required outcomes:
 
 ## Next Agent Mandate
 
-The next implementation agent should work on **Phase 7** (Draft Agent hardening):
+The next implementation agent should work on **Phase 8** (Market research):
 
 ### Title
 
-Harden draft generation: on-demand only, quality guardrails, enrichment-aware.
+Implement market research: Tavily integration, market_queries usage, bi-weekly search runs.
 
 ### What the next agent must do
 
-1. Ensure draft generation remains on-demand only (no background auto-generation).
-2. Add quality guardrails and enrichment-awareness to the draft pipeline.
-3. Keep the rest of the repo buildable and tested while doing this.
+1. Integrate Tavily search API for market research.
+2. Use `market_queries` table per company.
+3. Implement bi-weekly scheduled research runs.
+4. Inject results as `raw_source_items` with `type = market_research_summary`.
+5. Keep the rest of the repo buildable and tested while doing this.
 
 ### What the next agent must not do
 
-- do not start market research implementation yet (Phase 8)
 - do not delete signal-centric services yet (still needed by `sync:daily` until Phase 9)
 - do not migrate status values (deferred)
 
 ### Acceptance bar for the next agent
 
-- Draft generation works on-demand with quality improvements
+- Market research creates bounded raw source items from Tavily results
 - the repo still passes typecheck and tests after the slice
 
 ## Anti-Regression Rules
@@ -760,4 +772,4 @@ Plain language:
 - the repo is still salvageable
 - the product shape is still the problem
 - the current intelligence slice is landed
-- Phase 6 (Notion cockpit rewrite) is complete; the next slice is Phase 7 (Draft Agent hardening)
+- Phase 7 (Draft Agent hardening) is complete; the next slice is Phase 8 (Market research)

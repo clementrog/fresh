@@ -799,10 +799,11 @@ export class RepositoryBundle {
     });
   }
 
-  async createDraft(draft: DraftV1, tx: PrismaTransaction = this.prisma) {
+  async createDraft(draft: DraftV1, tx: PrismaTransaction = this.prisma, companyId?: string) {
     await tx.draft.create({
       data: {
         id: draft.id,
+        companyId: companyId ?? null,
         opportunityId: draft.opportunityId,
         profileId: draft.profileId,
         proposedTitle: draft.proposedTitle,
@@ -823,6 +824,7 @@ export class RepositoryBundle {
         data: draft.sourceEvidence.map((item) => ({
           id: item.id,
           draftId: draft.id,
+          companyId: companyId ?? null,
           sourceItemId: item.sourceItemId,
           source: item.source,
           sourceUrl: item.sourceUrl,
@@ -923,9 +925,9 @@ export class RepositoryBundle {
     });
   }
 
-  async persistDraftGraph(draft: DraftV1, opportunity: ContentOpportunity) {
+  async persistDraftGraph(draft: DraftV1, opportunity: ContentOpportunity, companyId?: string) {
     return this.prisma.$transaction(async (tx) => {
-      await this.createDraft(draft, tx);
+      await this.createDraft(draft, tx, companyId ?? opportunity.companyId);
       await this.upsertOpportunity(opportunity, tx);
     });
   }
