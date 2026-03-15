@@ -95,6 +95,14 @@ export const sourceConfigSchema = z.discriminatedUnion("source", [
   marketFindingsSourceConfigSchema
 ]);
 
+export const marketResearchRuntimeConfigSchema = z.object({
+  enabled: z.boolean(),
+  storeRawText: z.boolean(),
+  retentionDays: z.number().int().positive(),
+  rateLimit: rateLimitSchema,
+  maxResultsPerQuery: z.number().int().min(5).max(10)
+});
+
 export const llmSignalSchema = z.object({
   title: z.string().min(1),
   summary: z.string().min(1),
@@ -185,4 +193,13 @@ export const createEnrichDecisionSchema = z.object({
   whatItIsNotAbout: z.string().min(1),
   suggestedFormat: z.string().min(1),
   confidence: z.number().min(0).max(1)
+});
+
+export const marketResearchSummarySchema = z.object({
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  keyFindings: z.array(z.object({
+    claim: z.string().min(1),
+    supportingResultIndices: z.array(z.number().int().min(0)).min(1)
+  }))
 });

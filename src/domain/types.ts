@@ -35,7 +35,7 @@ export const SIGNAL_TYPES = [
 
 export type SignalType = (typeof SIGNAL_TYPES)[number];
 
-export const SOURCE_KINDS = ["slack", "notion", "claap", "linear", "market-findings"] as const;
+export const SOURCE_KINDS = ["slack", "notion", "claap", "linear", "market-findings", "market-research"] as const;
 
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 
@@ -79,6 +79,7 @@ export type SignalStatus = (typeof SIGNAL_STATUS)[number];
 
 export type RunType =
   | "ingest:run"
+  | "market-research:run"
   | "intelligence:run"
   | "draft:generate"
   | "server:start"
@@ -140,6 +141,14 @@ export interface LinearSourceConfig extends SourceSyncConfig {
 export interface MarketFindingsSourceConfig extends SourceSyncConfig {
   source: "market-findings";
   directory: string;
+}
+
+export interface MarketResearchRuntimeConfig {
+  enabled: boolean;
+  storeRawText: boolean;
+  retentionDays: number;
+  rateLimit: RateLimitConfig;
+  maxResultsPerQuery: number;
 }
 
 export type ConnectorConfig =

@@ -256,6 +256,7 @@ Current status:
 - add `companyId`
 - keep retention fields like `rawTextExpiresAt` and `cleanupEligible`
 - add explicit `type`
+  - future schema convergence, not delivered in Phase 8
 - keep `processedAt`
 
 ### `Opportunity` -> `content_opportunities`
@@ -471,10 +472,10 @@ Search API:
 V1 behavior:
 
 - `market_queries` table per company
-- bi-weekly scheduled research runs
+- externally scheduled market research runs executed twice per week via `market-research:run`
 - 5 to 10 search results max per query
 - summarize results through Layer 1
-- inject the results as `raw_source_items` with `type = market_research_summary`
+- inject the results as normal stored source items with `source = market-research` and `metadata.kind = market_research_summary`
 
 ## Notion Responsibilities
 
@@ -561,7 +562,8 @@ Ownership rules:
 - enrichment never overwrites human edits
 - opportunities auto-park after 14 days of inactivity
 - draft generation works only through explicit trigger
-- market research creates bounded raw source items from Tavily results
+- market research creates bounded source items from Tavily results
+- unchanged Tavily result sets are skipped without updating the stored source item, so `processedAt` is not reset for unchanged research
 - Notion cockpit stays aligned to the opportunity model only
 
 ## Delivery Sequence
@@ -726,8 +728,8 @@ Implement market research: Tavily integration, market_queries usage, bi-weekly s
 
 1. Integrate Tavily search API for market research.
 2. Use `market_queries` table per company.
-3. Implement bi-weekly scheduled research runs.
-4. Inject results as `raw_source_items` with `type = market_research_summary`.
+3. Add a `market-research:run` command intended to be triggered externally twice per week per company; this phase does not add an in-process scheduler.
+4. Inject results as normal stored source items using `source = market-research` and `metadata.kind = market_research_summary`; defer a physical `raw_source_items.type` column from this slice.
 5. Keep the rest of the repo buildable and tested while doing this.
 
 ### What the next agent must not do

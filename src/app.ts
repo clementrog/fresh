@@ -1,6 +1,12 @@
 import { subDays } from "date-fns";
 
-import { loadConnectorConfigs, loadDoctrineMarkdown, loadProfileBases, loadSensitivityMarkdown } from "./config/loaders.js";
+import {
+  loadConnectorConfigs,
+  loadDoctrineMarkdown,
+  loadMarketResearchRuntimeConfig,
+  loadProfileBases,
+  loadSensitivityMarkdown
+} from "./config/loaders.js";
 import type { AppEnv } from "./config/env.js";
 import { createConnectorRegistry } from "./connectors/index.js";
 import { getPrisma } from "./db/client.js";
@@ -43,6 +49,7 @@ import { extractSignalFromItem } from "./services/signal-extractor.js";
 import { resolveTerritory } from "./services/territory.js";
 import { ensureConvergenceFoundation } from "./services/convergence.js";
 import { runIntelligencePipeline } from "./services/intelligence.js";
+import { runMarketResearch } from "./services/market-research.js";
 
 type LoggerLike = {
   info: (...args: unknown[]) => void;
@@ -102,6 +109,8 @@ export class EditorialSignalEngineApp {
     switch (command) {
       case "ingest:run":
         return this.ingestRun(context);
+      case "market-research:run":
+        return this.marketResearchRun(context);
       case "intelligence:run":
         return this.intelligenceRun(context);
       case "draft:generate":
@@ -182,6 +191,75 @@ export class EditorialSignalEngineApp {
     } catch (error) {
       const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown ingestion error");
       await this.finishRun(failed, [], context);
+      throw error;
+    }
+  }
+
+  private async marketResearchRun(context: RunContext) {
+    const company = await this.getActiveCompany(context);
+    const run = createRun("market-research:run", "market-research");
+    run.companyId = company.id;
+    const costs: Array<ReturnType<typeof createCostEntry>> = [];
+    const fallbackSteps = new Set<string>();
+    if (!context.dryRun) {
+      await this.repositories.createSyncRun(run);
+    }
+
+    try {
+      const runtimeConfig = await loadMarketResearchRuntimeConfig();
+      if (!runtimeConfig.enabled) {
+        const finished = finalizeRun(run, "completed", "Market research disabled in runtime config");
+        await this.finishRun(finished, [], context);
+        return [];
+      }
+
+      const inputs = await this.loadMarketResearchInputs(company.id);
+      const marketQueries = await this.repositories.listActiveMarketQueries(company.id);
+      if (marketQueries.length === 0) {
+        const finished = finalizeRun(run, "completed", `No active market queries for company ${company.slug}`);
+        await this.finishRun(finished, [], context);
+        return [];
+      }
+
+      const result = await runMarketResearch({
+        companyId: company.id,
+        marketQueries,
+        doctrineMarkdown: inputs.doctrineMarkdown,
+        runtimeConfig,
+        now: context.now,
+        llmClient: this.llmClient,
+        tavilyApiKey: this.env.TAVILY_API_KEY,
+        findExistingSourceItem: (params) => this.repositories.findSourceItemBySourceKey(params)
+      });
+
+      run.counters.fetched += result.fetchedResultsCount;
+      run.counters.normalized += result.items.length;
+      for (const event of result.usageEvents) {
+        this.recordUsage(run, costs, event.usage, event.step, fallbackSteps);
+      }
+
+      if (!context.dryRun) {
+        for (const item of result.items) {
+          await this.repositories.upsertSourceItem(
+            item,
+            computeRawTextExpiry(runtimeConfig, context.now),
+            this.prisma,
+            company.id
+          );
+        }
+      }
+
+      this.applyFallbackThresholds(run, fallbackSteps);
+      const finished = finalizeRun(
+        run,
+        "completed",
+        `Market research created ${result.items.length} source items, skipped ${result.skippedUnchanged} unchanged and ${result.skippedEmpty} empty queries`
+      );
+      await this.finishRun(finished, costs, context);
+      return result.items;
+    } catch (error) {
+      const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown market research error");
+      await this.finishRun(failed, costs, context);
       throw error;
     }
   }
@@ -908,6 +986,15 @@ export class EditorialSignalEngineApp {
       layer3Defaults: layer3.defaults ?? [],
       userDescriptions,
       users: users.map(mapUserRecord)
+    };
+  }
+
+  private async loadMarketResearchInputs(companyId: string) {
+    const editorialConfig = await this.repositories.getLatestEditorialConfig(companyId);
+    if (!editorialConfig) throw new Error("No editorial config. Run convergence foundation first.");
+    const layer1 = editorialConfig.layer1CompanyLens as { doctrineMarkdown?: string };
+    return {
+      doctrineMarkdown: layer1.doctrineMarkdown ?? ""
     };
   }
 

@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "storeRawText": true,
+  "retentionDays": 30,
+  "rateLimit": {
+    "requestsPerMinute": 5,
+    "maxRetries": 2,
+    "initialDelayMs": 1000
+  },
+  "maxResultsPerQuery": 5
+}

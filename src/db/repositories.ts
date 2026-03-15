@@ -168,6 +168,29 @@ export class RepositoryBundle {
     });
   }
 
+  async listActiveMarketQueries(companyId: string): Promise<MarketQueryRecord[]> {
+    const rows = await this.prisma.marketQuery.findMany({
+      where: {
+        companyId,
+        enabled: true
+      },
+      orderBy: [
+        { priority: "asc" },
+        { createdAt: "asc" }
+      ]
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      companyId: row.companyId,
+      query: row.query,
+      enabled: row.enabled,
+      priority: row.priority,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString()
+    }));
+  }
+
   async getNotionDatabaseBinding(parentPageId: string, name: string): Promise<NotionDatabaseBinding | null> {
     const binding = await this.prisma.notionDatabaseBinding.findUnique({
       where: {
@@ -458,6 +481,18 @@ export class RepositoryBundle {
         rawTextExpiresAt,
         cleanupEligible: rawTextExpiresAt !== null,
         processedAt: null
+      }
+    });
+  }
+
+  async findSourceItemBySourceKey(params: { companyId: string; source: string; sourceItemId: string }) {
+    return this.prisma.sourceItem.findUnique({
+      where: {
+        companyId_source_sourceItemId: {
+          companyId: params.companyId,
+          source: params.source,
+          sourceItemId: params.sourceItemId
+        }
       }
     });
   }

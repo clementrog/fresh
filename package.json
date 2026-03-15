@@ -16,6 +16,7 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "ingest:run": "tsx src/cli.ts ingest:run",
+    "market-research:run": "tsx src/cli.ts market-research:run",
     "intelligence:run": "tsx src/cli.ts intelligence:run",
     "draft:generate": "tsx src/cli.ts draft:generate",
     "server:start": "tsx src/server.ts",

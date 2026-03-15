@@ -8,6 +8,7 @@ import type {
   ConnectorConfig,
   LinearSourceConfig,
   MarketFindingsSourceConfig,
+  MarketResearchRuntimeConfig,
   NotionSourceConfig,
   ProfileBase,
   SlackSourceConfig
@@ -18,6 +19,7 @@ import { hashParts } from "../lib/ids.js";
 import {
   claapSourceConfigSchema,
   linearSourceConfigSchema,
+  marketResearchRuntimeConfigSchema,
   marketFindingsSourceConfigSchema,
   notionSourceConfigSchema,
   slackSourceConfigSchema
@@ -56,6 +58,12 @@ export async function loadConnectorConfigs(): Promise<ConnectorConfig[]> {
 export async function loadDoctrineMarkdown() {
   const doctrinePath = path.join(projectRoot, "editorial", "doctrine.md");
   return fs.readFile(doctrinePath, "utf8");
+}
+
+export async function loadMarketResearchRuntimeConfig(): Promise<MarketResearchRuntimeConfig> {
+  const configPath = path.join(projectRoot, "config", "market-research.json");
+  const value = await readJsonFile<unknown>(configPath);
+  return marketResearchRuntimeConfigSchema.parse(value) as MarketResearchRuntimeConfig;
 }
 
 export async function loadSensitivityMarkdown() {

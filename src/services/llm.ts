@@ -249,7 +249,7 @@ export class LlmClient {
     }
 
     if (step.includes("signal") || step.includes("territory") || step.includes("sensitivity")
-        || step.includes("screening") || step.includes("create-enrich")) {
+        || step.includes("screening") || step.includes("create-enrich") || step.includes("market-research")) {
       return this.env.INTELLIGENCE_LLM_MODEL ?? "claude-3-7-sonnet-latest";
     }
 
