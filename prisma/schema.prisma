@@ -48,7 +48,6 @@ model SourceItem {
   screeningResultJson Json?
 
   evidenceReferences EvidenceReference[]
-  signalSourceItems  SignalSourceItem[]
   company            Company @relation(fields: [companyId], references: [id], onDelete: SetNull)
 
   @@unique([companyId, source, sourceItemId])
@@ -60,7 +59,6 @@ model SourceItem {
 
 model EvidenceReference {
   id              String   @id
-  signalId        String?
   opportunityId   String?
   draftId         String?
   companyId       String?
@@ -74,7 +72,6 @@ model EvidenceReference {
   freshnessScore  Float
   createdAt       DateTime @default(now())
 
-  signal      Signal?      @relation(fields: [signalId], references: [id], onDelete: Cascade)
   opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
   draft       Draft?       @relation(fields: [draftId], references: [id], onDelete: Cascade)
   sourceItem  SourceItem   @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
@@ -99,86 +96,6 @@ model OpportunityEvidence {
   @@id([opportunityId, evidenceId])
 }
 
-model Signal {
-  id                    String   @id
-  sourceFingerprint     String   @unique
-  title                 String
-  summary               String
-  type                  String
-  freshness             Float
-  confidence            Float
-  probableOwnerProfile  String?
-  suggestedAngle        String
-  status                String
-  sensitivityJson       Json
-  duplicateOfSignalId   String?
-  themeClusterKey       String?
-  notionPageId          String?
-  notionPageFingerprint String
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-
-  duplicateOf   Signal?          @relation("SignalDuplicate", fields: [duplicateOfSignalId], references: [id], onDelete: SetNull)
-  duplicates    Signal[]         @relation("SignalDuplicate")
-  evidence      EvidenceReference[]
-  sourceItems   SignalSourceItem[]
-  opportunities OpportunitySignal[]
-  themeCluster  ThemeCluster?    @relation(fields: [themeClusterKey], references: [key], onDelete: SetNull)
-}
-
-model SignalSourceItem {
-  signalId     String
-  sourceItemId String
-
-  signal     Signal     @relation(fields: [signalId], references: [id], onDelete: Cascade)
-  sourceItem  SourceItem @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
-
-  @@id([signalId, sourceItemId])
-}
-
-model ThemeCluster {
-  key          String   @id
-  title        String
-  profileHint  String?
-  evidenceCount Int
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  signals Signal[]
-}
-
-model ProfileBase {
-  profileId            String   @id
-  companyId            String?
-  role                 String
-  languagePreference   String
-  toneSummary          String
-  preferredStructure   String
-  typicalPhrasesJson   Json
-  avoidRulesJson       Json
-  contentTerritoriesJson Json
-  weakFitTerritoriesJson Json
-  sampleExcerptsJson   Json
-  sourcePath           String
-  notionPageId         String?
-  notionPageFingerprint String
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-
-  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
-}
-
-model ProfileLearnedLayer {
-  profileId               String @id
-  recurringPhrasesJson    Json
-  structuralPatternsJson  Json
-  evidenceExcerptIdsJson  Json
-  lastIncrementalUpdateAt DateTime
-  lastWeeklyRecomputeAt   DateTime?
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
-}
-
 model Opportunity {
   id                      String   @id
   companyId               String
@@ -186,13 +103,13 @@ model Opportunity {
   title                   String
   ownerProfile            String?
   ownerUserId             String?
-  narrativePillar         String
+  narrativePillar         String?  @default("")
   angle                   String
   whyNow                  String
   whatItIsAbout           String
   whatItIsNotAbout        String
-  routingStatus           String
-  readiness               String
+  routingStatus           String?  @default("Routed")
+  readiness               String?  @default("Opportunity only")
   status                  String
   suggestedFormat         String
   supportingEvidenceCount Int
@@ -202,7 +119,7 @@ model Opportunity {
   selectedAt              DateTime?
   lastDigestAt            DateTime?
   enrichmentLogJson       Json     @default("[]")
-  v1HistoryJson           Json
+  v1HistoryJson           Json?    @default("[]")
   notionPageId            String?
   notionPageFingerprint   String
   createdAt               DateTime @default(now())
@@ -213,20 +130,9 @@ model Opportunity {
   primaryEvidence EvidenceReference?   @relation("PrimaryOpportunityEvidence", fields: [primaryEvidenceId], references: [id], onDelete: SetNull)
   evidence        EvidenceReference[]
   linkedEvidence  OpportunityEvidence[]
-  relatedSignals  OpportunitySignal[]
   drafts          Draft[]
 
   @@unique([companyId, sourceFingerprint])
-}
-
-model OpportunitySignal {
-  opportunityId String
-  signalId      String
-
-  opportunity Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
-  signal      Signal      @relation(fields: [signalId], references: [id], onDelete: Cascade)
-
-  @@id([opportunityId, signalId])
 }
 
 model NotionDatabaseBinding {
@@ -242,20 +148,6 @@ model NotionDatabaseBinding {
 
   @@unique([parentPageId, name])
   @@index([companyId, name])
-}
-
-model DigestDispatch {
-  id                 String   @id
-  digestKey          String   @unique
-  status             String
-  channel            String
-  opportunityIdsJson Json
-  slackMessageTs     String?
-  sentAt             DateTime?
-  leaseExpiresAt     DateTime?
-  error              String?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
 }
 
 model Draft {
@@ -324,7 +216,6 @@ model Company {
 
   sourceCursors          SourceCursor[]
   sourceItems            SourceItem[]
-  profileBases           ProfileBase[]
   opportunities          Opportunity[]
   notionDatabaseBindings NotionDatabaseBinding[]
   drafts                 Draft[]

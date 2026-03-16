@@ -21,19 +21,13 @@
     "draft:generate": "tsx src/cli.ts draft:generate",
     "server:start": "tsx src/server.ts",
     "setup:notion": "tsx src/cli.ts setup:notion",
-    "sync:daily": "tsx src/cli.ts sync:daily",
-    "digest:send": "tsx src/cli.ts digest:send",
     "selection:scan": "tsx src/cli.ts selection:scan",
-    "profile:weekly-recompute": "tsx src/cli.ts profile:weekly-recompute",
-    "cleanup:retention": "tsx src/cli.ts cleanup:retention",
-    "backfill": "tsx src/cli.ts backfill",
-    "repair:opportunity-evidence": "tsx src/cli.ts repair:opportunity-evidence"
+    "cleanup:retention": "tsx src/cli.ts cleanup:retention"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
     "@notionhq/client": "^2.3.0",
     "@prisma/client": "^6.5.0",
-    "@slack/web-api": "^7.11.0",
     "date-fns": "^4.1.0",
     "fastify": "^5.8.2",
     "gray-matter": "^4.0.3",

@@ -114,22 +114,25 @@ What is complete:
 
 What is still transitional:
 
-- `sync:daily` still runs the old signal-centric path internally
-- full repo-wide multi-tenancy is not complete until the signal-era models are removed in Phase 9
+- Status values still use old enum (`"To review"`, `"Selected"`, etc.). Target enum migration is the next slice.
+- Opportunity has nullable signal-era columns (`narrativePillar`, `routingStatus`, `readiness`, `v1HistoryJson`) pending removal.
+- `ProfileId` type constraint and `PROFILE_IDS` constant still exist. Removal requires type-contract reshaping.
+- FK-owned `EvidenceReference.opportunityId` data still exists. Reads merge both FK-owned and junction-linked evidence.
+- `selection:scan` still uses Notion polling for inbound editorial owner sync. HTTP-based selection is the target UX.
 
 What happens next:
 
-- Phase 8: market research (Tavily integration)
+- Status model migration (old → new status enum)
+- Opportunity column cleanup (`narrativePillar`, `routingStatus`, `readiness`, `v1HistoryJson` removal)
+- Evidence FK→junction data backfill
+- `ProfileId` type cleanup
 
-## Transitional truths
+## Remaining transitional state after Phase 9
 
-These are still transitional and must not be confused with the target architecture:
+Multi-tenancy is structurally complete for the core pipeline (`ingest:run`, `intelligence:run`, `draft:generate`, `market-research:run`). Remaining gap: `selection:scan` is still globally scoped — it creates an unscoped run, queries the Notion "Content Opportunities" database globally, and updates rows by `notionPageId` without company filtering. Notion database bindings are keyed by `(parentPageId, name)` rather than company. This path can cross company boundaries in multi-company deployments. Scoping `selection:scan` by company is deferred to the next slice.
 
-- `intelligence:run` uses the new filter/score → create/enrich pipeline, but `sync:daily` still uses the old signal-centric path internally
-- `Signal`, `ThemeCluster`, `SignalSourceItem`, and `OpportunitySignal` still exist in schema and code — they are used exclusively by `sync:daily` and are Phase 9 deletion targets
-- Signal-centric service files (`signal-extractor.ts`, `territory.ts`, `dedupe.ts`, `sensitivity.ts`) are NOT deleted because `sync:daily` and `drafts.ts` still import them — deletion deferred to Phase 9
-- Slack ingestion and digest are still present in code, even if they are no longer part of the target
-- the Notion cockpit shows 3 required databases (Content Opportunities, Profiles, Sync Runs); Signal Feed and Market Findings are legacy (never auto-created, synced only if already present)
+Other remaining gaps: status values not yet migrated to target enum, Opportunity has nullable signal-era columns pending removal.
+
 - Anthropic structured output currently uses a pragmatic raw-JSON prompt path, not a final native tool-based integration
 
 ## Minor known follow-ups from the approved review
@@ -168,15 +171,17 @@ These are acknowledged but not blockers for the current slice:
 - [`/Users/clement/projects/fresh/src/config/loaders.ts`](/Users/clement/projects/fresh/src/config/loaders.ts)
 - [`/Users/clement/projects/fresh/src/domain/types.ts`](/Users/clement/projects/fresh/src/domain/types.ts)
 
-## To delete, not preserve
+## Deleted in Phase 9
 
-- [`/Users/clement/projects/fresh/src/services/signal-extractor.ts`](/Users/clement/projects/fresh/src/services/signal-extractor.ts)
-- [`/Users/clement/projects/fresh/src/services/territory.ts`](/Users/clement/projects/fresh/src/services/territory.ts)
-- [`/Users/clement/projects/fresh/src/services/dedupe.ts`](/Users/clement/projects/fresh/src/services/dedupe.ts)
-- [`/Users/clement/projects/fresh/src/services/sensitivity.ts`](/Users/clement/projects/fresh/src/services/sensitivity.ts)
-- [`/Users/clement/projects/fresh/src/services/profiles.ts`](/Users/clement/projects/fresh/src/services/profiles.ts)
-- [`/Users/clement/projects/fresh/src/services/slack.ts`](/Users/clement/projects/fresh/src/services/slack.ts)
-- [`/Users/clement/projects/fresh/src/connectors/slack.ts`](/Users/clement/projects/fresh/src/connectors/slack.ts)
+- `src/services/signal-extractor.ts`
+- `src/services/territory.ts`
+- `src/services/dedupe.ts`
+- `src/services/profiles.ts`
+- `src/services/slack.ts`
+- `src/connectors/slack.ts`
+
+## Still pending deletion
+
 - [`/Users/clement/projects/fresh/src/connectors/market-findings.ts`](/Users/clement/projects/fresh/src/connectors/market-findings.ts) after manual findings are folded into the raw source item model
 
 ## Target Runtime Shape
@@ -218,7 +223,7 @@ Current status:
 - implemented for the new `intelligence:run` path
 - reads company editorial config and users from DB
 - creates or enriches opportunities directly from stored source items
-- still coexists with the deprecated signal-centric `sync:daily` path
+- `sync:daily` removed in Phase 9 — `intelligence:run` is the sole intelligence path
 
 ### Agent 3 — Draft Agent
 
@@ -231,7 +236,7 @@ Current status:
 
 - command exists
 - HTTP trigger exists
-- still backed by the old draft model and old opportunity model
+- backed by convergence-era `generateDraft()` with DB-backed editorial config
 
 ## Data Model Convergence
 
@@ -300,7 +305,7 @@ Current status:
 - add `companyId`
 - move key counters and token totals toward explicit top-level fields where the vision requires them
 
-## Tables to remove after cutover
+## Tables removed in Phase 9
 
 - `Signal`
 - `SignalSourceItem`
@@ -308,6 +313,7 @@ Current status:
 - `ThemeCluster`
 - `ProfileLearnedLayer`
 - `DigestDispatch`
+- `ProfileBase`
 
 ## Migration strategy
 
@@ -588,13 +594,13 @@ Delivered:
 
 Status:
 
-- not implemented
+- absorbed into Phase 9
 
-Required outcomes:
+Required outcomes (delivered in Phase 9):
 
-- disable Slack ingestion from active runtime
-- remove digest from the core path
-- stop spending engineering effort on old Slack-centric workflow code
+- Slack ingestion fully removed (connector, service, types, config, env vars, npm dependency)
+- digest command and path fully removed
+- no Slack-centric workflow code remains
 
 ## Phase 3 — Ingestion Agent stabilization
 
@@ -643,10 +649,9 @@ Delivered:
 
 Constraints:
 
-- Signal-centric service files (`signal-extractor.ts`, `territory.ts`, `dedupe.ts`, `sensitivity.ts`) NOT deleted — `sync:daily` and `drafts.ts` still import them. Deletion deferred to Phase 9.
-- `Signal.sourceFingerprint @unique` and `ThemeCluster.key @id` remain globally scoped — Phase 9 deletion targets. `sync:daily` must NOT be run for multiple companies until Phase 9.
-- `SyncRun.companyId` is written by `intelligence:run` and `sync:daily` only. Other commands (`ingest:run`, `draft:generate`, `digest:send`, etc.) remain unscoped until explicitly patched in later phases.
-- `SourceItem.id` and `Opportunity.id` were remapped to company-scoped values — hard cutover. Old IDs in external scripts, bookmarks, or API calls are invalidated. `DigestDispatch.opportunityIdsJson` was explicitly migrated. No alias table is provided.
+- Signal-centric service files deleted in Phase 9. `sensitivity.ts` kept for convergence-era draft safety.
+- `Signal`, `ThemeCluster`, `SignalSourceItem`, `OpportunitySignal` models dropped in Phase 9.
+- `SourceItem.id` and `Opportunity.id` were remapped to company-scoped values — hard cutover. Old IDs in external scripts, bookmarks, or API calls are invalidated. No alias table is provided.
 
 ## Phase 6 — Notion cockpit rewrite
 
@@ -679,7 +684,7 @@ Delivered:
 - `generateDraftOnDemand` rewritten to use convergence-era DB-backed inputs (`loadIntelligenceInputs`)
 - company scoping: `run.companyId` set, ownership check enforced (`ForbiddenError`)
 - editorial notes integrated as first-class human overrides (read from Notion at trigger boundary)
-- new `generateDraft()` function in `drafts.ts` alongside legacy `maybeGenerateDraft`
+- new `generateDraft()` function in `drafts.ts` (legacy `maybeGenerateDraft` removed in Phase 9)
 - enrichment-aware prompt: `opportunity.enrichmentLog` formatted into draft prompt
 - Layer 3 LinkedIn craft defaults from `EditorialConfig` included in prompt
 - custom error classes (`NotFoundError`, `ForbiddenError`, `UnprocessableError`) with HTTP status mapping
@@ -696,50 +701,76 @@ Required outcomes:
 
 Status:
 
-- not implemented
+- implemented
 
-Required outcomes:
+Delivered:
 
-- Tavily integration
-- `market_queries` usage
-- bi-weekly search runs
+- separate `market-research:run` command, intended for external twice-weekly scheduling per company
+- Tavily-backed market research service in `src/services/market-research.ts`
+- dedicated runtime config in `config/market-research.json`, kept outside the generic `config/sources` connector path
+- company-scoped `market_queries` read path
+- bounded result normalization, stable result-set hashing, and skip-on-unchanged behavior before summary generation
+- research summaries stored as normal source items with `source = "market-research"` and `metadata.kind = "market_research_summary"`
+- intelligence-model structured summary step `market-research-summary`
+- regression coverage for connector isolation, unchanged-result skipping, retry behavior, and grounded citations
 
-## Phase 9 — Final cleanup
+Constraints:
+
+- `SourceItem.type` remains deferred; Phase 8 uses `metadata.kind = "market_research_summary"` instead
+- no in-process scheduler was added; execution is still command-driven and must be triggered externally
+- manual `market-findings` support remains in place and is not yet folded away
+- Phase 8 does not remove any signal-era compatibility code
+
+## Phase 9 — Final signal-era cleanup
 
 Status:
 
-- not implemented
+- implemented
 
-Required outcomes:
+Delivered:
 
-- remove obsolete tables
-- remove obsolete commands
-- remove obsolete services and tests
+- Deleted signal-era entry points: `sync:daily`, `digest:send`, `profile:weekly-recompute`, `backfill`, `repair:opportunity-evidence`
+- Deleted signal-era services: `signal-extractor.ts`, `territory.ts`, `dedupe.ts`, `profiles.ts`, `slack.ts`
+- Deleted signal-era connector: `connectors/slack.ts`
+- Full Slack removal: types, config, env vars, Zod schemas, connector registry, npm dependency (`@slack/web-api`)
+- Cleaned shared services: removed `maybeGenerateDraft`, `maybeCreateOpportunity`, `qualifyDraftCandidate`, `syncSignal`, `syncMarketFinding`, `syncProfile`, `LEGACY_DATABASES`
+- Cleaned repositories: removed 19 signal-era methods, updated `opportunityInclude` (dropped `relatedSignals`), removed `signalIds` from `replaceOpportunityRelations`
+- Cleaned domain types: removed `EditorialSignal`, `ThemeCluster`, `TerritoryAssignment`, `ProfileLearnedLayer`, `ProfileSnapshot`, `DigestDispatch`, signal-era status/type constants, Slack types
+- Dropped 7 Prisma models: `Signal`, `SignalSourceItem`, `OpportunitySignal`, `ThemeCluster`, `ProfileLearnedLayer`, `DigestDispatch`, `ProfileBase`
+- Dropped `EvidenceReference.signalId` column and FK
+- Made Opportunity columns nullable with defaults: `narrativePillar`, `routingStatus`, `readiness`, `v1HistoryJson`
+- `selection:scan` kept minimal — Slack notification removed, Notion→DB editorial owner bridge preserved
+- `sensitivity.ts` kept — still used by convergence-era `generateDraft()` safety check
+- Deleted 7 test files, updated 5 test files
+- All tests pass, TypeScript compiles cleanly
 
 ## Next Agent Mandate
 
-The next implementation agent should work on **Phase 8** (Market research):
+The next implementation agent should work on **status model migration and column cleanup**:
 
 ### Title
 
-Implement market research: Tavily integration, market_queries usage, bi-weekly search runs.
+Migrate opportunity status values to the target enum and remove signal-era nullable columns.
 
 ### What the next agent must do
 
-1. Integrate Tavily search API for market research.
-2. Use `market_queries` table per company.
-3. Add a `market-research:run` command intended to be triggered externally twice per week per company; this phase does not add an in-process scheduler.
-4. Inject results as normal stored source items using `source = market-research` and `metadata.kind = market_research_summary`; defer a physical `raw_source_items.type` column from this slice.
-5. Keep the rest of the repo buildable and tested while doing this.
+1. Implement the status migration mapping (old → new enum values) as documented in the “Status migration mapping” section above.
+2. Remove nullable signal-era columns from Opportunity (`narrativePillar`, `routingStatus`, `readiness`, `v1HistoryJson`) after migrating any convergence-era code that still writes to them.
+3. Backfill FK-owned `EvidenceReference.opportunityId` data to `OpportunityEvidence` junction links.
+4. Clean up `ProfileId` type constraint and `PROFILE_IDS` constant.
+5. Keep the repo buildable and tested throughout.
 
 ### What the next agent must not do
 
-- do not delete signal-centric services yet (still needed by `sync:daily` until Phase 9)
-- do not migrate status values (deferred)
+- do not start a new feature phase
+- do not reintroduce signal-era surfaces
+- do not change Notion cockpit database structure
 
 ### Acceptance bar for the next agent
 
-- Market research creates bounded raw source items from Tavily results
+- Opportunity uses the target status enum exclusively
+- Signal-era nullable columns are removed from the schema
+- `ProfileId` hardcoded type is replaced with dynamic user identity
 - the repo still passes typecheck and tests after the slice
 
 ## Anti-Regression Rules
@@ -771,7 +802,6 @@ But from this point forward, every implementation slice must:
 
 Plain language:
 
-- the repo is still salvageable
-- the product shape is still the problem
-- the current intelligence slice is landed
-- Phase 7 (Draft Agent hardening) is complete; the next slice is Phase 8 (Market research)
+- the repo now has a single opportunity-centric architecture
+- Phase 9 (Final signal-era cleanup) is complete
+- the next slice is status model migration and column cleanup

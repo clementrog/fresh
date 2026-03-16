@@ -5,9 +5,6 @@ import {
   CONTENT_STATUS,
   PROFILE_IDS,
   SENSITIVITY_CATEGORIES,
-  SIGNAL_STATUS,
-  SIGNAL_TYPES,
-  SLACK_INGESTION_MODES,
   SOURCE_KINDS
 } from "../domain/types.js";
 
@@ -17,8 +14,6 @@ export const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   NOTION_TOKEN: z.string().default(""),
   NOTION_PARENT_PAGE_ID: z.string().default(""),
-  SLACK_BOT_TOKEN: z.string().default(""),
-  SLACK_EDITORIAL_OPERATOR_ID: z.string().default(""),
   OPENAI_API_KEY: z.string().default(""),
   ANTHROPIC_API_KEY: z.string().default(""),
   TAVILY_API_KEY: z.string().default(""),
@@ -43,22 +38,11 @@ export const rateLimitSchema = z.object({
   initialDelayMs: z.number().int().nonnegative()
 });
 
-export const slackChannelSchema = z.object({
-  channelId: z.string().min(1),
-  mode: z.enum(SLACK_INGESTION_MODES),
-  enabled: z.boolean()
-});
-
 const sourceBaseSchema = z.object({
   enabled: z.boolean(),
   storeRawText: z.boolean(),
   retentionDays: z.number().int().positive(),
   rateLimit: rateLimitSchema
-});
-
-export const slackSourceConfigSchema = sourceBaseSchema.extend({
-  source: z.literal("slack"),
-  channels: z.array(slackChannelSchema)
 });
 
 export const notionSourceConfigSchema = sourceBaseSchema.extend({
@@ -88,7 +72,6 @@ export const marketFindingsSourceConfigSchema = sourceBaseSchema.extend({
 });
 
 export const sourceConfigSchema = z.discriminatedUnion("source", [
-  slackSourceConfigSchema,
   notionSourceConfigSchema,
   claapSourceConfigSchema,
   linearSourceConfigSchema,
@@ -101,18 +84,6 @@ export const marketResearchRuntimeConfigSchema = z.object({
   retentionDays: z.number().int().positive(),
   rateLimit: rateLimitSchema,
   maxResultsPerQuery: z.number().int().min(5).max(10)
-});
-
-export const llmSignalSchema = z.object({
-  title: z.string().min(1),
-  summary: z.string().min(1),
-  type: z.enum(SIGNAL_TYPES),
-  freshness: z.number().min(0).max(1),
-  confidence: z.number().min(0).max(1),
-  probableOwnerProfile: z.enum(PROFILE_IDS).optional(),
-  suggestedAngle: z.string().min(1),
-  status: z.enum(SIGNAL_STATUS),
-  evidenceIds: z.array(z.string()).min(1)
 });
 
 export const sensitivityOutputSchema = z.object({
@@ -145,22 +116,12 @@ export const notionRichTextChunkSchema = z.object({
   text: z.string().min(1)
 });
 
-export const territoryOutputSchema = z.object({
-  profileId: z.enum(PROFILE_IDS).optional(),
-  territory: z.string().min(1),
-  confidence: z.number().min(0).max(1),
-  needsRouting: z.boolean(),
-  rationale: z.string()
-});
-
 export const opportunityStatusSchema = z.enum(CONTENT_STATUS);
 export const readinessSchema = z.enum(CONTENT_READINESS);
 
 export const notionDatabaseNameSchema = z.enum([
-  "Signal Feed",
   "Content Opportunities",
   "Profiles",
-  "Market Findings",
   "Sync Runs"
 ]);
 

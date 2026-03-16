@@ -7,8 +7,6 @@ function buildEnv() {
     DATABASE_URL: "",
     NOTION_TOKEN: "",
     NOTION_PARENT_PAGE_ID: "parent-page",
-    SLACK_BOT_TOKEN: "",
-    SLACK_EDITORIAL_OPERATOR_ID: "",
     OPENAI_API_KEY: "",
     ANTHROPIC_API_KEY: "",
     TAVILY_API_KEY: "tavily-test-key",
@@ -95,9 +93,6 @@ describe("market research app command", () => {
         llmClient,
         notion: {
           syncRun: vi.fn(async () => null)
-        } as any,
-        slack: {
-          sendOperationalAlert: vi.fn(async () => ({}))
         } as any
       }
     );
@@ -173,9 +168,6 @@ describe("market research app command", () => {
         llmClient,
         notion: {
           syncRun: vi.fn(async () => null)
-        } as any,
-        slack: {
-          sendOperationalAlert: vi.fn(async () => ({}))
         } as any
       }
     );

@@ -2,16 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { NotionConnector } from "../src/connectors/notion.js";
 import type { RawSourceItem } from "../src/domain/types.js";
-import { LlmClient } from "../src/services/llm.js";
-import { extractSignalFromItem } from "../src/services/signal-extractor.js";
-import { resolveTerritory } from "../src/services/territory.js";
 
 const env = {
   DATABASE_URL: "",
   NOTION_TOKEN: "test-token",
   NOTION_PARENT_PAGE_ID: "",
-  SLACK_BOT_TOKEN: "",
-  SLACK_EDITORIAL_OPERATOR_ID: "",
   OPENAI_API_KEY: "test-key",
   CLAAP_API_KEY: "",
   LINEAR_API_KEY: "",
@@ -97,68 +92,6 @@ describe("market insights notion ingestion", () => {
       "Theme: Strategic synthesis 2026",
       "Source type: Synthesis"
     ]);
-  });
-
-  it("builds signals and territory directly from market insight normalization without LLM calls", async () => {
-    const item = {
-      source: "notion" as const,
-      sourceItemId: "page-1",
-      externalId: "notion:page-1",
-      sourceFingerprint: "fingerprint-1",
-      sourceUrl: "https://example.com/proof",
-      title: "Buyers want proof of adoption",
-      text: "Theme: Strategic synthesis 2026\nSource type: Synthesis\nBuyers want proof of adoption in the field.",
-      summary: "Theme: Strategic synthesis 2026. Source type: Synthesis. Buyers want proof of adoption.",
-      occurredAt: "2026-03-11T09:00:00.000Z",
-      ingestedAt: "2026-03-12T12:30:00.000Z",
-      metadata: {
-        notionKind: "market-insight",
-        theme: "Strategic synthesis 2026",
-        sourceTypeLabel: "Synthesis",
-        profileHint: "baptiste"
-      },
-      rawPayload: {}
-    };
-    const evidence = [
-      {
-        id: "e1",
-        source: "notion" as const,
-        sourceItemId: "notion:page-1",
-        sourceUrl: "https://example.com/proof",
-        timestamp: "2026-03-11T09:00:00.000Z",
-        excerpt: "Buyers want proof of adoption",
-        excerptHash: "hash-1",
-        freshnessScore: 0.9
-      },
-      {
-        id: "e2",
-        source: "notion" as const,
-        sourceItemId: "notion:page-1",
-        sourceUrl: "https://example.com/proof",
-        timestamp: "2026-03-11T09:00:00.000Z",
-        excerpt: "Theme: Strategic synthesis 2026",
-        excerptHash: "hash-2",
-        freshnessScore: 0.9
-      }
-    ];
-    const llmClient = new LlmClient(
-      env,
-      undefined,
-      async () => {
-        throw new Error("LLM should not be called for deterministic market insight mapping");
-      }
-    );
-
-    const extracted = await extractSignalFromItem(item, evidence, llmClient, undefined);
-    const territory = await resolveTerritory(extracted.signal, llmClient);
-
-    expect(extracted.usage.skipped).toBe(true);
-    expect(extracted.signal.type).toBe("market-pattern");
-    expect(extracted.signal.probableOwnerProfile).toBe("baptiste");
-    expect(extracted.signal.confidence).toBe(0.86);
-    expect(territory.usage.skipped).toBe(true);
-    expect(territory.assignment.profileId).toBe("baptiste");
-    expect(territory.assignment.needsRouting).toBe(false);
   });
 
   it("keeps market insight rows on the structured path even when Theme is blank", async () => {

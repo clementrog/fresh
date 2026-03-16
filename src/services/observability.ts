@@ -19,8 +19,6 @@ export function emptyCounters(): SyncRunCounters {
   return {
     fetched: 0,
     normalized: 0,
-    sensitivityBlocked: 0,
-    signalsCreated: 0,
     opportunitiesCreated: 0,
     draftsCreated: 0,
     llmFallbacks: 0,
@@ -34,8 +32,6 @@ export function addCounters(base: SyncRunCounters, delta: Partial<SyncRunCounter
   return {
     fetched: base.fetched + (delta.fetched ?? 0),
     normalized: base.normalized + (delta.normalized ?? 0),
-    sensitivityBlocked: base.sensitivityBlocked + (delta.sensitivityBlocked ?? 0),
-    signalsCreated: base.signalsCreated + (delta.signalsCreated ?? 0),
     opportunitiesCreated: base.opportunitiesCreated + (delta.opportunitiesCreated ?? 0),
     draftsCreated: base.draftsCreated + (delta.draftsCreated ?? 0),
     llmFallbacks: base.llmFallbacks + (delta.llmFallbacks ?? 0),
@@ -74,7 +70,6 @@ export function createCostEntry(params: Omit<CostLedgerEntry, "id" | "createdAt"
 export function buildSpikeWarnings(counters: SyncRunCounters): string[] {
   const warnings: string[] = [];
   if (counters.fetched > 250) warnings.push("High fetched volume");
-  if (counters.sensitivityBlocked > 25) warnings.push("High sensitivity block count");
   if (counters.draftsCreated > 5) warnings.push("High draft count");
   if (counters.llmFallbacks > 5) warnings.push("High LLM fallback count");
   return warnings;

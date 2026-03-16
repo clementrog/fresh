@@ -19,29 +19,9 @@ export const SENSITIVITY_CATEGORIES = [
 
 export type SensitivityCategory = (typeof SENSITIVITY_CATEGORIES)[number];
 
-export const SIGNAL_TYPES = [
-  "objection",
-  "friction",
-  "product-insight",
-  "user-language",
-  "market-pattern",
-  "process-lesson",
-  "adoption-blocker",
-  "quote",
-  "decision-rationale",
-  "tradeoff",
-  "recurring-theme"
-] as const;
-
-export type SignalType = (typeof SIGNAL_TYPES)[number];
-
-export const SOURCE_KINDS = ["slack", "notion", "claap", "linear", "market-findings", "market-research"] as const;
+export const SOURCE_KINDS = ["notion", "claap", "linear", "market-findings", "market-research"] as const;
 
 export type SourceKind = (typeof SOURCE_KINDS)[number];
-
-export const SLACK_INGESTION_MODES = ["full", "threads_only", "mentions_only"] as const;
-
-export type SlackIngestionMode = (typeof SLACK_INGESTION_MODES)[number];
 
 export const CONTENT_READINESS = [
   "Opportunity only",
@@ -66,17 +46,6 @@ export const CONTENT_STATUS = [
 
 export type ContentStatus = (typeof CONTENT_STATUS)[number];
 
-export const SIGNAL_STATUS = [
-  "New",
-  "Reviewed",
-  "Converted",
-  "Ignored",
-  "Archived",
-  "Sensitive review"
-] as const;
-
-export type SignalStatus = (typeof SIGNAL_STATUS)[number];
-
 export type RunType =
   | "ingest:run"
   | "market-research:run"
@@ -84,13 +53,8 @@ export type RunType =
   | "draft:generate"
   | "server:start"
   | "setup:notion"
-  | "sync:daily"
-  | "digest:send"
   | "selection:scan"
-  | "profile:weekly-recompute"
-  | "cleanup:retention"
-  | "backfill"
-  | "repair:opportunity-evidence";
+  | "cleanup:retention";
 
 export interface RateLimitConfig {
   requestsPerMinute: number;
@@ -104,17 +68,6 @@ export interface SourceSyncConfig {
   storeRawText: boolean;
   retentionDays: number;
   rateLimit: RateLimitConfig;
-}
-
-export interface SlackChannelConfig {
-  channelId: string;
-  mode: SlackIngestionMode;
-  enabled: boolean;
-}
-
-export interface SlackSourceConfig extends SourceSyncConfig {
-  source: "slack";
-  channels: SlackChannelConfig[];
 }
 
 export interface NotionSourceConfig extends SourceSyncConfig {
@@ -152,7 +105,6 @@ export interface MarketResearchRuntimeConfig {
 }
 
 export type ConnectorConfig =
-  | SlackSourceConfig
   | NotionSourceConfig
   | ClaapSourceConfig
   | LinearSourceConfig
@@ -203,42 +155,6 @@ export interface SensitivityAssessment {
   stageTwoScore: number;
 }
 
-export interface EditorialSignal {
-  id: string;
-  sourceFingerprint: string;
-  title: string;
-  summary: string;
-  type: SignalType;
-  freshness: number;
-  confidence: number;
-  probableOwnerProfile?: ProfileId;
-  suggestedAngle: string;
-  status: SignalStatus;
-  evidence: EvidenceReference[];
-  sourceItemIds: string[];
-  duplicateOfSignalId?: string;
-  themeClusterKey?: string;
-  sensitivity: SensitivityAssessment;
-  notionPageId?: string;
-  notionPageFingerprint: string;
-}
-
-export interface ThemeCluster {
-  key: string;
-  title: string;
-  profileHint?: ProfileId;
-  signalIds: string[];
-  evidenceCount: number;
-}
-
-export interface TerritoryAssignment {
-  profileId?: ProfileId;
-  territory: string;
-  confidence: number;
-  needsRouting: boolean;
-  rationale: string;
-}
-
 export interface ProfileBase {
   profileId: ProfileId;
   role: string;
@@ -251,31 +167,6 @@ export interface ProfileBase {
   weakFitTerritories: string[];
   sampleExcerpts: string[];
   sourcePath: string;
-  notionPageId?: string;
-  notionPageFingerprint: string;
-}
-
-export interface ProfileLearnedLayer {
-  profileId: ProfileId;
-  recurringPhrases: string[];
-  structuralPatterns: string[];
-  evidenceExcerptIds: string[];
-  lastIncrementalUpdateAt: string;
-  lastWeeklyRecomputeAt?: string;
-}
-
-export interface ProfileSnapshot {
-  profileId: ProfileId;
-  toneSummary: string;
-  preferredStructure: string;
-  recurringPhrases: string[];
-  avoidRules: string[];
-  contentTerritories: string[];
-  weakFitTerritories: string[];
-  sampleExcerpts: string[];
-  baseSource: string;
-  learnedExcerptCount: number;
-  weeklyRecomputedAt?: string;
   notionPageId?: string;
   notionPageFingerprint: string;
 }
@@ -324,26 +215,24 @@ export interface ContentOpportunity {
   ownerProfile?: ProfileId;
   ownerUserId?: string;
   companyId?: string;
-  narrativePillar: string;
+  narrativePillar?: string;
   angle: string;
   whyNow: string;
   whatItIsAbout: string;
   whatItIsNotAbout: string;
-  relatedSignalIds: string[];
   evidence: EvidenceReference[];
   primaryEvidence: EvidenceReference;
   supportingEvidenceCount: number;
   evidenceFreshness: number;
   evidenceExcerpts: string[];
-  routingStatus: "Routed" | "Needs routing";
-  readiness: ContentReadiness;
+  routingStatus?: string;
+  readiness?: ContentReadiness;
   status: ContentStatus;
   suggestedFormat: string;
   enrichmentLog: EnrichmentLogEntry[];
   editorialOwner?: string;
   selectedAt?: string;
-  lastDigestAt?: string;
-  v1History: string[];
+  v1History?: string[];
   notionPageId?: string;
   notionPageFingerprint: string;
 }
@@ -368,8 +257,6 @@ export interface DraftV1 {
 export interface SyncRunCounters {
   fetched: number;
   normalized: number;
-  sensitivityBlocked: number;
-  signalsCreated: number;
   opportunitiesCreated: number;
   draftsCreated: number;
   llmFallbacks: number;
@@ -500,21 +387,6 @@ export interface NotionDatabaseBinding {
   name: string;
   parentPageId: string;
   databaseId: string;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export type DigestDispatchStatus = "pending" | "sent" | "failed";
-
-export interface DigestDispatch {
-  digestKey: string;
-  status: DigestDispatchStatus;
-  channel: string;
-  opportunityIds: string[];
-  slackMessageTs?: string;
-  sentAt?: string;
-  leaseExpiresAt?: string;
-  error?: string;
   createdAt?: string;
   updatedAt?: string;
 }

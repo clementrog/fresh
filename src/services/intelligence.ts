@@ -336,7 +336,6 @@ export function buildNewOpportunity(params: {
     whyNow: params.decision.whyNow,
     whatItIsAbout: params.decision.whatItIsAbout,
     whatItIsNotAbout: params.decision.whatItIsNotAbout,
-    relatedSignalIds: [],
     evidence: params.evidence,
     primaryEvidence,
     supportingEvidenceCount: Math.max(0, params.evidence.length - 1),

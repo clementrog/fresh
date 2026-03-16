@@ -10,8 +10,7 @@ import type {
   MarketFindingsSourceConfig,
   MarketResearchRuntimeConfig,
   NotionSourceConfig,
-  ProfileBase,
-  SlackSourceConfig
+  ProfileBase
 } from "../domain/types.js";
 import { PROFILE_IDS } from "../domain/types.js";
 import { listFilesRecursive, readJsonFile } from "../lib/fs.js";
@@ -21,8 +20,7 @@ import {
   linearSourceConfigSchema,
   marketResearchRuntimeConfigSchema,
   marketFindingsSourceConfigSchema,
-  notionSourceConfigSchema,
-  slackSourceConfigSchema
+  notionSourceConfigSchema
 } from "./schema.js";
 
 const projectRoot = process.cwd();
@@ -36,8 +34,6 @@ export async function loadConnectorConfigs(): Promise<ConnectorConfig[]> {
       const value = await readJsonFile<unknown>(file);
       const source = (value as { source?: string }).source;
       switch (source) {
-        case "slack":
-          return slackSourceConfigSchema.parse(value) as SlackSourceConfig;
         case "notion":
           return notionSourceConfigSchema.parse(value) as NotionSourceConfig;
         case "claap":

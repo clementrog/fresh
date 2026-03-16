@@ -7,8 +7,6 @@ const env = {
   DATABASE_URL: "",
   NOTION_TOKEN: "",
   NOTION_PARENT_PAGE_ID: "",
-  SLACK_BOT_TOKEN: "",
-  SLACK_EDITORIAL_OPERATOR_ID: "",
   OPENAI_API_KEY: "test-key",
   CLAAP_API_KEY: "",
   LINEAR_API_KEY: "",

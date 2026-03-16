@@ -4,11 +4,9 @@ import { notionSelectionRowSchema } from "../config/schema.js";
 import type {
   ContentOpportunity,
   DraftV1,
-  EditorialSignal,
   EnrichmentLogEntry,
   NotionSelectionRow,
   NotionSyncResult,
-  ProfileSnapshot,
   SyncRun
 } from "../domain/types.js";
 
@@ -18,26 +16,18 @@ export const REQUIRED_DATABASES = [
   "Sync Runs"
 ] as const;
 
-const LEGACY_DATABASES = ["Signal Feed", "Market Findings"] as const;
-
 type RequiredDatabase = (typeof REQUIRED_DATABASES)[number];
-type LegacyDatabase = (typeof LEGACY_DATABASES)[number];
-type AnyDatabase = RequiredDatabase | LegacyDatabase;
 type NotionClientLike = Client;
 
-function isRequiredDatabase(name: AnyDatabase): name is RequiredDatabase {
-  return (REQUIRED_DATABASES as readonly string[]).includes(name);
-}
-
 export type NotionBindingStore = {
-  getNotionDatabaseBinding(parentPageId: string, name: AnyDatabase): Promise<{ databaseId: string } | null>;
-  upsertNotionDatabaseBinding(parentPageId: string, name: AnyDatabase, databaseId: string): Promise<unknown>;
-  clearNotionDatabaseBinding(parentPageId: string, name: AnyDatabase): Promise<unknown>;
+  getNotionDatabaseBinding(parentPageId: string, name: RequiredDatabase): Promise<{ databaseId: string } | null>;
+  upsertNotionDatabaseBinding(parentPageId: string, name: RequiredDatabase, databaseId: string): Promise<unknown>;
+  clearNotionDatabaseBinding(parentPageId: string, name: RequiredDatabase): Promise<unknown>;
 };
 
 export class NotionService {
   private readonly client: NotionClientLike | null;
-  private readonly databaseCache = new Map<AnyDatabase, string>();
+  private readonly databaseCache = new Map<RequiredDatabase, string>();
   private readonly schemaPatchedCache = new Set<string>();
   private readonly bindings?: NotionBindingStore;
   private readonly warningSink?: (warning: string) => void;
@@ -84,78 +74,6 @@ export class NotionService {
     };
   }
 
-  async syncMarketFinding(finding: {
-    title: string;
-    theme: string;
-    source: string;
-    confidence: number;
-    possibleOwner: string | null;
-    editorialAngle: string;
-    status: string;
-    notionPageId?: string;
-    notionPageFingerprint: string;
-  }): Promise<NotionSyncResult | null> {
-    const databaseId = await this.findLegacyDatabase("Market Findings");
-    if (!databaseId) {
-      this.emitWarning("Skipping Market Findings sync: database does not exist. This is expected on fresh deployments.");
-      return null;
-    }
-    return this.upsertDatabasePage({
-      databaseName: "Market Findings",
-      notionPageId: finding.notionPageId,
-      fingerprintProperty: "Finding fingerprint",
-      fingerprint: finding.notionPageFingerprint,
-      properties: {
-        Finding: titleProperty(finding.title),
-        Theme: richTextProperty(finding.theme),
-        Source: richTextProperty(finding.source),
-        Confidence: numberProperty(finding.confidence),
-        "Possible owner": richTextProperty(finding.possibleOwner ?? ""),
-        "Editorial angle": richTextProperty(finding.editorialAngle),
-        "Related opportunities": richTextProperty(""),
-        Status: selectProperty(finding.status),
-        "Finding fingerprint": richTextProperty(finding.notionPageFingerprint)
-      }
-    });
-  }
-
-  async syncSignal(signal: EditorialSignal): Promise<NotionSyncResult | null> {
-    const databaseId = await this.findLegacyDatabase("Signal Feed");
-    if (!databaseId) {
-      this.emitWarning("Skipping Signal Feed sync: database does not exist. This is expected on fresh deployments.");
-      return null;
-    }
-    const safeEvidenceExcerpts = signal.sensitivity.blocked ? [] : signal.evidence.map((item) => item.excerpt);
-    return this.upsertDatabasePage({
-      databaseName: "Signal Feed",
-      notionPageId: signal.notionPageId,
-      fingerprintProperty: "Ingestion fingerprint",
-      fingerprint: signal.notionPageFingerprint,
-      properties: {
-        Title: titleProperty(signal.title),
-        "Date captured": dateProperty(new Date().toISOString()),
-        Source: richTextProperty(signal.evidence[0]?.source ?? ""),
-        "Source URL": urlProperty(signal.evidence[0]?.sourceUrl ?? ""),
-        "Source item ID": richTextProperty(signal.sourceItemIds.join(", ")),
-        "Raw summary": richTextProperty(signal.summary),
-        "Signal type": selectProperty(signal.type),
-        Freshness: numberProperty(signal.freshness),
-        Confidence: numberProperty(signal.confidence),
-        "Owner profile": richTextProperty(signal.probableOwnerProfile ?? ""),
-        "Suggested angle": richTextProperty(signal.suggestedAngle),
-        "Evidence status": richTextProperty(signal.sensitivity.blocked ? "Blocked" : "Clear"),
-        "Duplicate group": richTextProperty(signal.themeClusterKey ?? ""),
-        Status: selectProperty(signal.status),
-        "Related opportunity": richTextProperty(""),
-        "Evidence excerpts": richTextProperty(safeEvidenceExcerpts.join("\n\n")),
-        "Evidence count": numberProperty(signal.evidence.length),
-        "Sensitivity status": richTextProperty(signal.sensitivity.blocked ? signal.sensitivity.categories.join(", ") : "Clear"),
-        "Theme cluster": richTextProperty(signal.themeClusterKey ?? ""),
-        "Ingestion fingerprint": richTextProperty(signal.notionPageFingerprint)
-      }
-    });
-  }
-
   async syncOpportunity(
     opportunity: ContentOpportunity,
     draft?: DraftV1 | null,
@@ -171,7 +89,7 @@ export class NotionService {
       properties: {
         Title: titleProperty(opportunity.title),
         "Owner profile": richTextProperty(ownerDisplay),
-        "Narrative pillar": richTextProperty(opportunity.narrativePillar),
+        "Narrative pillar": richTextProperty(opportunity.narrativePillar ?? ""),
         Angle: richTextProperty(opportunity.angle),
         "Why now": richTextProperty(opportunity.whyNow),
         "What it is about": richTextProperty(opportunity.whatItIsAbout),
@@ -187,9 +105,8 @@ export class NotionService {
         "Evidence freshness": numberProperty(opportunity.evidenceFreshness),
         "Evidence excerpts": richTextProperty(opportunity.evidenceExcerpts.join("\n\n")),
         "Enrichment log": richTextProperty(enrichmentLogText),
-        "V1 draft": richTextProperty(draft?.firstDraftText ?? opportunity.v1History.at(-1) ?? ""),
+        "V1 draft": richTextProperty(draft?.firstDraftText ?? opportunity.v1History?.at(-1) ?? ""),
         "Selected at": opportunity.selectedAt ? dateProperty(opportunity.selectedAt) : emptyDateProperty(),
-        "Last digest at": opportunity.lastDigestAt ? dateProperty(opportunity.lastDigestAt) : emptyDateProperty(),
         "Opportunity fingerprint": richTextProperty(opportunity.notionPageFingerprint)
       },
       createOnlyProperties: {
@@ -228,33 +145,6 @@ export class NotionService {
         "Sample excerpts": richTextProperty(arr("sampleExcerpts").join("\n\n")),
         "Last refreshed": dateProperty(new Date().toISOString()),
         "Profile fingerprint": richTextProperty(user.notionPageFingerprint)
-      }
-    });
-  }
-
-  /** @deprecated sync:daily only — use syncUser(). Removed in Phase 9. */
-  async syncProfile(profile: ProfileSnapshot & { notionPageId?: string; notionPageFingerprint: string }): Promise<NotionSyncResult | null> {
-    return this.upsertDatabasePage({
-      databaseName: "Profiles",
-      notionPageId: profile.notionPageId,
-      fingerprintProperty: "Profile fingerprint",
-      fingerprint: profile.notionPageFingerprint,
-      properties: {
-        "Profile name": titleProperty(profile.profileId),
-        Role: richTextProperty(profile.profileId),
-        "Language preference": richTextProperty("fr"),
-        "Tone summary": richTextProperty(profile.toneSummary),
-        "Preferred structure": richTextProperty(profile.preferredStructure),
-        "Typical phrases": richTextProperty(profile.recurringPhrases.join(", ")),
-        "Avoid rules": richTextProperty(profile.avoidRules.join("\n")),
-        "Content territories": richTextProperty(profile.contentTerritories.join(", ")),
-        "Weak-fit territories": richTextProperty(profile.weakFitTerritories.join(", ")),
-        "Sample excerpts": richTextProperty(profile.sampleExcerpts.join("\n\n")),
-        "Last refreshed": dateProperty(new Date().toISOString()),
-        "Base source": richTextProperty(profile.baseSource),
-        "Learned excerpt count": numberProperty(profile.learnedExcerptCount),
-        "Weekly recomputed at": profile.weeklyRecomputedAt ? dateProperty(profile.weeklyRecomputedAt) : emptyDateProperty(),
-        "Profile fingerprint": richTextProperty(profile.notionPageFingerprint)
       }
     });
   }
@@ -359,7 +249,7 @@ export class NotionService {
   }
 
   private async upsertDatabasePage(params: {
-    databaseName: AnyDatabase;
+    databaseName: RequiredDatabase;
     notionPageId?: string;
     fingerprintProperty: string;
     fingerprint: string;
@@ -451,51 +341,9 @@ export class NotionService {
     return page?.id ?? null;
   }
 
-  private async findLegacyDatabase(name: LegacyDatabase): Promise<string | null> {
-    if (!this.client) {
-      return null;
-    }
-
-    const cached = this.databaseCache.get(name);
-    if (cached) {
-      return cached;
-    }
-
-    const bound = this.bindings ? await this.bindings.getNotionDatabaseBinding(this.parentPageId, name) : null;
-    if (bound?.databaseId) {
-      const state = await this.verifyDatabaseBinding(name, bound.databaseId);
-      if (state === "valid") {
-        this.databaseCache.set(name, bound.databaseId);
-        return bound.databaseId;
-      }
-      if (state === "stale") {
-        await this.clearBinding(name, `Stale Notion database binding recovered for ${name}.`);
-      }
-    }
-
-    const matches = await this.findDatabasesUnderParent(name);
-    if (matches.length > 1) {
-      throw new Error(`Multiple Notion databases named "${name}" were found under the configured parent page.`);
-    }
-
-    if (matches.length === 1) {
-      const existing = matches[0];
-      this.databaseCache.set(name, existing.id);
-      await this.bindings?.upsertNotionDatabaseBinding(this.parentPageId, name, existing.id);
-      return existing.id;
-    }
-
-    return null;
-  }
-
-  private async ensureDatabase(name: AnyDatabase) {
+  private async ensureDatabase(name: RequiredDatabase) {
     if (!this.client) {
       return "";
-    }
-
-    if (!isRequiredDatabase(name)) {
-      const legacyId = await this.findLegacyDatabase(name);
-      return legacyId ?? "";
     }
 
     const cached = this.databaseCache.get(name);
@@ -619,7 +467,7 @@ export class NotionService {
     }
   }
 
-  private async verifyDatabaseBinding(name: AnyDatabase, databaseId: string) {
+  private async verifyDatabaseBinding(name: RequiredDatabase, databaseId: string) {
     if (!this.client) {
       return "stale" as const;
     }
@@ -637,7 +485,7 @@ export class NotionService {
     }
   }
 
-  private async findDatabasesUnderParent(name: AnyDatabase) {
+  private async findDatabasesUnderParent(name: RequiredDatabase) {
     if (!this.client) {
       return [];
     }
@@ -653,7 +501,7 @@ export class NotionService {
     return response.results.filter((result) => isExactDatabaseName(result, name) && isUnderParentPage(result, this.parentPageId));
   }
 
-  private async clearBinding(name: AnyDatabase, warning: string) {
+  private async clearBinding(name: RequiredDatabase, warning: string) {
     this.databaseCache.delete(name);
     await this.bindings?.clearNotionDatabaseBinding(this.parentPageId, name);
     this.emitWarning(warning);
@@ -804,7 +652,7 @@ function emptyDateProperty() {
   };
 }
 
-function isExactDatabaseName(result: unknown, name: AnyDatabase) {
+function isExactDatabaseName(result: unknown, name: RequiredDatabase) {
   if (!result || typeof result !== "object" || (result as { object?: string }).object !== "database") {
     return false;
   }
@@ -871,10 +719,6 @@ function isNotionDatabaseNotFoundError(error: unknown) {
   };
   const details = `${typedError.message ?? ""} ${typedError.body ?? ""}`.toLowerCase();
   return details.length === 0 || details.includes("database") || details.includes("object not found");
-}
-
-function urlProperty(value: string) {
-  return { url: value || null };
 }
 
 function selectProperty(value: string) {

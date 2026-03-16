@@ -4,8 +4,6 @@ export interface AppEnv {
   DATABASE_URL: string;
   NOTION_TOKEN?: string;
   NOTION_PARENT_PAGE_ID?: string;
-  SLACK_BOT_TOKEN?: string;
-  SLACK_EDITORIAL_OPERATOR_ID?: string;
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   TAVILY_API_KEY?: string;

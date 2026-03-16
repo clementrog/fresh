@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { SensitivityCategory } from "../src/domain/types.js";
 import { NotionService, REQUIRED_DATABASES } from "../src/services/notion.js";
 
 function makeNotionClient(overrides: Record<string, unknown> = {}) {
@@ -22,43 +21,6 @@ function makeNotionClient(overrides: Record<string, unknown> = {}) {
   } as never;
 }
 
-function makeSignal() {
-  return {
-    id: "signal-1",
-    sourceFingerprint: "signal-fp-1",
-    title: "Signal",
-    summary: "Summary",
-    type: "quote" as const,
-    freshness: 0.8,
-    confidence: 0.9,
-    probableOwnerProfile: "quentin" as const,
-    suggestedAngle: "Angle",
-    status: "New" as const,
-    evidence: [
-      {
-        id: "e1",
-        source: "slack" as const,
-        sourceItemId: "slack:1",
-        sourceUrl: "https://example.com",
-        timestamp: new Date().toISOString(),
-        excerpt: "Proof from Slack",
-        excerptHash: "hash-1",
-        freshnessScore: 0.8
-      }
-    ],
-    sourceItemIds: ["slack:1"],
-    sensitivity: {
-      blocked: false,
-      categories: [] as SensitivityCategory[],
-      rationale: "",
-      stageOneMatchedRules: [] as string[],
-      stageTwoScore: 0.1
-    },
-    notionPageId: "page-existing",
-    notionPageFingerprint: "signal-fp-1"
-  };
-}
-
 function makeOpportunity(overrides: Record<string, unknown> = {}) {
   return {
     id: "opp-1",
@@ -70,11 +32,10 @@ function makeOpportunity(overrides: Record<string, unknown> = {}) {
     whyNow: "Why now",
     whatItIsAbout: "About",
     whatItIsNotAbout: "Not about",
-    relatedSignalIds: [],
     evidence: [
       {
         id: "e1",
-        source: "slack" as const,
+        source: "notion" as const,
         sourceItemId: "slack:1",
         sourceUrl: "https://example.com",
         timestamp: new Date().toISOString(),
@@ -85,7 +46,7 @@ function makeOpportunity(overrides: Record<string, unknown> = {}) {
     ],
     primaryEvidence: {
       id: "e1",
-      source: "slack" as const,
+      source: "notion" as const,
       sourceItemId: "slack:1",
       sourceUrl: "https://example.com",
       timestamp: new Date().toISOString(),
@@ -103,7 +64,6 @@ function makeOpportunity(overrides: Record<string, unknown> = {}) {
     enrichmentLog: [],
     editorialOwner: undefined,
     selectedAt: undefined,
-    lastDigestAt: undefined,
     v1History: [],
     notionPageId: undefined as string | undefined,
     notionPageFingerprint: "opp-fp-1",
@@ -375,184 +335,6 @@ describe("notion service", () => {
     expect(createProps).not.toHaveProperty("Weekly recomputed at");
   });
 
-  it("syncSignal skips with warning when Signal Feed database does not exist", async () => {
-    const onWarning = vi.fn();
-    const client = makeNotionClient({
-      search: vi.fn(async () => ({ results: [] }))
-    });
-
-    const service = new NotionService("", "parent-page", { client, onWarning });
-
-    const result = await service.syncSignal(makeSignal());
-
-    expect(result).toBeNull();
-    expect(onWarning).toHaveBeenCalledWith(
-      "Skipping Signal Feed sync: database does not exist. This is expected on fresh deployments."
-    );
-  });
-
-  it("syncSignal succeeds when Signal Feed database already exists", async () => {
-    const pagesUpdate = vi.fn(async () => ({}));
-    const databasesRetrieve = vi.fn(async () => ({
-      object: "database",
-      id: "db-signal",
-      title: [{ plain_text: "Signal Feed" }],
-      parent: { type: "page_id", page_id: "parent-page" }
-    }));
-    const search = vi.fn(async ({ query }: { query: string }) => {
-      if (query === "Signal Feed") {
-        return {
-          results: [
-            {
-              object: "database",
-              id: "db-signal",
-              title: [{ plain_text: "Signal Feed" }],
-              parent: { type: "page_id", page_id: "parent-page" }
-            }
-          ]
-        };
-      }
-      return { results: [] };
-    });
-
-    const client = makeNotionClient({
-      pages: {
-        create: vi.fn(async () => ({ id: "page-created" })),
-        update: pagesUpdate
-      },
-      databases: {
-        query: vi.fn(async () => ({ results: [], has_more: false, next_cursor: null })),
-        create: vi.fn(async () => ({ id: "db-signal" })),
-        retrieve: databasesRetrieve,
-        update: vi.fn(async () => ({}))
-      },
-      search
-    });
-
-    const service = new NotionService("", "parent-page", { client });
-
-    const result = await service.syncSignal(makeSignal());
-
-    expect(result).toEqual({ notionPageId: "page-existing", action: "updated" });
-    expect(pagesUpdate).toHaveBeenCalledTimes(1);
-  });
-
-  it("syncMarketFinding skips with warning when Market Findings database does not exist", async () => {
-    const onWarning = vi.fn();
-    const client = makeNotionClient({
-      search: vi.fn(async () => ({ results: [] }))
-    });
-
-    const service = new NotionService("", "parent-page", { client, onWarning });
-
-    const result = await service.syncMarketFinding({
-      title: "Finding",
-      theme: "Theme",
-      source: "Source",
-      confidence: 0.8,
-      possibleOwner: null,
-      editorialAngle: "Angle",
-      status: "New",
-      notionPageFingerprint: "finding-fp-1"
-    });
-
-    expect(result).toBeNull();
-    expect(onWarning).toHaveBeenCalledWith(
-      "Skipping Market Findings sync: database does not exist. This is expected on fresh deployments."
-    );
-  });
-
-  it("updates an existing page instead of creating a duplicate when page id is known", async () => {
-    const pagesCreate = vi.fn(async () => ({ id: "page-created" }));
-    const pagesUpdate = vi.fn(async () => ({}));
-    const databasesQuery = vi.fn(async () => ({ results: [], has_more: false, next_cursor: null }));
-    const search = vi.fn(async ({ query }: { query: string }) => {
-      if (query === "Signal Feed") {
-        return {
-          results: [
-            {
-              object: "database",
-              id: "db-signal",
-              title: [{ plain_text: "Signal Feed" }],
-              parent: { type: "page_id", page_id: "parent-page" }
-            }
-          ]
-        };
-      }
-
-      return { results: [] };
-    });
-
-    const service = new NotionService("", "parent-page", {
-      client: {
-        pages: {
-          create: pagesCreate,
-          update: pagesUpdate
-        },
-        databases: {
-          query: databasesQuery,
-          create: vi.fn(async () => ({ id: "db-signal" })),
-          retrieve: vi.fn(async () => ({
-            object: "database",
-            id: "db-signal",
-            title: [{ plain_text: "Signal Feed" }],
-            parent: { type: "page_id", page_id: "parent-page" }
-          })),
-          update: vi.fn(async () => ({}))
-        },
-        search
-      } as never
-    });
-
-    await service.syncSignal(makeSignal());
-
-    expect(pagesCreate).not.toHaveBeenCalled();
-    expect(pagesUpdate).toHaveBeenCalledTimes(1);
-  });
-
-  it("reuses a persisted binding without searching globally", async () => {
-    const bindingLookup = vi.fn(async () => ({ databaseId: "db-bound" }));
-    const bindingUpsert = vi.fn(async () => ({}));
-    const bindingClear = vi.fn(async () => ({}));
-    const search = vi.fn(async () => ({ results: [] }));
-    const databasesRetrieve = vi.fn(async () => ({
-      object: "database",
-      id: "db-bound",
-      title: [{ plain_text: "Signal Feed" }],
-      parent: { type: "page_id", page_id: "parent-page" }
-    }));
-    const pagesCreate = vi.fn(async () => ({ id: "page-created" }));
-    const service = new NotionService("", "parent-page", {
-      bindings: {
-        getNotionDatabaseBinding: bindingLookup,
-        upsertNotionDatabaseBinding: bindingUpsert,
-        clearNotionDatabaseBinding: bindingClear
-      },
-      client: {
-        pages: {
-          create: pagesCreate,
-          update: vi.fn(async () => ({}))
-        },
-        databases: {
-          query: vi.fn(async () => ({ results: [], has_more: false, next_cursor: null })),
-          create: vi.fn(async () => ({ id: "db-created" })),
-          retrieve: databasesRetrieve,
-          update: vi.fn(async () => ({}))
-        },
-        search
-      } as never
-    });
-
-    await service.syncSignal(makeSignal());
-
-    expect(bindingLookup).toHaveBeenCalledWith("parent-page", "Signal Feed");
-    expect(databasesRetrieve).toHaveBeenCalledWith({ database_id: "db-bound" });
-    expect(search).not.toHaveBeenCalled();
-    expect(bindingUpsert).not.toHaveBeenCalled();
-    expect(bindingClear).not.toHaveBeenCalled();
-    expect(pagesCreate).not.toHaveBeenCalled();
-  });
-
   it("fails closed when multiple same-name databases exist under the configured parent", async () => {
     const service = new NotionService("", "parent-page", {
       client: {
@@ -588,59 +370,6 @@ describe("notion service", () => {
     await expect(
       service.ensureSchema()
     ).rejects.toThrow('Multiple Notion databases named "Content Opportunities" were found under the configured parent page.');
-  });
-
-  it("clears stale bindings and recreates the database after a 404", async () => {
-    const bindingLookup = vi.fn(async () => ({ databaseId: "db-stale" }));
-    const bindingUpsert = vi.fn(async () => ({}));
-    const bindingClear = vi.fn(async () => ({}));
-    const databasesRetrieve = vi.fn(async () => {
-      throw {
-        status: 404,
-        code: "object_not_found",
-        message: "Database not found"
-      };
-    });
-    const databasesCreate = vi.fn(async () => ({ id: "db-recreated" }));
-    const search = vi.fn(async () => ({ results: [] }));
-    const pagesUpdate = vi.fn(async () => {
-      throw {
-        status: 404,
-        code: "object_not_found",
-        message: "Page not found"
-      };
-    });
-    const pagesCreate = vi.fn(async () => ({ id: "page-recreated" }));
-
-    const service = new NotionService("", "parent-page", {
-      bindings: {
-        getNotionDatabaseBinding: bindingLookup,
-        upsertNotionDatabaseBinding: bindingUpsert,
-        clearNotionDatabaseBinding: bindingClear
-      },
-      client: {
-        pages: {
-          create: pagesCreate,
-          update: pagesUpdate
-        },
-        databases: {
-          query: vi.fn(async () => ({ results: [], has_more: false, next_cursor: null })),
-          create: databasesCreate,
-          retrieve: databasesRetrieve,
-          update: vi.fn(async () => ({}))
-        },
-        search
-      } as never
-    });
-
-    const signal = makeSignal();
-    // For legacy database (Signal Feed), stale binding → not found → skip
-    const result = await service.syncSignal(signal);
-
-    // Signal Feed is now a legacy database — stale binding is cleared, but DB is NOT recreated
-    expect(bindingClear).toHaveBeenCalledWith("parent-page", "Signal Feed");
-    // Legacy databases are never auto-created
-    expect(result).toBeNull();
   });
 
   it("normalizes copied Notion parent page ids before creating databases", async () => {

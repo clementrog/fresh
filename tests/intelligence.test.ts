@@ -50,7 +50,6 @@ function makeOpportunity(overrides: Partial<ContentOpportunity> = {}): ContentOp
     whyNow: "Test why now",
     whatItIsAbout: "About testing",
     whatItIsNotAbout: "Not about production",
-    relatedSignalIds: [],
     evidence: [evidence],
     primaryEvidence: evidence,
     supportingEvidenceCount: 0,

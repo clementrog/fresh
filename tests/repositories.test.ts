@@ -8,7 +8,7 @@ describe("repository evidence validation", () => {
     const evidence: EvidenceReference[] = [
       {
         id: "evidence_1",
-        source: "slack",
+        source: "notion",
         sourceItemId: "source-1",
         sourceUrl: "https://example.com",
         timestamp: new Date().toISOString(),
