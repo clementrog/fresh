@@ -120,7 +120,19 @@ What is still transitional:
 - FK-owned `EvidenceReference.opportunityId` data still exists. Reads merge both FK-owned and junction-linked evidence.
 - `selection:scan` still uses Notion polling for inbound editorial owner sync. HTTP-based selection is the target UX.
 
-What happens next:
+What happens immediately:
+
+- Dogfood the product end to end on real company data
+- validate the operator workflow in Notion
+- validate the three active runtime paths:
+  - `ingest:run`
+  - `intelligence:run`
+  - `draft:generate`
+- validate the bounded market research path:
+  - `market-research:run`
+- collect friction before starting another schema cleanup slice
+
+What happens after dogfooding:
 
 - Status model migration (old → new status enum)
 - Opportunity column cleanup (`narrativePillar`, `routingStatus`, `readiness`, `v1HistoryJson` removal)
@@ -746,6 +758,21 @@ Delivered:
 
 ## Next Agent Mandate
 
+The immediate next work is **dogfooding and operator validation**, not another refactor slice.
+
+### Immediate focus
+
+Use the current system with real data and confirm that the product is usable end to end:
+
+1. ingest real source items with `ingest:run`
+2. create and enrich opportunities with `intelligence:run`
+3. run `market-research:run` and confirm it feeds the same pipeline cleanly
+4. select opportunities from Notion and confirm `selection:scan` updates Postgres as expected
+5. generate drafts on demand through CLI and HTTP
+6. log workflow friction before changing schema or status contracts
+
+### Next implementation slice after dogfooding
+
 The next implementation agent should work on **status model migration and column cleanup**:
 
 ### Title
@@ -804,4 +831,5 @@ Plain language:
 
 - the repo now has a single opportunity-centric architecture
 - Phase 9 (Final signal-era cleanup) is complete
-- the next slice is status model migration and column cleanup
+- the immediate priority is to dogfood the product on real usage
+- the next cleanup slice after dogfooding is status model migration and column cleanup

@@ -359,7 +359,8 @@ export class RepositoryBundle {
         ...(params.companyId ? { companyId: params.companyId } : {}),
         processedAt: null
       },
-      orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
+      // Dogfood the freshest inputs first so the intelligence loop reaches current signals quickly.
+      orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
       take: params.take
     });
   }

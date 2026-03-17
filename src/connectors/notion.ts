@@ -92,10 +92,6 @@ export class NotionConnector extends BaseConnector<NotionSourceConfig> {
       properties?: Record<string, unknown>;
     };
     const properties = page.properties ?? {};
-    const marketInsightFromProperties = extractMarketInsight(properties, "");
-    if (marketInsightFromProperties && !config.storeRawText) {
-      return this.buildMarketInsightSourceItem(page, rawItem, config, context, marketInsightFromProperties, "");
-    }
     const claapSignalFromProperties = extractClaapSignal(properties);
     if (claapSignalFromProperties && !config.storeRawText) {
       return this.buildClaapSignalSourceItem(page, rawItem, config, context, claapSignalFromProperties);

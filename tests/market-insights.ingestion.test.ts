@@ -23,7 +23,12 @@ describe("market insights notion ingestion", () => {
     (connector as unknown as { fetchPageContent: () => Promise<string> }).fetchPageContent = async () =>
       {
         pageContentCalls += 1;
-        return "Buyers now ask for visible proof of field adoption before trusting the promise.";
+        return [
+          "What happened",
+          "Buyers now ask for visible proof of field adoption before trusting the promise.",
+          "Why it matters",
+          "This changes the standard for credible product storytelling."
+        ].join("\n");
       };
 
     const rawItem: RawSourceItem = {
@@ -86,16 +91,21 @@ describe("market insights notion ingestion", () => {
     expect(normalized.metadata.notionKind).toBe("market-insight");
     expect(normalized.metadata.theme).toBe("Strategic synthesis 2026");
     expect(normalized.metadata.profileHint).toBe("baptiste");
-    expect(pageContentCalls).toBe(0);
+    expect(pageContentCalls).toBe(1);
     expect(normalized.chunks).toEqual([
       "Buyers want proof of adoption",
       "Theme: Strategic synthesis 2026",
-      "Source type: Synthesis"
+      "Source type: Synthesis",
+      "What happened\nBuyers now ask for visible proof of field adoption before trusting the promise.\nWhy it matters\nThis changes the standard for credible product storytelling."
     ]);
+    expect(normalized.text).toContain("What happened");
+    expect(normalized.text).toContain("This changes the standard for credible product storytelling.");
   });
 
   it("keeps market insight rows on the structured path even when Theme is blank", async () => {
     const connector = new NotionConnector(env);
+    (connector as unknown as { fetchPageContent: () => Promise<string> }).fetchPageContent = async () =>
+      "What happened\nA labor update with enough body content to remain structured.";
 
     const rawItem: RawSourceItem = {
       id: "page-2",
@@ -157,7 +167,8 @@ describe("market insights notion ingestion", () => {
     expect(normalized.chunks).toEqual([
       "A labor update without an explicit theme",
       "Theme: General",
-      "Source type: Secondary"
+      "Source type: Secondary",
+      "What happened\nA labor update with enough body content to remain structured."
     ]);
   });
 });
