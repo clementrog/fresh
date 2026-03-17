@@ -158,7 +158,7 @@ export function narrowCandidateOpportunities(
   screening: ScreeningResult,
   opportunities: ContentOpportunity[],
   companyId: string
-): ContentOpportunity[] {
+): { candidates: ContentOpportunity[]; topScore: number } {
   const itemWords = tokenize(`${item.title} ${item.summary}`);
   const itemDbId = sourceItemDbId(companyId, item.externalId);
 
@@ -177,11 +177,15 @@ export function narrowCandidateOpportunities(
     return { opp, score };
   });
 
-  return scored
+  const filtered = scored
     .filter((entry) => entry.score > 0.05)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 5)
-    .map((entry) => entry.opp);
+    .slice(0, 5);
+
+  return {
+    candidates: filtered.map((entry) => entry.opp),
+    topScore: filtered.length > 0 ? filtered[0].score : 0
+  };
 }
 
 function tokenize(text: string): Set<string> {
@@ -200,11 +204,187 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
 
 // --- Create/Enrich Decision ---
 
+type SourceCreationMode = "create-capable" | "enrich-only";
+
+function getSourceCreationMode(item: NormalizedSourceItem): SourceCreationMode {
+  // This is intentionally based on the audited normalization shape emitted today:
+  // - src/connectors/notion.ts sets metadata.notionKind for structured Notion insights/signals
+  // - src/connectors/claap.ts does not emit an equivalent insight marker
+  // - src/connectors/linear.ts emits operational itemType metadata only
+  const notionKind = typeof item.metadata?.notionKind === "string" ? item.metadata.notionKind : undefined;
+
+  switch (item.source) {
+    case "market-research":
+    case "market-findings":
+      return "create-capable";
+    case "notion":
+      return notionKind === "market-insight" || notionKind === "claap-signal"
+        ? "create-capable"
+        : "enrich-only";
+    case "claap":
+    case "linear":
+    default:
+      return "enrich-only";
+  }
+}
+
+function createBlockedBySourceReason(item: NormalizedSourceItem) {
+  return `${item.source} items are evidence-shaped in the current pipeline and may only enrich an existing opportunity or be skipped.`;
+}
+
+function isCuratedSource(item: NormalizedSourceItem): boolean {
+  const notionKind = typeof item.metadata?.notionKind === "string"
+    ? item.metadata.notionKind : undefined;
+  switch (item.source) {
+    case "market-research":
+    case "market-findings":
+      return true;
+    case "notion":
+      return notionKind === "market-insight" || notionKind === "claap-signal";
+    default:
+      return false;
+  }
+}
+
+function normalizeCreateEnrichDecision(params: {
+  creationMode: SourceCreationMode;
+  candidates: ContentOpportunity[];
+  decision: CreateEnrichDecision;
+  topCandidateScore: number;
+  curated: boolean;
+}): CreateEnrichDecision {
+  const hasValidTarget = Boolean(
+    params.decision.targetOpportunityId
+    && params.candidates.some((candidate) => candidate.id === params.decision.targetOpportunityId)
+  );
+  const topCandidate = params.candidates[0];
+
+  if (params.creationMode === "create-capable") {
+    if (params.decision.action === "enrich" && params.decision.targetOpportunityId && !hasValidTarget) {
+      return { ...params.decision, action: "create", targetOpportunityId: undefined };
+    }
+    // Ambiguous overlap: curated source with weak match and low LLM confidence → prefer create
+    if (
+      params.decision.action === "enrich"
+      && params.curated
+      && params.topCandidateScore < 0.3
+      && params.decision.confidence < 0.6
+    ) {
+      return {
+        ...params.decision,
+        action: "create",
+        targetOpportunityId: undefined,
+        rationale: `${params.decision.rationale} Converted to create: curated source with weak candidate match (score ${params.topCandidateScore.toFixed(2)}) and low LLM confidence (${params.decision.confidence}).`
+      };
+    }
+    return params.decision;
+  }
+
+  if (params.decision.action === "skip") {
+    return {
+      ...params.decision,
+      targetOpportunityId: undefined
+    };
+  }
+
+  if (params.decision.action === "enrich" && hasValidTarget) {
+    return params.decision;
+  }
+
+  // Enrich-only sources can never create new opportunities. If we already found a plausible match,
+  // convert create/invalid-enrich outputs into enrichment on the strongest candidate.
+  if (topCandidate) {
+    return {
+      ...params.decision,
+      action: "enrich",
+      targetOpportunityId: topCandidate.id,
+      rationale:
+        params.decision.action === "create"
+          ? `${params.decision.rationale} This source can only enrich existing opportunities, so the decision was converted to the strongest existing match.`
+          : `${params.decision.rationale} The requested enrichment target was invalid, so the decision was converted to the strongest existing match.`
+    };
+  }
+
+  return {
+    ...params.decision,
+    action: "skip",
+    targetOpportunityId: undefined,
+    rationale: `${params.decision.rationale} No existing opportunity matched closely enough, and this source cannot create new opportunities.`
+  };
+}
+
+function enforceCreateQualityGate(params: {
+  item: NormalizedSourceItem;
+  decision: CreateEnrichDecision;
+  curated: boolean;
+}): CreateEnrichDecision {
+  if (params.decision.action !== "create") {
+    return params.decision;
+  }
+
+  const failureReasons: string[] = [];
+  const summaryLength = params.item.summary.trim().length;
+  const textLength = params.item.text.trim().length;
+
+  if (params.curated) {
+    // Curated tier: lower thresholds, still blocks junk
+    if (params.decision.confidence < 0.4) {
+      failureReasons.push("confidence below 0.4");
+    }
+    if (params.decision.title.trim().length < 6) {
+      failureReasons.push("title too short");
+    }
+    if (params.decision.angle.trim().length < 10) {
+      failureReasons.push("angle too short");
+    }
+    if (params.decision.whatItIsAbout.trim().length < 10) {
+      failureReasons.push("what-it-is-about too short");
+    }
+    if (summaryLength < 30 && textLength < 60) {
+      failureReasons.push("source evidence is too thin");
+    }
+  } else {
+    // Strict tier: unchanged thresholds
+    if (params.decision.confidence < 0.7) {
+      failureReasons.push("confidence below 0.7");
+    }
+    if (params.decision.title.trim().length < 16) {
+      failureReasons.push("title too short");
+    }
+    if (params.decision.angle.trim().length < 24) {
+      failureReasons.push("angle too short");
+    }
+    if (params.decision.whyNow.trim().length < 24) {
+      failureReasons.push("why-now too short");
+    }
+    if (params.decision.whatItIsAbout.trim().length < 24) {
+      failureReasons.push("what-it-is-about too short");
+    }
+    if (summaryLength < 60 && textLength < 180) {
+      failureReasons.push("source evidence is too thin");
+    }
+  }
+
+  if (failureReasons.length === 0) {
+    return params.decision;
+  }
+
+  return {
+    ...params.decision,
+    action: "skip",
+    targetOpportunityId: undefined,
+    rationale: `${params.decision.rationale} Skipped create because the quality gate failed: ${failureReasons.join("; ")}.`
+  };
+}
+
 export async function decideCreateOrEnrich(params: {
   item: NormalizedSourceItem;
   evidence: EvidenceReference[];
   screening: ScreeningResult;
   candidates: ContentOpportunity[];
+  creationMode: SourceCreationMode;
+  curated: boolean;
+  topCandidateScore: number;
   llmClient: LlmClient;
   doctrineMarkdown: string;
   userDescriptions: string;
@@ -218,7 +398,7 @@ export async function decideCreateOrEnrich(params: {
         `  Why now: ${c.whyNow}`,
         `  Evidence: ${c.evidence.slice(0, 3).map((e) => e.excerpt.slice(0, 150)).join(" | ")}`
       ].join("\n")).join("\n")
-    : "No existing opportunities match — create a new content opportunity.";
+    : "No existing opportunities match.";
 
   const system = [
     "You are an editorial intelligence agent deciding whether to create a new content opportunity, enrich an existing one, or skip.",
@@ -232,9 +412,16 @@ export async function decideCreateOrEnrich(params: {
     "## LinkedIn Craft Defaults (Layer 3)",
     ...params.layer3Defaults.map((d) => `- ${d}`),
     "",
-    params.candidates.length > 0
-      ? "Decide: 'create' a new opportunity, 'enrich' an existing one (provide targetOpportunityId), or 'skip'."
-      : "No existing opportunities match. Create a new content opportunity.",
+    params.creationMode === "enrich-only"
+      ? "This source is evidence-shaped and may only enrich an existing opportunity or be skipped. Never create a new opportunity from it."
+      : params.curated
+        ? "This is a curated source with established provenance. Create a new opportunity if it contains at least one concrete insight, problem, or event — even if the framing is rough. You do not need polished prose or a fully developed angle. Focus on whether real substance exists, not on presentation quality."
+        : "This source may create a new opportunity if it contains a reusable insight with enough substance.",
+    params.creationMode === "enrich-only"
+      ? "Decide: 'enrich' an existing opportunity (provide targetOpportunityId) or 'skip'."
+      : params.candidates.length > 0
+        ? "Decide: 'create' a new opportunity, 'enrich' an existing one (provide targetOpportunityId), or 'skip'."
+        : "No existing opportunities match. Decide whether to 'create' a new opportunity or 'skip'.",
     "Return JSON matching the createEnrichDecision schema."
   ].join("\n");
 
@@ -244,6 +431,7 @@ export async function decideCreateOrEnrich(params: {
     `Summary: ${params.item.summary}`,
     `Text (first 1000 chars): ${params.item.text.slice(0, 1000)}`,
     `Source: ${params.item.source}`,
+    `Creation mode: ${params.creationMode}`,
     `Date: ${params.item.occurredAt}`,
     "",
     `## Evidence excerpts`,
@@ -257,19 +445,40 @@ export async function decideCreateOrEnrich(params: {
     candidateDescriptions
   ].join("\n");
 
-  const fallback = (): CreateEnrichDecision => ({
-    action: "create",
-    rationale: "LLM fallback — created with minimal fields",
-    title: params.item.title,
-    ownerDisplayName: params.screening.ownerSuggestion,
-    territory: "general",
-    angle: params.item.summary.slice(0, 200),
-    whyNow: `Fresh evidence from ${params.item.source} on ${params.item.occurredAt}`,
-    whatItIsAbout: params.item.summary,
-    whatItIsNotAbout: "Requires editorial review — generated from LLM fallback.",
-    suggestedFormat: "Narrative lesson post",
-    confidence: 0.4
-  });
+  const fallback = (): CreateEnrichDecision => {
+    if (params.creationMode === "enrich-only") {
+      return {
+        action: params.candidates[0] ? "enrich" : "skip",
+        targetOpportunityId: params.candidates[0]?.id,
+        rationale: params.candidates[0]
+          ? "LLM fallback — enriching the strongest existing match for an evidence-shaped source."
+          : "LLM fallback — skipped because this evidence-shaped source has no strong existing match.",
+        title: params.item.title,
+        ownerDisplayName: params.screening.ownerSuggestion,
+        territory: "general",
+        angle: params.item.summary.slice(0, 200),
+        whyNow: `Fresh evidence from ${params.item.source} on ${params.item.occurredAt}`,
+        whatItIsAbout: params.item.summary,
+        whatItIsNotAbout: "Requires editorial review — generated from LLM fallback.",
+        suggestedFormat: "Narrative lesson post",
+        confidence: 0.4
+      };
+    }
+
+    return {
+      action: "skip",
+      rationale: "LLM fallback — skipped because structured output failed. Create-capable sources require a real LLM decision to create.",
+      title: params.item.title,
+      ownerDisplayName: params.screening.ownerSuggestion,
+      territory: "general",
+      angle: params.item.summary.slice(0, 200),
+      whyNow: `Fresh evidence from ${params.item.source} on ${params.item.occurredAt}`,
+      whatItIsAbout: params.item.summary,
+      whatItIsNotAbout: "Requires editorial review — generated from LLM fallback.",
+      suggestedFormat: "Narrative lesson post",
+      confidence: 0
+    };
+  };
 
   const response = await params.llmClient.generateStructured({
     step: "create-enrich",
@@ -280,15 +489,13 @@ export async function decideCreateOrEnrich(params: {
     fallback
   });
 
-  let decision = response.output;
-
-  // Runtime validations
-  if (decision.action === "enrich" && decision.targetOpportunityId) {
-    const validTarget = params.candidates.some((c) => c.id === decision.targetOpportunityId);
-    if (!validTarget) {
-      decision = { ...decision, action: "create", targetOpportunityId: undefined };
-    }
-  }
+  const decision = normalizeCreateEnrichDecision({
+    creationMode: params.creationMode,
+    candidates: params.candidates,
+    decision: response.output,
+    topCandidateScore: params.topCandidateScore,
+    curated: params.curated
+  });
 
   return { decision, usage: response.usage };
 }
@@ -501,12 +708,23 @@ export async function runIntelligencePipeline(
   // 4. Create/enrich per retained item
   for (const { item, screening: sr } of retainedAfterScreening) {
     try {
-      const candidates = narrowCandidateOpportunities(
+      const creationMode = getSourceCreationMode(item);
+      const { candidates, topScore } = narrowCandidateOpportunities(
         item,
         sr,
         params.recentOpportunities,
         params.companyId
       );
+      const curated = isCuratedSource(item);
+
+      if (creationMode === "enrich-only" && candidates.length === 0) {
+        result.skipped.push({
+          sourceItemId: item.externalId,
+          reason: createBlockedBySourceReason(item)
+        });
+        result.processedSourceItemIds.push(item.externalId);
+        continue;
+      }
 
       const evidence = evidenceMap.get(item.externalId) ?? [];
 
@@ -515,25 +733,29 @@ export async function runIntelligencePipeline(
         evidence,
         screening: sr,
         candidates,
+        creationMode,
+        curated,
+        topCandidateScore: topScore,
         llmClient: params.llmClient,
         doctrineMarkdown: params.doctrineMarkdown,
         userDescriptions: params.userDescriptions,
         layer3Defaults: params.layer3Defaults
       });
       result.usageEvents.push({ step: "create-enrich", usage });
+      const finalDecision = enforceCreateQualityGate({ item, decision, curated });
 
       // Map ownerDisplayName -> User.id
       let ownerUserId: string | undefined;
-      if (decision.ownerDisplayName) {
-        const matchedUser = params.users.find((u) => u.displayName === decision.ownerDisplayName);
+      if (finalDecision.ownerDisplayName) {
+        const matchedUser = params.users.find((u) => u.displayName === finalDecision.ownerDisplayName);
         if (matchedUser) {
           ownerUserId = matchedUser.id;
         }
       }
 
-      if (decision.action === "create") {
+      if (finalDecision.action === "create") {
         const opp = buildNewOpportunity({
-          decision,
+          decision: finalDecision,
           sourceItem: item,
           evidence,
           companyId: params.companyId,
@@ -543,12 +765,12 @@ export async function runIntelligencePipeline(
         if (opp) {
           result.created.push(opp);
         }
-      } else if (decision.action === "enrich" && decision.targetOpportunityId) {
-        const existing = params.recentOpportunities.find((o) => o.id === decision.targetOpportunityId);
+      } else if (finalDecision.action === "enrich" && finalDecision.targetOpportunityId) {
+        const existing = params.recentOpportunities.find((o) => o.id === finalDecision.targetOpportunityId);
         if (existing) {
           const enrichResult = buildEnrichmentUpdate({
             existing,
-            decision,
+            decision: finalDecision,
             sourceItem: item,
             newEvidence: evidence,
             ownerUserId
@@ -560,7 +782,7 @@ export async function runIntelligencePipeline(
           });
         }
       } else {
-        result.skipped.push({ sourceItemId: item.externalId, reason: decision.rationale });
+        result.skipped.push({ sourceItemId: item.externalId, reason: finalDecision.rationale });
       }
 
       result.processedSourceItemIds.push(item.externalId);

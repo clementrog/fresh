@@ -9,7 +9,6 @@ import {
 } from "../src/services/intelligence.js";
 import type { NormalizedSourceItem, ContentOpportunity, EvidenceReference, CreateEnrichDecision, UserRecord } from "../src/domain/types.js";
 import { sourceItemDbId } from "../src/db/repositories.js";
-import { createDeterministicId } from "../src/lib/ids.js";
 import { dedupeEvidenceReferences } from "../src/services/evidence.js";
 
 function makeItem(overrides: Partial<NormalizedSourceItem> = {}): NormalizedSourceItem {
@@ -28,6 +27,39 @@ function makeItem(overrides: Partial<NormalizedSourceItem> = {}): NormalizedSour
     rawPayload: {},
     ...overrides
   };
+}
+
+function makeLinearItem(overrides: Partial<NormalizedSourceItem> = {}): NormalizedSourceItem {
+  return makeItem({
+    source: "linear",
+    sourceItemId: "issue-123",
+    externalId: "linear:issue-123",
+    sourceFingerprint: "linear-fp-123",
+    sourceUrl: "https://linear.app/example/issue/123",
+    title: "API timeout errors reported by customers",
+    summary: "Support ticket about recurring API timeout errors in production.",
+    text: "Customers reported recurring API timeout errors in production during onboarding. The issue includes bug details and support context, not a standalone content idea.",
+    ...overrides
+  });
+}
+
+function makeMarketResearchItem(overrides: Partial<NormalizedSourceItem> = {}): NormalizedSourceItem {
+  return makeItem({
+    source: "market-research",
+    sourceItemId: "market-query:mq-1:set:hash-1",
+    externalId: "market-research:mq-1:hash-1",
+    sourceFingerprint: "market-research-fp-1",
+    sourceUrl: "https://example.com/market-research",
+    title: "Market proof that buyers now expect concrete onboarding evidence",
+    summary: "Repeated market research shows buyers dismiss generic onboarding claims and respond to specific, repeated proof from real implementation outcomes.",
+    text: "Repeated market research shows buyers dismiss generic onboarding claims and respond to specific, repeated proof from real implementation outcomes. Multiple cited results point to the same lesson: teams want concrete evidence of simple adoption before they believe broader positioning claims.",
+    metadata: {
+      kind: "market_research_summary",
+      marketQueryId: "mq-1"
+    },
+    rawPayload: {},
+    ...overrides
+  });
 }
 
 function makeOpportunity(overrides: Partial<ContentOpportunity> = {}): ContentOpportunity {
@@ -66,6 +98,44 @@ function makeOpportunity(overrides: Partial<ContentOpportunity> = {}): ContentOp
   };
 }
 
+function makeScreeningOutput(sourceItemId: string) {
+  return {
+    output: {
+      items: [{
+        sourceItemId,
+        decision: "retain" as const,
+        rationale: "relevant",
+        createOrEnrich: "create" as const,
+        relevanceScore: 0.8,
+        sensitivityFlag: false,
+        sensitivityCategories: []
+      }]
+    },
+    usage: { mode: "provider" as const, promptTokens: 100, completionTokens: 50, estimatedCostUsd: 0.001 },
+    mode: "provider" as const
+  };
+}
+
+function makeDecisionOutput(overrides: Partial<CreateEnrichDecision> = {}) {
+  return {
+    output: {
+      action: "create" as const,
+      rationale: "new opportunity",
+      title: "Created opportunity from repeated customer proof",
+      territory: "sales",
+      angle: "Repeated customer proof is more persuasive than generic product positioning.",
+      whyNow: "Fresh supporting evidence shows this buying pattern is recurring right now.",
+      whatItIsAbout: "A reusable lesson about how concrete proof changes customer trust and buying momentum.",
+      whatItIsNotAbout: "not about that",
+      suggestedFormat: "Narrative lesson post",
+      confidence: 0.85,
+      ...overrides
+    },
+    usage: { mode: "provider" as const, promptTokens: 200, completionTokens: 100, estimatedCostUsd: 0.002 },
+    mode: "provider" as const
+  };
+}
+
 describe("prefilterSourceItems", () => {
   it("skips items older than freshness window", () => {
     const old = makeItem({ occurredAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString() });
@@ -100,8 +170,9 @@ describe("narrowCandidateOpportunities", () => {
       makeOpportunity({ id: "opp-nomatch", title: "marketing strategy", angle: "brand positioning", whatItIsAbout: "marketing" })
     ];
     const result = narrowCandidateOpportunities(item, screening, opps, "company-1");
-    expect(result.length).toBeGreaterThan(0);
-    expect(result[0].id).toBe("opp-match");
+    expect(result.candidates.length).toBeGreaterThan(0);
+    expect(result.candidates[0].id).toBe("opp-match");
+    expect(result.topScore).toBeGreaterThan(0);
   });
 
   it("applies owner boost", () => {
@@ -112,8 +183,8 @@ describe("narrowCandidateOpportunities", () => {
       makeOpportunity({ id: "opp-noowner", title: "different topic" })
     ];
     const result = narrowCandidateOpportunities(item, screening, opps, "company-1");
-    if (result.length >= 2) {
-      expect(result[0].id).toBe("opp-owner");
+    if (result.candidates.length >= 2) {
+      expect(result.candidates[0].id).toBe("opp-owner");
     }
   });
 
@@ -124,7 +195,7 @@ describe("narrowCandidateOpportunities", () => {
       makeOpportunity({ title: "very different topic indeed", angle: "another angle entirely", whatItIsAbout: "something else" })
     ];
     const result = narrowCandidateOpportunities(item, screening, opps, "company-1");
-    expect(result.length).toBeLessThanOrEqual(5);
+    expect(result.candidates.length).toBeLessThanOrEqual(5);
   });
 
   it("limits to max 5", () => {
@@ -134,7 +205,7 @@ describe("narrowCandidateOpportunities", () => {
       makeOpportunity({ id: `opp-${i}`, title: `common word shared context ${i}`, angle: `angle ${i}`, whatItIsAbout: `about ${i}` })
     );
     const result = narrowCandidateOpportunities(item, screening, opps, "company-1");
-    expect(result.length).toBeLessThanOrEqual(5);
+    expect(result.candidates.length).toBeLessThanOrEqual(5);
   });
 });
 
@@ -300,41 +371,12 @@ describe("standalone evidence flows through to downstream consumers", () => {
 });
 
 describe("runIntelligencePipeline", () => {
-  it("processes items through the full pipeline", async () => {
-    const items = [makeItem()];
+  it("allows an insight-shaped source to create an opportunity", async () => {
+    const items = [makeMarketResearchItem()];
     const mockLlmClient = {
       generateStructured: vi.fn()
-        .mockResolvedValueOnce({
-          output: {
-            items: [{
-              sourceItemId: "notion:page123",
-              decision: "retain",
-              rationale: "relevant",
-              createOrEnrich: "create",
-              relevanceScore: 0.8,
-              sensitivityFlag: false,
-              sensitivityCategories: []
-            }]
-          },
-          usage: { mode: "provider", promptTokens: 100, completionTokens: 50, estimatedCostUsd: 0.001 },
-          mode: "provider"
-        })
-        .mockResolvedValueOnce({
-          output: {
-            action: "create",
-            rationale: "new opportunity",
-            title: "Created opp",
-            territory: "sales",
-            angle: "fresh angle",
-            whyNow: "timely",
-            whatItIsAbout: "about this",
-            whatItIsNotAbout: "not about that",
-            suggestedFormat: "Narrative lesson post",
-            confidence: 0.85
-          },
-          usage: { mode: "provider", promptTokens: 200, completionTokens: 100, estimatedCostUsd: 0.002 },
-          mode: "provider"
-        })
+        .mockResolvedValueOnce(makeScreeningOutput("market-research:mq-1:hash-1"))
+        .mockResolvedValueOnce(makeDecisionOutput())
     } as any;
 
     const result = await runIntelligencePipeline({
@@ -351,29 +393,201 @@ describe("runIntelligencePipeline", () => {
     });
 
     expect(result.created).toHaveLength(1);
-    expect(result.created[0].title).toBe("Created opp");
-    expect(result.processedSourceItemIds).toContain("notion:page123");
+    expect(result.created[0].title).toBe("Created opportunity from repeated customer proof");
+    expect(result.processedSourceItemIds).toContain("market-research:mq-1:hash-1");
+  });
+
+  it("skips linear items without calling create-enrich when no existing opportunity is a strong match", async () => {
+    const items = [makeLinearItem()];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("linear:issue-123"))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: []
+    });
+
+    expect(result.created).toHaveLength(0);
+    expect(result.enriched).toHaveLength(0);
+    expect(result.skipped).toEqual([
+      expect.objectContaining({ sourceItemId: "linear:issue-123" })
+    ]);
+    expect(result.processedSourceItemIds).toContain("linear:issue-123");
+    expect(mockLlmClient.generateStructured).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows linear items to enrich an existing opportunity when the target is a valid match", async () => {
+    const items = [makeLinearItem()];
+    const existing = makeOpportunity({
+      id: "opp-api-timeout",
+      title: "API timeout errors in onboarding",
+      angle: "Recurring API timeout bugs are a product signal",
+      whatItIsAbout: "API timeout errors reported by customers during onboarding"
+    });
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("linear:issue-123"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "enrich",
+          targetOpportunityId: existing.id,
+          rationale: "Direct overlap with the existing API timeout opportunity"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: [existing]
+    });
+
+    expect(result.created).toHaveLength(0);
+    expect(result.enriched).toHaveLength(1);
+    expect(result.enriched[0].opportunity.id).toBe(existing.id);
+    expect(result.skipped).toHaveLength(0);
+    expect(result.processedSourceItemIds).toContain("linear:issue-123");
+  });
+
+  it("rewrites linear create decisions to enrich on the top matching opportunity", async () => {
+    const items = [makeLinearItem()];
+    const strongestMatch = makeOpportunity({
+      id: "opp-top-match",
+      title: "API timeout errors reported by customers",
+      angle: "Recurring API timeout issues reveal onboarding friction",
+      whatItIsAbout: "Customer-reported API timeout bugs during onboarding"
+    });
+    const weakerMatch = makeOpportunity({
+      id: "opp-weaker-match",
+      title: "General support issues",
+      angle: "Customer friction themes",
+      whatItIsAbout: "Support conversations"
+    });
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("linear:issue-123"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "create",
+          rationale: "Model tried to create a new opportunity from a ticket"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: [strongestMatch, weakerMatch]
+    });
+
+    expect(result.created).toHaveLength(0);
+    expect(result.enriched).toHaveLength(1);
+    expect(result.enriched[0].opportunity.id).toBe(strongestMatch.id);
+    expect(result.processedSourceItemIds).toContain("linear:issue-123");
+  });
+
+  it("keeps linear skip decisions as skip even when a candidate exists", async () => {
+    const items = [makeLinearItem()];
+    const existing = makeOpportunity({
+      id: "opp-existing",
+      title: "API timeout errors reported by customers",
+      angle: "Recurring API timeout issues reveal onboarding friction",
+      whatItIsAbout: "Customer-reported API timeout bugs during onboarding"
+    });
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("linear:issue-123"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "skip",
+          rationale: "Bug ticket is not useful for this opportunity"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: [existing]
+    });
+
+    expect(result.created).toHaveLength(0);
+    expect(result.enriched).toHaveLength(0);
+    expect(result.skipped).toEqual([
+      expect.objectContaining({ sourceItemId: "linear:issue-123" })
+    ]);
+    expect(result.processedSourceItemIds).toContain("linear:issue-123");
+  });
+
+  it("skips weak create payloads instead of creating new opportunities", async () => {
+    const items = [makeMarketResearchItem({
+      summary: "Thin.",
+      text: "Short text that passes prefilter threshold minimum."
+    })];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("market-research:mq-1:hash-1"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          confidence: 0.3,
+          title: "Hmm",
+          angle: "unclear",
+          whatItIsAbout: "not sure"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: []
+    });
+
+    expect(result.created).toHaveLength(0);
+    expect(result.enriched).toHaveLength(0);
+    expect(result.skipped).toEqual([
+      expect.objectContaining({
+        sourceItemId: "market-research:mq-1:hash-1",
+        reason: expect.stringContaining("quality gate failed")
+      })
+    ]);
   });
 
   it("excludes failed items from processedSourceItemIds", async () => {
-    const items = [makeItem()];
+    const items = [makeMarketResearchItem()];
     const mockLlmClient = {
       generateStructured: vi.fn()
-        .mockResolvedValueOnce({
-          output: {
-            items: [{
-              sourceItemId: "notion:page123",
-              decision: "retain",
-              rationale: "relevant",
-              createOrEnrich: "create",
-              relevanceScore: 0.8,
-              sensitivityFlag: false,
-              sensitivityCategories: []
-            }]
-          },
-          usage: { mode: "provider", promptTokens: 100, completionTokens: 50, estimatedCostUsd: 0.001 },
-          mode: "provider"
-        })
+        .mockResolvedValueOnce(makeScreeningOutput("market-research:mq-1:hash-1"))
         .mockRejectedValueOnce(new Error("LLM failed"))
     } as any;
 
@@ -391,6 +605,290 @@ describe("runIntelligencePipeline", () => {
     });
 
     expect(result.created).toHaveLength(0);
-    expect(result.processedSourceItemIds).not.toContain("notion:page123");
+    expect(result.processedSourceItemIds).not.toContain("market-research:mq-1:hash-1");
+  });
+
+  it("curated source with moderate confidence passes lighter gate and creates", async () => {
+    const items = [makeMarketResearchItem()];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("market-research:mq-1:hash-1"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          confidence: 0.55,
+          title: "Buyer proof trend",
+          angle: "Concrete proof changes buying behavior",
+          whyNow: "Short",
+          whatItIsAbout: "How buyers respond to implementation proof"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: []
+    });
+
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0].title).toBe("Buyer proof trend");
+  });
+
+  it("notion market-insight passes curated gate", async () => {
+    const items = [makeItem({
+      source: "notion",
+      sourceItemId: "page-insight-1",
+      externalId: "notion:page-insight-1",
+      title: "Enterprise buyers want proof of simple onboarding",
+      summary: "Market insight: enterprise buyers increasingly demand concrete proof of simple onboarding before purchasing.",
+      text: "Detailed observation from the field: enterprise buyers are asking for concrete onboarding timelines and proof points before committing to purchase decisions. This pattern is recurring across multiple deals.",
+      metadata: { notionKind: "market-insight" }
+    })];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("notion:page-insight-1"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          confidence: 0.5,
+          title: "Onboarding proof demand",
+          angle: "Enterprise buyers want proof before committing",
+          whyNow: "Now",
+          whatItIsAbout: "Buyer behavior around onboarding evidence"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: []
+    });
+
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0].title).toBe("Onboarding proof demand");
+  });
+
+  it("curated source with truly junk fields is still blocked", async () => {
+    const items = [makeMarketResearchItem({
+      summary: "Vague.",
+      text: "Short text that passes prefilter threshold minimum."
+    })];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("market-research:mq-1:hash-1"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          confidence: 0.2,
+          title: "Hmm",
+          angle: "not sure",
+          whatItIsAbout: "not sure"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: []
+    });
+
+    expect(result.created).toHaveLength(0);
+    expect(result.skipped).toEqual([
+      expect.objectContaining({
+        sourceItemId: "market-research:mq-1:hash-1",
+        reason: expect.stringContaining("quality gate failed")
+      })
+    ]);
+  });
+
+  it("ambiguous overlap on curated source prefers create over enrich", async () => {
+    const items = [makeMarketResearchItem()];
+    const existing = makeOpportunity({
+      id: "opp-unrelated",
+      title: "Completely different topic about branding strategy",
+      angle: "Brand positioning in competitive markets",
+      whatItIsAbout: "How to position brand in crowded markets"
+    });
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("market-research:mq-1:hash-1"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "enrich",
+          targetOpportunityId: existing.id,
+          confidence: 0.4,
+          rationale: "Weak match to existing opportunity"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: [existing]
+    });
+
+    expect(result.created).toHaveLength(1);
+    expect(result.enriched).toHaveLength(0);
+  });
+
+  it("high-confidence enrich on curated source with strong match is preserved", async () => {
+    const items = [makeMarketResearchItem()];
+    const existing = makeOpportunity({
+      id: "opp-strong-match",
+      title: "Market proof that buyers now expect concrete onboarding evidence",
+      angle: "Repeated customer proof is more persuasive than generic positioning",
+      whatItIsAbout: "Concrete proof changes customer trust and buying momentum"
+    });
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("market-research:mq-1:hash-1"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "enrich",
+          targetOpportunityId: existing.id,
+          confidence: 0.75,
+          rationale: "Strong match — enriching existing opportunity with fresh proof"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: [existing]
+    });
+
+    expect(result.created).toHaveLength(0);
+    expect(result.enriched).toHaveLength(1);
+    expect(result.enriched[0].opportunity.id).toBe(existing.id);
+  });
+
+  it("enrich-only source with low-confidence enrich is NOT converted to create", async () => {
+    const items = [makeLinearItem()];
+    const existing = makeOpportunity({
+      id: "opp-linear-match",
+      title: "API timeout errors in onboarding",
+      angle: "Recurring API timeout bugs are a product signal",
+      whatItIsAbout: "API timeout errors reported by customers during onboarding"
+    });
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("linear:issue-123"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "enrich",
+          targetOpportunityId: existing.id,
+          confidence: 0.3,
+          rationale: "Weak match but only option for this source"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: [existing]
+    });
+
+    expect(result.created).toHaveLength(0);
+    expect(result.enriched).toHaveLength(1);
+    expect(result.enriched[0].opportunity.id).toBe(existing.id);
+  });
+
+  it("curated source skips on LLM fallback instead of auto-creating", async () => {
+    const items = [makeMarketResearchItem()];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("market-research:mq-1:hash-1"))
+        .mockImplementationOnce((params: { fallback: () => unknown }) => {
+          // Simulate LLM failure: invoke the fallback function
+          const fallbackOutput = params.fallback();
+          return Promise.resolve({
+            output: fallbackOutput,
+            usage: { mode: "fallback" as const, promptTokens: 0, completionTokens: 0, estimatedCostUsd: 0, error: "simulated failure" },
+            mode: "fallback" as const
+          });
+        })
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: []
+    });
+
+    expect(result.created).toHaveLength(0);
+    expect(result.skipped).toEqual([
+      expect.objectContaining({
+        sourceItemId: "market-research:mq-1:hash-1",
+        reason: expect.stringContaining("LLM fallback")
+      })
+    ]);
+  });
+
+  it("linear with no candidates skips before create/enrich — LLM called only once for screening", async () => {
+    const items = [makeLinearItem()];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("linear:issue-123"))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: []
+    });
+
+    expect(result.created).toHaveLength(0);
+    expect(result.enriched).toHaveLength(0);
+    expect(result.skipped).toEqual([
+      expect.objectContaining({ sourceItemId: "linear:issue-123" })
+    ]);
+    expect(mockLlmClient.generateStructured).toHaveBeenCalledTimes(1);
   });
 });
