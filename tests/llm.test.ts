@@ -78,11 +78,56 @@ describe("llm client", () => {
     expect(body.response_format?.json_schema?.strict).toBe(true);
     expect(body.response_format?.json_schema?.schema?.type).toBe("object");
     expect(body.response_format?.json_schema?.schema?.additionalProperties).toBe(false);
-    expect(body.response_format?.json_schema?.schema?.required).toEqual(["value"]);
+    expect(body.response_format?.json_schema?.schema?.required).toEqual(["value", "category"]);
     expect(body.response_format?.json_schema?.schema?.properties?.value).toEqual({ type: "string" });
     expect(body.response_format?.json_schema?.schema?.properties?.category).toEqual({
-      type: "string",
+      type: ["string", "null"],
       enum: ["a", "b"]
+    });
+  });
+
+  it("normalizes null optional fields from OpenAI structured outputs", async () => {
+    const client = new LlmClient(
+      env,
+      undefined,
+      async () =>
+        ({
+          ok: true,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    value: "provider",
+                    category: null
+                  })
+                }
+              }
+            ],
+            usage: {
+              prompt_tokens: 10,
+              completion_tokens: 5
+            }
+          })
+        }) as Response
+    );
+
+    const result = await client.generateStructured({
+      step: "signal-extraction",
+      system: "Return JSON",
+      prompt: "Return JSON",
+      schema: z.object({
+        value: z.string(),
+        category: z.enum(["a", "b"]).optional()
+      }),
+      allowFallback: true,
+      fallback: () => ({ value: "fallback" })
+    });
+
+    expect(result.mode).toBe("provider");
+    expect(result.output).toEqual({
+      value: "provider",
+      category: undefined
     });
   });
 

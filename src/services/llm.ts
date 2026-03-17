@@ -67,7 +67,8 @@ export class LlmClient {
       });
 
       const parsedJson = JSON.parse(content) as unknown;
-      const validated = params.schema.parse(parsedJson);
+      const normalizedJson = normalizeStructuredOutput(params.schema, parsedJson);
+      const validated = params.schema.parse(normalizedJson);
       const usage: LlmUsage = {
         mode: "provider",
         promptTokens,
@@ -291,6 +292,13 @@ function estimateCostUsd(provider: LlmProvider, model: string, promptTokens: num
 }
 
 function inferOpenAiRates(model: string) {
+  if (model.includes("gpt-5.4")) {
+    return {
+      promptRate: 0.0000025,
+      completionRate: 0.000015
+    };
+  }
+
   if (model.includes("gpt-5")) {
     return {
       promptRate: 0.00000125,
@@ -414,10 +422,11 @@ function convertObject(schema: ZodObject<any>) {
   const required: string[] = [];
 
   for (const [key, value] of Object.entries(shape)) {
-    properties[key] = convertZodType(value as ZodTypeAny);
-    if (!isOptionalSchema(value as ZodTypeAny)) {
-      required.push(key);
-    }
+    const typedValue = value as ZodTypeAny;
+    properties[key] = isOptionalSchema(typedValue)
+      ? makeSchemaNullable(convertZodType(unwrapOptionalSchema(typedValue)))
+      : convertZodType(typedValue);
+    required.push(key);
   }
 
   return {
@@ -430,6 +439,70 @@ function convertObject(schema: ZodObject<any>) {
 
 function isOptionalSchema(schema: ZodTypeAny): boolean {
   return schema instanceof z.ZodOptional || schema instanceof z.ZodDefault;
+}
+
+function unwrapOptionalSchema(schema: ZodTypeAny): ZodTypeAny {
+  let current = schema;
+  while (current instanceof z.ZodOptional || current instanceof z.ZodDefault) {
+    current = current._def.innerType;
+  }
+  return current;
+}
+
+function makeSchemaNullable(schema: Record<string, unknown>) {
+  const typed = isJsonSchemaObject(schema) ? schema.type : undefined;
+  if (typeof typed === "string") {
+    return {
+      ...schema,
+      type: [typed, "null"]
+    };
+  }
+  if (Array.isArray(typed)) {
+    return typed.includes("null")
+      ? schema
+      : {
+          ...schema,
+          type: [...typed, "null"]
+        };
+  }
+  const anyOf = isJsonSchemaObject(schema) ? schema.anyOf : undefined;
+  if (Array.isArray(anyOf) && anyOf.some((entry) => isJsonSchemaObject(entry) && entry.type === "null")) {
+    return schema;
+  }
+  return {
+    anyOf: [schema, { type: "null" }]
+  };
+}
+
+function normalizeStructuredOutput(schema: ZodTypeAny, value: unknown): unknown {
+  if (schema instanceof z.ZodOptional || schema instanceof z.ZodDefault) {
+    if (value === null) {
+      return undefined;
+    }
+    return normalizeStructuredOutput(schema._def.innerType, value);
+  }
+
+  if (schema instanceof z.ZodNullable) {
+    if (value === null) {
+      return null;
+    }
+    return normalizeStructuredOutput(schema.unwrap(), value);
+  }
+
+  if (schema instanceof z.ZodObject && value && typeof value === "object" && !Array.isArray(value)) {
+    const shape = schema.shape;
+    const normalizedEntries = Object.entries(shape).map(([key, childSchema]) => [
+      key,
+      normalizeStructuredOutput(childSchema as ZodTypeAny, (value as Record<string, unknown>)[key])
+    ]);
+    return Object.fromEntries(normalizedEntries);
+  }
+
+  if (schema instanceof z.ZodArray && Array.isArray(value)) {
+    return value.map((entry) => normalizeStructuredOutput(schema.element, entry));
+  }
+
+  return value;
 }
 
 function isJsonSchemaObject(value: unknown): value is { type?: unknown } & Record<string, unknown> {
