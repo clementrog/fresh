@@ -755,7 +755,8 @@ export class RepositoryBundle {
           excerptHash: item.excerptHash,
           speakerOrAuthor: item.speakerOrAuthor,
           freshnessScore: item.freshnessScore
-        }))
+        })),
+        skipDuplicates: true
       });
 
       await tx.opportunityEvidence.createMany({
@@ -763,7 +764,8 @@ export class RepositoryBundle {
           opportunityId: params.opportunityId,
           evidenceId: item.id,
           relevanceNote: params.relevanceNote
-        }))
+        })),
+        skipDuplicates: true
       });
     }
 
@@ -810,6 +812,33 @@ export class RepositoryBundle {
           enrichmentLogJson: toJson(params.enrichmentLogJson)
         }
       });
+    });
+  }
+
+  async listCandidateSourceItems(params: { companyId: string; excludeIds?: string[]; take?: number }) {
+    const take = params.take ?? 200;
+    return this.prisma.sourceItem.findMany({
+      where: {
+        companyId: params.companyId,
+        processedAt: { not: null },
+        ...(params.excludeIds && params.excludeIds.length > 0
+          ? { id: { notIn: params.excludeIds } }
+          : {})
+      },
+      orderBy: [
+        // Bias toward curated/internal material: raw SQL CASE not available in Prisma orderBy,
+        // so we rely on the source index and let the caller get a capped result set.
+        // The caller filters and ranks by source policy in evidence-pack.ts.
+        { occurredAt: "desc" }
+      ],
+      take
+    });
+  }
+
+  async listSourceItemsByIds(ids: string[]) {
+    if (ids.length === 0) return [];
+    return this.prisma.sourceItem.findMany({
+      where: { id: { in: ids } }
     });
   }
 

@@ -34,6 +34,7 @@ import { computeRawTextExpiry } from "./services/retention.js";
 import { ensureConvergenceFoundation } from "./services/convergence.js";
 import { runIntelligencePipeline } from "./services/intelligence.js";
 import { runMarketResearch } from "./services/market-research.js";
+import { findSupportingEvidence, assessDraftReadiness, deriveProvenanceType, computeReadinessTier, generateOperatorGuidance } from "./services/evidence-pack.js";
 
 type LoggerLike = {
   info: (...args: unknown[]) => void;
@@ -286,7 +287,7 @@ export class EditorialSignalEngineApp {
           await this.repositories.saveScreeningResults(screeningEntries);
         }
 
-        // Persist created opportunities
+        // Persist created opportunities + evidence-pack enrichment
         for (const opp of pipelineResult.created) {
           await this.prisma.$transaction(async (tx) => {
             await this.repositories.createOpportunityOnly(opp, tx);
@@ -303,16 +304,103 @@ export class EditorialSignalEngineApp {
               tx
             );
           });
+
+          // --- Evidence pack enrichment ---
+          const originDbIds = opp.evidence.map((e) => e.sourceItemId);
+          const candidateRows = await this.repositories.listCandidateSourceItems({
+            companyId: company.id,
+            excludeIds: originDbIds,
+            take: 200
+          });
+          const candidateItems = candidateRows.map((row) => this.mapStoredSourceItem(row));
+
+          const { evidence: supportEvidence, sources: supportSources } = findSupportingEvidence(
+            opp, candidateItems, company.id
+          );
+
+          // Derive provenance from the originating source item
+          const originItem = items.find((i) =>
+            opp.evidence.some((e) => e.sourceItemId === sourceItemDbId(company.id, i.externalId))
+          );
+          const provenanceType = originItem ? deriveProvenanceType(originItem) : opp.primaryEvidence.source;
+
+          if (supportEvidence.length > 0) {
+            await this.repositories.persistStandaloneEvidence(
+              {
+                evidence: supportEvidence,
+                companyId: company.id,
+                opportunityId: opp.id,
+                primaryEvidenceId: opp.primaryEvidence.id,
+                supportingEvidenceCount: opp.supportingEvidenceCount + supportEvidence.length,
+                evidenceFreshness: opp.evidenceFreshness,
+                relevanceNote: "Supporting evidence from evidence-pack enrichment"
+              },
+              this.prisma
+            );
+          }
+
+          const allEvidence = [...opp.evidence, ...supportEvidence];
+          const createdSourceItemIds = [...new Set(allEvidence.map(e => e.sourceItemId))];
+          const createdSourceItemRows = await this.repositories.listSourceItemsByIds(createdSourceItemIds);
+          const createdSourceItems = createdSourceItemRows.map(row => this.mapStoredSourceItem(row));
+          const readiness = assessDraftReadiness(opp, allEvidence, {
+            sourceItems: createdSourceItems
+          });
+
+          const packLogEntry: EnrichmentLogEntry = {
+            createdAt: new Date().toISOString(),
+            rawSourceItemId: opp.primaryEvidence.sourceItemId,
+            evidenceIds: supportEvidence.map((e) => e.id),
+            contextComment: supportEvidence.length > 0
+              ? `Evidence pack: added ${supportEvidence.length} supporting items from ${[...new Set(supportSources.map((s) => s.source))].join(", ")}`
+              : "Evidence pack: no additional supporting evidence found",
+            provenanceType,
+            originSourceUrl: opp.primaryEvidence.sourceUrl,
+            originExcerpts: opp.evidence.map((e) => e.excerpt),
+            confidence: readiness.status === "ready" ? 0.8 : 0.4,
+            reason: `Draft readiness: ${readiness.status}. ${readiness.missingElements.length > 0 ? "Missing: " + readiness.missingElements.join("; ") : "All checks passed."}`
+          };
+
+          await this.repositories.enrichOpportunity({
+            opportunityId: opp.id,
+            enrichmentLogJson: [packLogEntry],
+            newEvidence: [],
+            primaryEvidenceId: opp.primaryEvidence.id,
+            supportingEvidenceCount: opp.supportingEvidenceCount + supportEvidence.length,
+            evidenceFreshness: opp.evidenceFreshness,
+            companyId: company.id,
+            relevanceNote: "Evidence pack provenance record"
+          });
+
+          const syncedOpportunity: ContentOpportunity = {
+            ...opp,
+            evidence: allEvidence,
+            enrichmentLog: [...opp.enrichmentLog, packLogEntry],
+            supportingEvidenceCount: opp.supportingEvidenceCount + supportEvidence.length,
+            evidenceExcerpts: allEvidence.map(e => e.excerpt)
+          };
+
           const ownerDisplayName = opp.ownerUserId
             ? inputs.users.find(u => u.id === opp.ownerUserId)?.displayName
             : undefined;
-          const opportunitySync = await this.notion.syncOpportunity(opp, null, { ownerDisplayName });
+          const opportunitySync = await this.notion.syncOpportunity(syncedOpportunity, null, {
+            ownerDisplayName,
+            provenanceType,
+            draftReadiness: { tier: readiness.readinessTier, guidance: readiness.operatorGuidance }
+          });
           if (opportunitySync) {
             run.counters[opportunitySync.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
             await this.repositories.updateOpportunityNotionSync(opp.id, opportunitySync.notionPageId, opp.notionPageFingerprint);
           }
           run.counters.opportunitiesCreated += 1;
         }
+
+        // Batch-hydrate source items for enriched opportunities
+        const enrichedSourceItemIds = [...new Set(
+          pipelineResult.enriched.flatMap(e => e.opportunity.evidence.map(ev => ev.sourceItemId))
+        )];
+        const enrichedSourceItemRows = await this.repositories.listSourceItemsByIds(enrichedSourceItemIds);
+        const enrichedSourceItems = enrichedSourceItemRows.map(row => this.mapStoredSourceItem(row));
 
         // Persist enriched opportunities
         for (const enriched of pipelineResult.enriched) {
@@ -326,13 +414,54 @@ export class EditorialSignalEngineApp {
             companyId: company.id,
             relevanceNote: enriched.logEntry.contextComment
           });
+
+          // Compute draft readiness for enriched opportunities
+          const enrichedReadiness = assessDraftReadiness(enriched.opportunity, enriched.opportunity.evidence, {
+            sourceItems: enrichedSourceItems
+          });
           const enrichedOwnerDisplayName = enriched.opportunity.ownerUserId
             ? inputs.users.find(u => u.id === enriched.opportunity.ownerUserId)?.displayName
             : undefined;
-          const opportunitySync = await this.notion.syncOpportunity(enriched.opportunity, null, { ownerDisplayName: enrichedOwnerDisplayName });
+          const opportunitySync = await this.notion.syncOpportunity(enriched.opportunity, null, {
+            ownerDisplayName: enrichedOwnerDisplayName,
+            draftReadiness: { tier: enrichedReadiness.readinessTier, guidance: enrichedReadiness.operatorGuidance }
+          });
           if (opportunitySync) {
             run.counters[opportunitySync.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
             await this.repositories.updateOpportunityNotionSync(enriched.opportunity.id, opportunitySync.notionPageId, enriched.opportunity.notionPageFingerprint);
+          }
+        }
+
+        // Reassess readiness for recent active opportunities not already synced in this run
+        const syncedOppIds = new Set([
+          ...pipelineResult.created.map((o) => o.id),
+          ...pipelineResult.enriched.map((e) => e.opportunity.id)
+        ]);
+
+        // Hydrate source items for reassessment
+        const reassessSourceItemIds = [...new Set(
+          recentOpportunities
+            .filter(opp => !syncedOppIds.has(opp.id))
+            .flatMap(opp => opp.evidence.map(e => e.sourceItemId))
+        )];
+        const reassessSourceItemRows = await this.repositories.listSourceItemsByIds(reassessSourceItemIds);
+        const reassessSourceItems = reassessSourceItemRows.map(row => this.mapStoredSourceItem(row));
+
+        for (const opp of recentOpportunities) {
+          if (syncedOppIds.has(opp.id)) continue;
+          const readiness = assessDraftReadiness(opp, opp.evidence, {
+            sourceItems: reassessSourceItems
+          });
+          const ownerDisplayName = opp.ownerUserId
+            ? inputs.users.find(u => u.id === opp.ownerUserId)?.displayName
+            : undefined;
+          const syncResult = await this.notion.syncOpportunity(opp, null, {
+            ownerDisplayName,
+            draftReadiness: { tier: readiness.readinessTier, guidance: readiness.operatorGuidance }
+          });
+          if (syncResult) {
+            run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
+            await this.repositories.updateOpportunityNotionSync(opp.id, syncResult.notionPageId, opp.notionPageFingerprint);
           }
         }
 
@@ -431,7 +560,15 @@ export class EditorialSignalEngineApp {
 
       if (!context.dryRun) {
         await this.repositories.persistDraftGraph(result.draft, opportunity, company.id);
-        const syncResult = await this.notion.syncOpportunity(opportunity, result.draft);
+        const draftSourceItemIds = [...new Set(opportunity.evidence.map(e => e.sourceItemId))];
+        const draftSourceItemRows = await this.repositories.listSourceItemsByIds(draftSourceItemIds);
+        const draftSourceItems = draftSourceItemRows.map(row => this.mapStoredSourceItem(row));
+        const draftReadiness = assessDraftReadiness(opportunity, opportunity.evidence, {
+          sourceItems: draftSourceItems
+        });
+        const syncResult = await this.notion.syncOpportunity(opportunity, result.draft, {
+          draftReadiness: { tier: draftReadiness.readinessTier, guidance: draftReadiness.operatorGuidance }
+        });
         if (syncResult) {
           run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
           await this.repositories.updateOpportunityNotionSync(opportunity.id, syncResult.notionPageId, opportunity.notionPageFingerprint);

@@ -77,10 +77,12 @@ export class NotionService {
   async syncOpportunity(
     opportunity: ContentOpportunity,
     draft?: DraftV1 | null,
-    options?: { ownerDisplayName?: string }
+    options?: { ownerDisplayName?: string; provenanceType?: string; draftReadiness?: { tier: string; guidance: string[] } }
   ): Promise<NotionSyncResult | null> {
     const ownerDisplay = options?.ownerDisplayName ?? opportunity.ownerProfile ?? "";
     const enrichmentLogText = formatEnrichmentLog(opportunity.enrichmentLog);
+    const readinessSelect = mapReadinessTierToSelect(options?.draftReadiness?.tier);
+    const whatsMissing = formatOperatorGuidance(options?.draftReadiness?.guidance ?? []);
     return this.upsertDatabasePage({
       databaseName: "Content Opportunities",
       notionPageId: opportunity.notionPageId,
@@ -99,6 +101,10 @@ export class NotionService {
         "Hook suggestion 1": richTextProperty(""),
         "Hook suggestion 2": richTextProperty(""),
         "Format rationale": richTextProperty(""),
+        "Source URL": richTextProperty(opportunity.primaryEvidence.sourceUrl),
+        "Provenance type": richTextProperty(options?.provenanceType ?? opportunity.primaryEvidence.source),
+        "Draft readiness": selectProperty(readinessSelect),
+        "What's missing": richTextProperty(whatsMissing),
         "Evidence count": numberProperty(opportunity.evidence.length),
         "Primary evidence": richTextProperty(opportunity.primaryEvidence.excerpt),
         "Supporting evidence count": numberProperty(Math.max(0, opportunity.evidence.length - 1)),
@@ -534,6 +540,10 @@ function getDatabaseProperties(name: RequiredDatabase) {
         "What it is about": { rich_text: {} },
         "What it is not about": { rich_text: {} },
         "Source of origin": { rich_text: {} },
+        "Source URL": { rich_text: {} },
+        "Provenance type": { rich_text: {} },
+        "Draft readiness": { select: {} },
+        "What's missing": { rich_text: {} },
         "Evidence count": { number: { format: "number" } },
         "Suggested format": { rich_text: {} },
         "Hook suggestion 1": { rich_text: {} },
@@ -585,6 +595,19 @@ function getDatabaseProperties(name: RequiredDatabase) {
         "Run fingerprint": { rich_text: {} }
       };
   }
+}
+
+function mapReadinessTierToSelect(tier?: string): string {
+  switch (tier) {
+    case "ready": return "Ready to draft";
+    case "promising": return "Promising, needs help";
+    default: return "Needs more proof";
+  }
+}
+
+function formatOperatorGuidance(guidance: string[]): string {
+  if (guidance.length === 0) return "";
+  return guidance.map((g) => `• ${g}`).join("\n");
 }
 
 function formatEnrichmentLog(entries: EnrichmentLogEntry[]): string {

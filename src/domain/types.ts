@@ -191,6 +191,27 @@ export interface EnrichmentLogEntry {
   ownerSuggestionUpdate?: string;
   confidence: number;
   reason: string;
+  provenanceType?: string;
+  originSourceUrl?: string;
+  originExcerpts?: string[];
+}
+
+export type ReadinessTier = "ready" | "promising" | "needs-more-proof";
+
+export type ClaimPosture = "insight-only" | "customer-pain" | "product-claim" | "mixed";
+export type ProductBackingState = "backed-live" | "backed-in-progress" | "unbacked";
+
+export interface DraftReadinessAssessment {
+  status: "ready" | "needs-more-proof";
+  hasOriginatingSource: boolean;
+  hasSupportingEvidence: boolean;
+  hasConcreteAngle: boolean;
+  hasDraftableMaterial: boolean;
+  missingElements: string[];
+  readinessTier: ReadinessTier;
+  operatorGuidance: string[];
+  claimPosture: ClaimPosture;
+  productBacking: ProductBackingState;
 }
 
 export interface CreateEnrichDecision {

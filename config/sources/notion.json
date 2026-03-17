@@ -11,7 +11,8 @@
   "pageAllowlist": [],
   "databaseAllowlist": [
     "f3595464-713a-41d6-9897-5d9e0aaa065f",
-    "f159a3dc-0211-48ba-a6f7-ca6ff6b81861"
+    "f159a3dc-0211-48ba-a6f7-ca6ff6b81861",
+    "326ae870cf918024b23ac30f023c1e86"
   ],
   "excludedDatabaseNames": [
     "Signal Feed",

@@ -103,6 +103,11 @@ export class NotionConnector extends BaseConnector<NotionSourceConfig> {
       return this.buildMarketInsightSourceItem(page, rawItem, config, context, marketInsight, content);
     }
 
+    const internalProof = extractInternalProof(properties, content);
+    if (internalProof) {
+      return this.buildInternalProofSourceItem(page, rawItem, config, context, internalProof, content);
+    }
+
     const title = extractNotionTitle(properties) || `Notion page ${page.id}`;
     const text = content || title;
     const sourceItemId = page.id;
@@ -275,6 +280,54 @@ export class NotionConnector extends BaseConnector<NotionSourceConfig> {
       chunks: claapSignal.excerpts
     };
   }
+
+  private buildInternalProofSourceItem(
+    page: {
+      id: string;
+      url?: string;
+      properties?: Record<string, unknown>;
+    },
+    rawItem: RawSourceItem,
+    config: NotionSourceConfig,
+    context: RunContext,
+    internalProof: NonNullable<ReturnType<typeof extractInternalProof>>,
+    content: string
+  ): NormalizedSourceItem {
+    const sourceItemId = page.id;
+    return {
+      source: "notion",
+      sourceItemId,
+      externalId: `notion:${sourceItemId}`,
+      sourceFingerprint: hashParts([
+        "notion",
+        "internal-proof",
+        sourceItemId,
+        internalProof.title,
+        internalProof.proofCategory,
+        internalProof.theme,
+        internalProof.occurredAt
+      ]),
+      sourceUrl: internalProof.sourceUrl || page.url || "",
+      title: internalProof.title,
+      text: internalProof.text,
+      summary: internalProof.summary,
+      occurredAt: internalProof.occurredAt,
+      ingestedAt: context.now.toISOString(),
+      metadata: {
+        sourceType: rawItem.payload.sourceType,
+        parentDatabaseId: rawItem.payload.parentDatabaseId,
+        properties: page.properties ?? {},
+        storeRawText: config.storeRawText,
+        notionKind: "internal-proof",
+        proofCategory: internalProof.proofCategory,
+        theme: internalProof.theme,
+        profileHint: internalProof.profileHint
+      },
+      rawPayload: rawItem.payload,
+      rawText: config.storeRawText ? internalProof.text : null,
+      chunks: internalProof.chunks
+    };
+  }
 }
 
 function extractNotionTitle(properties: Record<string, unknown>) {
@@ -443,6 +496,17 @@ function extractRichTextProperty(properties: Record<string, unknown>, propertyNa
   return (property.rich_text ?? []).map((item) => item.plain_text ?? "").join("").trim();
 }
 
+function extractRichTextPropertyAny(properties: Record<string, unknown>, propertyNames: string[]) {
+  for (const propertyName of propertyNames) {
+    const value = extractRichTextProperty(properties, propertyName);
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
 function extractSelectProperty(properties: Record<string, unknown>, propertyName: string) {
   const property = properties[propertyName] as { type?: string; select?: { name?: string | null } | null } | undefined;
   if (property?.type !== "select") {
@@ -572,6 +636,99 @@ function inferMarketInsightProfileHint(theme: string, text: string): ProfileId |
 
   if (/\b(genai|ai|produit|product|feedback|usage|ux)\b/.test(haystack)) {
     return "virginie";
+  }
+
+  return "linc-corporate";
+}
+
+const PROOF_CATEGORY_MAP: Record<string, string> = {
+  "security": "security",
+  "sécurité": "security",
+  "product": "product",
+  "produit": "product",
+  "implementation": "implementation",
+  "implémentation": "implementation",
+  "operations": "operations",
+  "opérations": "operations"
+};
+
+function extractInternalProof(properties: Record<string, unknown>, content: string) {
+  const claimTitle = extractTitleProperty(properties, "Claim");
+  const rawCategory = extractSelectProperty(properties, "Proof category");
+
+  if (!claimTitle || !rawCategory) {
+    return null;
+  }
+
+  const proofCategory = PROOF_CATEGORY_MAP[rawCategory.toLowerCase()];
+  if (!proofCategory) {
+    return null;
+  }
+
+  const evidenceSummary = extractRichTextPropertyAny(properties, ["Evidence summary", "Evidence Summary"]);
+  const theme = extractSelectProperty(properties, "Theme") || "General";
+  const sourceUrl = extractUrlProperty(properties, "Source URL");
+  const occurredAt = extractDateProperty(properties, "Date");
+
+  const summary = [
+    `Proof category: ${proofCategory}.`,
+    `Theme: ${theme}.`,
+    evidenceSummary ? truncateContent(evidenceSummary, 220) : content ? truncateContent(content, 220) : "Internal proof captured in Notion."
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const chunks = [
+    claimTitle,
+    `Proof category: ${proofCategory}`,
+    `Theme: ${theme}`,
+    evidenceSummary,
+    content
+  ]
+    .filter((entry) => entry.trim().length > 0)
+    .map((entry) => entry.trim());
+
+  const text = [
+    claimTitle,
+    `Proof category: ${proofCategory}`,
+    theme ? `Theme: ${theme}` : "",
+    sourceUrl ? `Source URL: ${sourceUrl}` : "",
+    evidenceSummary,
+    content
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  return {
+    title: claimTitle,
+    proofCategory,
+    theme,
+    sourceUrl,
+    occurredAt: occurredAt || new Date().toISOString(),
+    summary,
+    text,
+    chunks,
+    profileHint: inferInternalProofProfileHint(proofCategory, theme, `${claimTitle}\n${evidenceSummary}\n${content}`)
+  };
+}
+
+function inferInternalProofProfileHint(proofCategory: string, theme: string, text: string): ProfileId | undefined {
+  const haystack = `${proofCategory}\n${theme}\n${text}`.toLowerCase();
+
+  if (/\b(security|compliance|audit|certification|soc|iso|gdpr|pen[- ]?test)\b/.test(haystack)) {
+    return "thomas";
+  }
+
+  if (/\b(product|ux|adoption|nps|feedback|usage|user satisfaction)\b/.test(haystack)) {
+    return "virginie";
+  }
+
+  if (/\b(sales|commercial|implementation|onboarding|deployment|migration)\b/.test(haystack)) {
+    return "quentin";
+  }
+
+  if (/\b(strategy|market|operations|uptime|sla|performance|benchmark)\b/.test(haystack)) {
+    return "baptiste";
   }
 
   return "linc-corporate";

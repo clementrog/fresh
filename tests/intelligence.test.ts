@@ -207,6 +207,44 @@ describe("narrowCandidateOpportunities", () => {
     const result = narrowCandidateOpportunities(item, screening, opps, "company-1");
     expect(result.candidates.length).toBeLessThanOrEqual(5);
   });
+
+  it("does not let owner boost outrank the exact topical match for enrich-only sources", () => {
+    const item = makeItem({
+      title: "La vraie objection au changement de logiciel : le coût de transition perçu comme ingérable",
+      summary: "Une migration jugée longue, risquée et difficilement pilotable."
+    });
+    const screening = {
+      decision: "retain" as const,
+      rationale: "",
+      ownerSuggestion: "thomas",
+      createOrEnrich: "create" as const,
+      relevanceScore: 0.88,
+      sensitivityFlag: true,
+      sensitivityCategories: ["internal-only"]
+    };
+    const opps = [
+      makeOpportunity({
+        id: "opp-exact",
+        title: "La vraie objection au changement de logiciel : le coût de transition perçu comme ingérable",
+        ownerProfile: "quentin",
+        angle: "Montrer que le frein principal est la peur d'une migration longue et risquée.",
+        whatItIsAbout: "Une objection commerciale centrée sur le coût de transition perçu."
+      }),
+      makeOpportunity({
+        id: "opp-owner-boost",
+        title: "Bonus-malus chômage 2026 : ce que change le nouveau calcul au 1er mars pour les employeurs",
+        ownerProfile: "thomas",
+        angle: "Expliquer une réforme paie importante.",
+        whatItIsAbout: "Une évolution réglementaire sur le bonus-malus chômage."
+      })
+    ];
+
+    const result = narrowCandidateOpportunities(item, screening, opps, "company-1", {
+      enableOwnerBoost: false
+    });
+
+    expect(result.candidates[0]?.id).toBe("opp-exact");
+  });
 });
 
 describe("buildNewOpportunity", () => {
@@ -890,5 +928,128 @@ describe("runIntelligencePipeline", () => {
       expect.objectContaining({ sourceItemId: "linear:issue-123" })
     ]);
     expect(mockLlmClient.generateStructured).toHaveBeenCalledTimes(1);
+  });
+
+  it("internal-proof items cannot create opportunities", async () => {
+    const items = [makeItem({
+      source: "notion",
+      sourceItemId: "proof-soc2",
+      externalId: "notion:proof-soc2",
+      title: "SOC 2 Type II certification achieved for enterprise trust",
+      summary: "Completed SOC 2 Type II audit with zero critical findings. Enterprise buyers demand concrete proof.",
+      text: "SOC 2 Type II audit completed with zero critical findings. Enterprise buyers demand concrete proof of security compliance before purchasing decisions. This certification establishes trust and buyer confidence.",
+      metadata: { notionKind: "internal-proof", proofCategory: "security" }
+    })];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("notion:proof-soc2"))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: []
+    });
+
+    expect(result.created).toHaveLength(0);
+    expect(result.skipped).toEqual([
+      expect.objectContaining({ sourceItemId: "notion:proof-soc2" })
+    ]);
+    // Only screening call — no create/enrich since enrich-only with no candidates
+    expect(mockLlmClient.generateStructured).toHaveBeenCalledTimes(1);
+  });
+
+  it("internal-proof items converted to enrich when LLM says create", async () => {
+    const items = [makeItem({
+      source: "notion",
+      sourceItemId: "proof-soc2",
+      externalId: "notion:proof-soc2",
+      title: "SOC 2 Type II certification achieved for enterprise trust",
+      summary: "Completed SOC 2 Type II audit with zero critical findings. Enterprise buyers demand concrete proof.",
+      text: "SOC 2 Type II audit completed with zero critical findings. Enterprise buyers demand concrete proof of security compliance before purchasing decisions. This certification establishes trust and buyer confidence.",
+      metadata: { notionKind: "internal-proof", proofCategory: "security" }
+    })];
+    const existing = makeOpportunity({
+      id: "opp-enterprise-trust",
+      title: "Enterprise buyers demand security proof before purchasing",
+      angle: "SOC 2 certification builds enterprise buyer trust",
+      whatItIsAbout: "Security compliance proof for enterprise purchasing decisions"
+    });
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("notion:proof-soc2"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "create",
+          rationale: "Model tried to create from proof material"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: [existing]
+    });
+
+    expect(result.created).toHaveLength(0);
+    expect(result.enriched).toHaveLength(1);
+    expect(result.enriched[0].opportunity.id).toBe(existing.id);
+  });
+
+  it("internal-proof items enrich when matching opportunity exists", async () => {
+    const items = [makeItem({
+      source: "notion",
+      sourceItemId: "proof-soc2",
+      externalId: "notion:proof-soc2",
+      title: "SOC 2 Type II certification achieved for enterprise trust",
+      summary: "Completed SOC 2 Type II audit with zero critical findings. Enterprise buyers demand concrete proof.",
+      text: "SOC 2 Type II audit completed with zero critical findings. Enterprise buyers demand concrete proof of security compliance before purchasing decisions. This certification establishes trust and buyer confidence.",
+      metadata: { notionKind: "internal-proof", proofCategory: "security" }
+    })];
+    const existing = makeOpportunity({
+      id: "opp-enterprise-trust",
+      title: "Enterprise buyers demand security proof before purchasing",
+      angle: "SOC 2 certification builds enterprise buyer trust",
+      whatItIsAbout: "Security compliance proof for enterprise purchasing decisions"
+    });
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("notion:proof-soc2"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "enrich",
+          targetOpportunityId: existing.id,
+          rationale: "SOC 2 proof supports enterprise trust opportunity"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: [existing]
+    });
+
+    expect(result.created).toHaveLength(0);
+    expect(result.enriched).toHaveLength(1);
+    expect(result.enriched[0].opportunity.id).toBe(existing.id);
   });
 });

@@ -157,16 +157,18 @@ export function narrowCandidateOpportunities(
   item: NormalizedSourceItem,
   screening: ScreeningResult,
   opportunities: ContentOpportunity[],
-  companyId: string
+  companyId: string,
+  opts: { enableOwnerBoost?: boolean } = {}
 ): { candidates: ContentOpportunity[]; topScore: number } {
   const itemWords = tokenize(`${item.title} ${item.summary}`);
   const itemDbId = sourceItemDbId(companyId, item.externalId);
+  const enableOwnerBoost = opts.enableOwnerBoost ?? true;
 
   const scored = opportunities.map((opp) => {
     const oppWords = tokenize(`${opp.title} ${opp.angle} ${opp.whatItIsAbout}`);
     let score = jaccardSimilarity(itemWords, oppWords);
 
-    if (screening.ownerSuggestion && opp.ownerProfile === screening.ownerSuggestion) {
+    if (enableOwnerBoost && screening.ownerSuggestion && opp.ownerProfile === screening.ownerSuggestion) {
       score += 0.2;
     }
 
@@ -713,7 +715,8 @@ export async function runIntelligencePipeline(
         item,
         sr,
         params.recentOpportunities,
-        params.companyId
+        params.companyId,
+        { enableOwnerBoost: creationMode === "create-capable" }
       );
       const curated = isCuratedSource(item);
 
