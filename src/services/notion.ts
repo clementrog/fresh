@@ -597,10 +597,10 @@ function getDatabaseProperties(name: RequiredDatabase) {
   }
 }
 
-function mapReadinessTierToSelect(tier?: string): string {
+export function mapReadinessTierToSelect(tier?: string): string {
   switch (tier) {
     case "ready": return "Ready to draft";
-    case "promising": return "Promising, needs help";
+    case "promising": return "Promising — needs help";
     default: return "Needs more proof";
   }
 }

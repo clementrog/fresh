@@ -866,6 +866,61 @@ describe("classifyClaimPosture", () => {
     });
     expect(classifyClaimPosture(opp)).toBe("insight-only");
   });
+
+  it("'montrer' alone does not trigger product-claim (editorial use)", () => {
+    const opp = makeOpportunity({
+      title: "Montrer ce que les retours terrain révèlent sur les priorités",
+      angle: "Montrer ce que les signaux disent de la maturité du secteur",
+      whatItIsAbout: "Analyse des signaux terrain"
+    });
+    expect(classifyClaimPosture(opp)).toBe("insight-only");
+  });
+
+  it("'produit' triggers product-claim", () => {
+    const opp = makeOpportunity({
+      title: "Pourquoi la génération massive des bulletins devient un vrai point de friction produit",
+      angle: "Montrer ce que ce type de friction révèle sur les priorités produit",
+      whatItIsAbout: "Analyse de la friction produit dans la génération de bulletins"
+    });
+    // "produit" → product signal, "friction" → pain signal → mixed
+    expect(classifyClaimPosture(opp)).toBe("mixed");
+  });
+
+  it("'produit' without pain/regulatory → product-claim", () => {
+    const opp = makeOpportunity({
+      title: "Retour produit sur le module de calcul",
+      angle: "Ce que les retours terrain révèlent sur la maturité du produit",
+      whatItIsAbout: "Analyse des retours utilisateurs"
+    });
+    expect(classifyClaimPosture(opp)).toBe("product-claim");
+  });
+
+  it("'se produit' (verb form) does not trigger product-claim", () => {
+    const opp = makeOpportunity({
+      title: "Un changement de paradigme se produit dans les pratiques RH",
+      angle: "Ce qui se produit quand les entreprises modernisent",
+      whatItIsAbout: "Évolution des processus internes"
+    });
+    expect(classifyClaimPosture(opp)).toBe("insight-only");
+  });
+
+  it("'analyse produit' triggers product signal (not blocked by verb-prefix check)", () => {
+    const opp = makeOpportunity({
+      title: "Analyse produit du module de paie automatisé",
+      angle: "Ce que l'analyse produit révèle sur les attentes terrain",
+      whatItIsAbout: "Analyse des retours utilisateurs"
+    });
+    expect(classifyClaimPosture(opp)).toBe("product-claim");
+  });
+
+  it("'promesse produit' triggers product signal", () => {
+    const opp = makeOpportunity({
+      title: "La promesse produit face à la réalité terrain",
+      angle: "Pourquoi la promesse produit ne suffit pas sans preuve opérationnelle",
+      whatItIsAbout: "Écart entre la promesse et la réalité"
+    });
+    expect(classifyClaimPosture(opp)).toBe("product-claim");
+  });
 });
 
 // --- classifyProductBacking ---

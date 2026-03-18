@@ -247,10 +247,10 @@ export function findSupportingEvidence(
 export const PRODUCT_CAPABILITY_SIGNALS = [
   // FR verbs
   "permettre", "afficher", "automatiser", "calculer", "configurer", "simuler",
-  "vérifier", "déclencher", "intégrer", "synchroniser", "générer", "montrer",
+  "vérifier", "déclencher", "intégrer", "synchroniser", "générer",
   // FR nouns
   "fonctionnalité", "module", "interface", "tableau de bord", "outil",
-  "paramétrage", "moteur", "workflow",
+  "paramétrage", "moteur", "workflow", "produit",
   // EN
   "feature", "dashboard", "enables", "automates", "calculates", "workflow", "ux"
 ];
@@ -274,6 +274,12 @@ export const REGULATORY_MARKET_SIGNALS = [
 
 const LETTER_RE = /[a-zàâäéèêëïîôùûüÿçœæ]/;
 
+// Signals where a specific preceding word makes the match a verb form, not a noun.
+// Key: signal word, Value: prefixes that indicate verb usage (must end with space).
+const SIGNAL_VERB_PREFIXES: Record<string, string[]> = {
+  "produit": ["se "]  // "se produit" = occurs/happens, not "product"
+};
+
 function textContainsSignal(text: string, signals: string[]): boolean {
   const lower = text.toLowerCase();
   for (const signal of signals) {
@@ -283,12 +289,29 @@ function textContainsSignal(text: string, signals: string[]): boolean {
       if (lower.includes(sig)) return true;
     } else {
       // Single-word: require word-start boundary to avoid "ux" matching "aux"
+      const verbPrefixes = SIGNAL_VERB_PREFIXES[sig];
       let pos = 0;
       while (pos < lower.length) {
         const idx = lower.indexOf(sig, pos);
         if (idx === -1) break;
         const charBefore = idx > 0 ? lower[idx - 1] : "";
-        if (!charBefore || !LETTER_RE.test(charBefore)) return true;
+        if (!charBefore || !LETTER_RE.test(charBefore)) {
+          // Skip known verb-form prefixes (e.g., "se produit" but not "analyse produit")
+          if (verbPrefixes) {
+            const prefixRegion = lower.slice(Math.max(0, idx - 10), idx);
+            if (verbPrefixes.some(p => {
+              if (!prefixRegion.endsWith(p)) return false;
+              // "se " must itself be a standalone word — check char before it
+              const prefixStart = prefixRegion.length - p.length;
+              const charBeforePrefix = prefixStart > 0 ? prefixRegion[prefixStart - 1] : "";
+              return !charBeforePrefix || !LETTER_RE.test(charBeforePrefix);
+            })) {
+              pos = idx + 1;
+              continue;
+            }
+          }
+          return true;
+        }
         pos = idx + 1;
       }
     }

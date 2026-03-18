@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { NotionService, REQUIRED_DATABASES } from "../src/services/notion.js";
+import { mapReadinessTierToSelect, NotionService, REQUIRED_DATABASES } from "../src/services/notion.js";
 
 function makeNotionClient(overrides: Record<string, unknown> = {}) {
   return {
@@ -463,5 +463,27 @@ describe("notion service", () => {
     expect(viewNames).not.toContain("Signal Feed / Needs review");
     expect(viewNames).not.toContain("Signal Feed / Sensitive review");
     expect(viewNames).not.toContain("Content Opportunities / Needs routing");
+  });
+});
+
+// --- mapReadinessTierToSelect ---
+
+describe("mapReadinessTierToSelect", () => {
+  it("ready → 'Ready to draft'", () => {
+    expect(mapReadinessTierToSelect("ready")).toBe("Ready to draft");
+  });
+
+  it("promising → 'Promising — needs help' (em-dash, no comma)", () => {
+    const result = mapReadinessTierToSelect("promising");
+    expect(result).toBe("Promising — needs help");
+    expect(result).not.toContain(","); // Notion API rejects commas in select options
+  });
+
+  it("undefined → 'Needs more proof'", () => {
+    expect(mapReadinessTierToSelect(undefined)).toBe("Needs more proof");
+  });
+
+  it("needs-more-proof → 'Needs more proof'", () => {
+    expect(mapReadinessTierToSelect("needs-more-proof")).toBe("Needs more proof");
   });
 });
