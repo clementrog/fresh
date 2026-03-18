@@ -1357,3 +1357,99 @@ describe("backward compatibility — optional claim fields", () => {
     expect(result.productBacking).toBeDefined();
   });
 });
+
+// --- Backfill evidence guarantees ---
+
+describe("backfill:evidence guarantees", () => {
+  it("skips when evidence already equivalent (dedup by signature)", () => {
+    // Build evidence from the candidate item so the signatures naturally match
+    const candidate = makeItem({
+      source: "market-research",
+      externalId: "market-research:mq-1:hash-1",
+      sourceItemId: sourceItemDbId(COMPANY_ID, "market-research:mq-1:hash-1"),
+      title: "Enterprise buyers demand onboarding proof",
+      text: "Enterprise buyers increasingly demand concrete proof of simple onboarding before purchasing decisions.",
+      summary: "Onboarding proof for enterprise buyers"
+    });
+
+    const preBuiltEvidence = buildIntelligenceEvidence(candidate, COMPANY_ID, 1);
+    const opp = makeOpportunity({
+      evidence: preBuiltEvidence,
+      primaryEvidence: preBuiltEvidence[0]
+    });
+
+    const result = findSupportingEvidence(opp, [candidate], COMPANY_ID);
+    expect(result.evidence).toHaveLength(0);
+    expect(result.sources).toHaveLength(0);
+  });
+
+  it("preserves primary evidence — never replaces primaryEvidenceId", () => {
+    const primaryEvidence = makeEvidence({
+      id: "ev-primary",
+      source: "notion",
+      sourceItemId: sourceItemDbId(COMPANY_ID, "notion:origin-page"),
+      excerpt: "Original discovery insight about onboarding proof enterprise buyers demand.",
+      excerptHash: "primary-hash"
+    });
+    const opp = makeOpportunity({
+      evidence: [primaryEvidence],
+      primaryEvidence
+    });
+
+    const candidate = makeItem({
+      source: "market-research",
+      externalId: "market-research:backfill-1:hash-bf",
+      sourceItemId: sourceItemDbId(COMPANY_ID, "market-research:backfill-1:hash-bf"),
+      title: "Enterprise onboarding proof trends",
+      text: "Concrete proof of onboarding effectiveness drives enterprise purchasing decisions faster than any other factor.",
+      summary: "Enterprise buyers demand proof of onboarding"
+    });
+
+    const result = findSupportingEvidence(opp, [candidate], COMPANY_ID);
+    // New evidence is added as supporting, not replacing primary
+    expect(result.evidence.length).toBeGreaterThan(0);
+    for (const ev of result.evidence) {
+      expect(ev.id).not.toBe(primaryEvidence.id);
+    }
+    // Original primary remains in opp.evidence
+    expect(opp.primaryEvidence.id).toBe("ev-primary");
+    expect(opp.evidence[0].id).toBe("ev-primary");
+  });
+
+  it("is idempotent — second run returns 0 new evidence", () => {
+    const primaryEvidence = makeEvidence({
+      id: "ev-primary",
+      source: "notion",
+      sourceItemId: sourceItemDbId(COMPANY_ID, "notion:origin-page"),
+      excerpt: "Original discovery insight about onboarding proof enterprise buyers demand.",
+      excerptHash: "primary-hash"
+    });
+    const opp = makeOpportunity({
+      evidence: [primaryEvidence],
+      primaryEvidence
+    });
+
+    const candidate = makeItem({
+      source: "market-research",
+      externalId: "market-research:backfill-idem:hash-id",
+      sourceItemId: sourceItemDbId(COMPANY_ID, "market-research:backfill-idem:hash-id"),
+      title: "Enterprise onboarding proof trends",
+      text: "Concrete proof of onboarding effectiveness drives enterprise purchasing decisions faster than any other factor.",
+      summary: "Enterprise buyers demand proof of onboarding"
+    });
+
+    // First run — should find new evidence
+    const firstRun = findSupportingEvidence(opp, [candidate], COMPANY_ID);
+    expect(firstRun.evidence.length).toBeGreaterThan(0);
+
+    // Simulate persistence: add the new evidence to the opportunity
+    const updatedOpp = makeOpportunity({
+      evidence: [...opp.evidence, ...firstRun.evidence],
+      primaryEvidence
+    });
+
+    // Second run — same candidates, same opportunity (now with the evidence) → 0 new
+    const secondRun = findSupportingEvidence(updatedOpp, [candidate], COMPANY_ID);
+    expect(secondRun.evidence).toHaveLength(0);
+  });
+});

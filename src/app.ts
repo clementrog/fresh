@@ -105,6 +105,8 @@ export class EditorialSignalEngineApp {
         return this.scanSelections(context);
       case "cleanup:retention":
         return this.cleanupRetention(context);
+      case "backfill:evidence":
+        return this.backfillEvidence(context);
       default:
         throw new Error(`Unsupported command: ${command satisfies never}`);
     }
@@ -631,6 +633,120 @@ export class EditorialSignalEngineApp {
       await this.finishRun(finished, [], context);
     } catch (error) {
       const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown retention cleanup error");
+      await this.finishRun(failed, [], context);
+      throw error;
+    }
+  }
+
+  private async backfillEvidence(context: RunContext) {
+    const company = await this.getActiveCompany(context);
+    const run = createRun("backfill:evidence");
+    run.companyId = company.id;
+    if (!context.dryRun) {
+      await this.repositories.createSyncRun(run);
+    }
+
+    try {
+      const opportunityRows = await this.repositories.listRecentActiveOpportunities({
+        companyId: company.id,
+        take: 500
+      });
+      const opportunities = opportunityRows.map((row) => this.mapOpportunityRow(row));
+
+      const candidateRows = await this.repositories.listCandidateSourceItems({
+        companyId: company.id,
+        take: 500
+      });
+      const candidateItems = candidateRows.map((row) => this.mapStoredSourceItem(row));
+
+      // Load users for owner display names in Notion sync
+      const users = await this.repositories.listUsers(company.id);
+
+      let enrichedCount = 0;
+      let skippedCount = 0;
+
+      for (const opp of opportunities) {
+        const { evidence: supportEvidence, sources: supportSources } = findSupportingEvidence(
+          opp, candidateItems, company.id
+        );
+
+        if (supportEvidence.length === 0) {
+          skippedCount += 1;
+          continue;
+        }
+
+        const logEntry: EnrichmentLogEntry = {
+          createdAt: new Date().toISOString(),
+          rawSourceItemId: opp.primaryEvidence.sourceItemId,
+          evidenceIds: supportEvidence.map((e) => e.id),
+          contextComment: `Backfill: added ${supportEvidence.length} supporting items from ${[...new Set(supportSources.map((s) => s.source))].join(", ")}`,
+          confidence: 0.6,
+          reason: "Evidence backfill enrichment"
+        };
+
+        if (context.dryRun) {
+          this.logger.info(
+            { opportunityId: opp.id, title: opp.title, newEvidence: supportEvidence.length },
+            `[dry-run] Would add ${supportEvidence.length} evidence items`
+          );
+          enrichedCount += 1;
+          continue;
+        }
+
+        await this.repositories.persistStandaloneEvidence(
+          {
+            evidence: supportEvidence,
+            companyId: company.id,
+            opportunityId: opp.id,
+            primaryEvidenceId: opp.primaryEvidence.id,
+            supportingEvidenceCount: opp.supportingEvidenceCount + supportEvidence.length,
+            evidenceFreshness: opp.evidenceFreshness,
+            relevanceNote: "Evidence backfill enrichment"
+          },
+          this.prisma
+        );
+
+        await this.repositories.enrichOpportunity({
+          opportunityId: opp.id,
+          enrichmentLogJson: [...opp.enrichmentLog, logEntry],
+          newEvidence: [],
+          primaryEvidenceId: opp.primaryEvidence.id,
+          supportingEvidenceCount: opp.supportingEvidenceCount + supportEvidence.length,
+          evidenceFreshness: opp.evidenceFreshness,
+          companyId: company.id,
+          relevanceNote: logEntry.contextComment
+        });
+
+        const allEvidence = [...opp.evidence, ...supportEvidence];
+        const sourceItemIds = [...new Set(allEvidence.map((e) => e.sourceItemId))];
+        const sourceItemRows = await this.repositories.listSourceItemsByIds(sourceItemIds);
+        const sourceItems = sourceItemRows.map((row) => this.mapStoredSourceItem(row));
+        const readiness = assessDraftReadiness(opp, allEvidence, { sourceItems });
+
+        const ownerDisplayName = opp.ownerUserId
+          ? users.find((u) => u.id === opp.ownerUserId)?.displayName
+          : undefined;
+        const syncResult = await this.notion.syncOpportunity(
+          { ...opp, evidence: allEvidence, enrichmentLog: [...opp.enrichmentLog, logEntry], supportingEvidenceCount: opp.supportingEvidenceCount + supportEvidence.length, evidenceExcerpts: allEvidence.map((e) => e.excerpt) },
+          null,
+          { ownerDisplayName, draftReadiness: { tier: readiness.readinessTier, guidance: readiness.operatorGuidance } }
+        );
+        if (syncResult) {
+          run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
+          await this.repositories.updateOpportunityNotionSync(opp.id, syncResult.notionPageId, opp.notionPageFingerprint);
+        }
+
+        enrichedCount += 1;
+      }
+
+      const finished = finalizeRun(
+        run,
+        "completed",
+        `Evidence backfill: enriched ${enrichedCount}, skipped ${skippedCount} (already sufficient)`
+      );
+      await this.finishRun(finished, [], context);
+    } catch (error) {
+      const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown backfill error");
       await this.finishRun(failed, [], context);
       throw error;
     }

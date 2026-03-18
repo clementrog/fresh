@@ -22,7 +22,8 @@
     "server:start": "tsx src/server.ts",
     "setup:notion": "tsx src/cli.ts setup:notion",
     "selection:scan": "tsx src/cli.ts selection:scan",
-    "cleanup:retention": "tsx src/cli.ts cleanup:retention"
+    "cleanup:retention": "tsx src/cli.ts cleanup:retention",
+    "backfill:evidence": "tsx src/cli.ts backfill:evidence"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

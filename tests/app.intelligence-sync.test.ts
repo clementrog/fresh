@@ -200,22 +200,31 @@ function buildNotion() {
   };
 }
 
+function buildPrisma() {
+  return {
+    $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback({}))
+  };
+}
+
 function buildApp(overrides: {
   repositories?: ReturnType<typeof buildRepositories>;
   notion?: ReturnType<typeof buildNotion>;
+  prisma?: ReturnType<typeof buildPrisma>;
 } = {}) {
   const repositories = overrides.repositories ?? buildRepositories();
   const notion = overrides.notion ?? buildNotion();
+  const prisma = overrides.prisma ?? buildPrisma();
   const app = new EditorialSignalEngineApp(
     buildEnv(),
     { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
     {
+      prisma: prisma as any,
       repositories: repositories as any,
       llmClient: {} as any,
       notion: notion as any
     }
   );
-  return { app, repositories, notion };
+  return { app, repositories, notion, prisma };
 }
 
 describe("intelligence sync — created opportunities", () => {

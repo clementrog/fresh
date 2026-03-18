@@ -54,7 +54,8 @@ export type RunType =
   | "server:start"
   | "setup:notion"
   | "selection:scan"
-  | "cleanup:retention";
+  | "cleanup:retention"
+  | "backfill:evidence";
 
 export interface RateLimitConfig {
   requestsPerMinute: number;
