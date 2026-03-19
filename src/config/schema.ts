@@ -101,7 +101,7 @@ export const draftOutputSchema = z.object({
   whatItIsAbout: z.string().min(1),
   whatItIsNotAbout: z.string().min(1),
   visualIdea: z.string().min(1),
-  firstDraftText: z.string().min(1),
+  firstDraftText: z.string().min(50).max(2000),
   confidenceScore: z.number().min(0).max(1)
 });
 

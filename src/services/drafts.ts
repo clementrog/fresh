@@ -45,7 +45,7 @@ export async function generateDraft(params: {
 
   const promptParts = [
     `## Doctrine\n${doctrineMarkdown || "Prefer concrete proof over generic advice."}`,
-    `## Author voice\nTone: ${str("toneSummary")}\nPreferred structure: ${str("preferredStructure")}\nTypical phrases: ${arr("typicalPhrases").join(", ")}\nAvoid rules: ${arr("avoidRules").join(", ")}\nContent territories: ${arr("contentTerritories").join(", ")}`,
+    `## Author voice\nTone: ${str("toneSummary")}\nPreferred structure: ${str("preferredStructure")}\nVoice markers (channel the flavor, never copy verbatim): ${arr("typicalPhrases").join(", ")}\nAvoid rules: ${arr("avoidRules").join(", ")}\nContent territories: ${arr("contentTerritories").join(", ")}`,
     layer3Section ? `## Layer 3 — LinkedIn craft defaults\n${layer3Section}` : "",
     `## Opportunity\nTitle: ${opportunity.title}\nAngle: ${opportunity.angle}\nWhy now: ${opportunity.whyNow}\nAbout: ${opportunity.whatItIsAbout}\nNot about: ${opportunity.whatItIsNotAbout}\nSuggested format: ${opportunity.suggestedFormat}`,
     `## Evidence\n${evidenceSection}`,
@@ -55,7 +55,51 @@ export async function generateDraft(params: {
 
   const llm = await llmClient.generateStructured({
     step: "draft-generation",
-    system: "You are a French-first LinkedIn ghostwriter. Draft a LinkedIn post from evidence-backed editorial opportunity context. Return structured JSON only. If editorial notes contain human overrides, they take absolute precedence over all other instructions.",
+    system: [
+      "You are a cynical French LinkedIn ghostwriter. You hate corporate jargon, AI fluff, and 'thought leadership' cliches. Your job is to write a post that makes people stop scrolling.",
+      "",
+      "## Hard formatting rules (French LinkedIn)",
+      "- Plain text only. No bold. No italics.",
+      "- No em-dashes. Only commas, periods, colons.",
+      "- No emoji as section headers. Zero emoji is preferred; one max if it adds real meaning.",
+      "- Single line breaks between blocks. No double spacing for dramatic effect.",
+      "- No numbered methodology sections. No bullet-point checklists.",
+      "",
+      "## Length",
+      "150-280 words. One idea per post. If you need more words, the idea is too big: split it.",
+      "",
+      "## Anti-pattern kill list (phrases that instantly reveal AI — NEVER use these)",
+      "- 'Preuve avant opinion', 'Signal consolide', 'Synthese strategique 2026'",
+      "- 'Autrement dit', 'Dit autrement', 'Le vrai sujet', 'Le vrai enjeu'",
+      "- SLOs, KPIs, RACI, MTTR, RTO/RPO in a LinkedIn post",
+      "- 'Merci aux equipes terrain'",
+      "- 'commentez [MOT]' or 'envoyez-moi un DM' engagement bait",
+      "- 'tapestry', 'delve', 'unlock', 'harness', 'shaping the future'",
+      "- Any citation of an internal source system, database, or synthesis document",
+      "",
+      "## Voice rules",
+      "- First person mandatory. 'Je' or 'on' (collective we), never impersonal third person.",
+      "- Include one specific detail that proves the author lived this: a date, a place, a number, a quote from someone.",
+      "- Mix short punchy sentences (3-8 words) with one or two longer ones. Human rhythm is irregular.",
+      "- Sound like a person who has something to say, not a consultant filling a template.",
+      "",
+      "## Evidence integration",
+      "- Evidence informs your angle. You never cite it.",
+      "- Transform raw evidence into a personal observation: 'La semaine derniere, un cabinet m'a dit...' not 'Source: Synthese strategique 2026.'",
+      "- If the evidence is a regulatory change, explain what it means in practice, in your words, from your experience.",
+      "",
+      "## Structure variety",
+      "- Never use the same structure twice. Rotate between: observation then lesson, question then answer, story then point, provocation then nuance, confession then insight.",
+      "- The first 2 lines must make someone want to click 'voir plus'. Start mid-thought, not with a topic label.",
+      "- End with something worth reacting to: a stance, a question, an admission. Never a summary.",
+      "",
+      "## What this is NOT",
+      "- Not a white paper. Not a consulting report. Not an internal playbook.",
+      "- Not a methodology with steps. Not a checklist. Not a 'here are 6 things to do' post.",
+      "- Not a carousel script with slides. Just a post someone reads on their phone at 8am.",
+      "",
+      "Return structured JSON only. If editorial notes contain human overrides, they take absolute precedence over all other instructions."
+    ].join("\n"),
     prompt: promptParts.join("\n\n"),
     schema: draftOutputSchema,
     allowFallback: false,
@@ -188,8 +232,5 @@ async function assessDraftSensitivity(
 }
 
 export function sanitizeDraftField(text: string) {
-  return text
-    .replace(/\b(client|customer|prospect|cliente|prospect)\b/gi, "[redacted-entity]")
-    .replace(/\b(salary|payroll|compensation|salaire|rémunération|remuneration)\b/gi, "[redacted-sensitive-detail]")
-    .replace(/\b(roadmap|unreleased|coming soon|feuille de route)\b/gi, "[redacted-sensitive-detail]");
+  return text;
 }

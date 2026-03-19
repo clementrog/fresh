@@ -112,7 +112,7 @@ const safeDraftOutput = {
   whatItIsAbout: "À propos",
   whatItIsNotAbout: "Pas à propos",
   visualIdea: "Visuel simple",
-  firstDraftText: "Le texte du post.",
+  firstDraftText: "Le texte du post. Un vrai brouillon qui fait plus de cinquante caracteres pour passer la validation.",
   confidenceScore: 0.85
 };
 

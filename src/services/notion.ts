@@ -143,14 +143,11 @@ export class NotionService {
       heading_2: { rich_text: [{ text: { content: "Draft V1" } }] }
     });
 
-    // Hook as a callout
+    // Hook as a plain paragraph (first line of the post)
     if (draft.hook) {
       blocks.push({
-        type: "callout",
-        callout: {
-          icon: { emoji: "🪝" },
-          rich_text: [{ text: { content: draft.hook.slice(0, 2000) } }]
-        }
+        type: "paragraph",
+        paragraph: { rich_text: [{ text: { content: draft.hook.slice(0, 2000) } }] }
       });
     }
 

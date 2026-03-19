@@ -94,9 +94,13 @@ export async function ensureConvergenceFoundation(
       },
       layer3LinkedInCraft: {
         defaults: [
-          "Strong hook",
-          "Concrete lesson",
-          "Proof before opinion"
+          "Max 250 words. One idea per post.",
+          "First 2 lines must create a reason to click voir plus. No descriptive openings.",
+          "Plain text. No emoji headers. No bold. No numbered sections.",
+          "Write like a person, not a framework. First person mandatory.",
+          "End with something worth reacting to. Not a summary.",
+          "Never cite internal source systems. Transform evidence into personal observation.",
+          "Vary structure across posts. Never repeat the same skeleton."
         ]
       },
       createdAt: new Date().toISOString()

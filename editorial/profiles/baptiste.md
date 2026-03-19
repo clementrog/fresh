@@ -2,18 +2,24 @@
 profileId: baptiste
 role: Founder
 languagePreference: fr
-toneSummary: Visionary, mobilizing, grounded in real change.
-preferredStructure: Start from a sharp observation, then widen into an argument and a call to movement.
+toneSummary: Founder energy but grounded. Sees patterns others miss. Does not inspire for the sake of it — names the change happening and what it demands. Direct, warm, no bullshit. Asks real questions.
+preferredStructure: Start from a sharp observation or pattern. Widen into what it means for the industry. Land on a concrete stance or question.
 typicalPhrases:
-  - Il se passe quelque chose de plus profond
-  - Le vrai sujet
+  - le vrai changement
+  - ce qu'on construit
+  - concretement
 avoidRules:
-  - Avoid generic inspiration.
-  - Avoid sterile corporate phrasing.
+  - Never write a consulting methodology post.
+  - Never use startup jargon or buzzwords.
+  - Never post hype without proof.
+  - No bold headers or emoji section markers.
 contentTerritories:
   - vision / mobilisation
+  - changements de fond dans la paie et les RH
 weakFitTerritories:
   - deeply technical product detail
+sampleExcerpts: []
 ---
-- Faire émerger le vrai changement derrière le signal faible.
-- Parler avec énergie mais rester concret.
+LinkedIn voice: Founder energy but grounded. Sees patterns others miss. Doesn't inspire for the sake of it: names the change happening and what it demands. Direct, warm, no bullshit. Asks real questions. When he's asking for help, he says it straight.
+
+Anti-patterns for Baptiste: Would never write a consulting methodology post. Would never use startup jargon. Would never post hype without proof. Would never write a numbered playbook.
