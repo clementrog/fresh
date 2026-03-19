@@ -111,16 +111,95 @@ export class NotionService {
         "Evidence freshness": numberProperty(opportunity.evidenceFreshness),
         "Evidence excerpts": richTextProperty(opportunity.evidenceExcerpts.join("\n\n")),
         "Enrichment log": richTextProperty(enrichmentLogText),
-        "V1 draft": richTextProperty(draft?.firstDraftText ?? opportunity.v1History?.at(-1) ?? ""),
+        "V1 draft": richTextProperty(draft ? `V1 generated on ${new Date().toISOString().slice(0, 10)}` : ""),
         "Selected at": opportunity.selectedAt ? dateProperty(opportunity.selectedAt) : emptyDateProperty(),
+        "Editorial owner": richTextProperty(ownerDisplay),
         "Opportunity fingerprint": richTextProperty(opportunity.notionPageFingerprint)
       },
       createOnlyProperties: {
         Status: selectProperty(opportunity.status),
-        "Editorial notes": richTextProperty(""),
-        "Editorial owner": richTextProperty("")
+        "Editorial notes": richTextProperty("")
       }
     });
+  }
+
+  /** Write draft content into the page body, replacing any existing draft section. */
+  async writeDraftToPageBody(notionPageId: string, draft: DraftV1): Promise<void> {
+    if (!this.client) return;
+
+    // Clear existing page content
+    const existing = await this.client.blocks.children.list({ block_id: notionPageId, page_size: 100 });
+    for (const block of existing.results) {
+      if ("type" in block) {
+        await this.client.blocks.delete({ block_id: block.id });
+      }
+    }
+
+    // Build blocks for the draft
+    const blocks: any[] = [];
+
+    blocks.push({
+      type: "heading_2",
+      heading_2: { rich_text: [{ text: { content: "Draft V1" } }] }
+    });
+
+    // Hook as a callout
+    if (draft.hook) {
+      blocks.push({
+        type: "callout",
+        callout: {
+          icon: { emoji: "🪝" },
+          rich_text: [{ text: { content: draft.hook.slice(0, 2000) } }]
+        }
+      });
+    }
+
+    // Main draft text as paragraphs (split on double newlines, respect 2000 char limit)
+    const paragraphs = draft.firstDraftText.split(/\n{2,}/);
+    for (const para of paragraphs) {
+      if (!para.trim()) continue;
+      // Notion rich_text limit is 2000 chars per element
+      for (let i = 0; i < para.length; i += 2000) {
+        blocks.push({
+          type: "paragraph",
+          paragraph: { rich_text: [{ text: { content: para.slice(i, i + 2000) } }] }
+        });
+      }
+    }
+
+    blocks.push({ type: "divider", divider: {} });
+
+    // Visual idea
+    if (draft.visualIdea) {
+      blocks.push({
+        type: "heading_3",
+        heading_3: { rich_text: [{ text: { content: "Visual idea" } }] }
+      });
+      blocks.push({
+        type: "paragraph",
+        paragraph: { rich_text: [{ text: { content: draft.visualIdea.slice(0, 2000) } }] }
+      });
+    }
+
+    // Summary
+    if (draft.summary) {
+      blocks.push({
+        type: "heading_3",
+        heading_3: { rich_text: [{ text: { content: "Summary" } }] }
+      });
+      blocks.push({
+        type: "paragraph",
+        paragraph: { rich_text: [{ text: { content: draft.summary.slice(0, 2000) } }] }
+      });
+    }
+
+    // Append all blocks (Notion allows max 100 per call)
+    for (let i = 0; i < blocks.length; i += 100) {
+      await this.client.blocks.children.append({
+        block_id: notionPageId,
+        children: blocks.slice(i, i + 100)
+      });
+    }
   }
 
   /** Sync a User record to the Profiles database. */
@@ -200,6 +279,46 @@ export class NotionService {
     }
   }
 
+  async readToneOfVoiceProfiles(databaseId: string): Promise<Array<{
+    profileName: string;
+    voiceSummary: string;
+    preferredPatterns: string;
+    avoid: string;
+  }>> {
+    if (!this.client || !databaseId) return [];
+
+    const results: Array<{ profileName: string; voiceSummary: string; preferredPatterns: string; avoid: string }> = [];
+    let startCursor: string | undefined;
+
+    do {
+      const response = await this.client.databases.query({
+        database_id: databaseId,
+        start_cursor: startCursor
+      });
+
+      for (const page of response.results.filter((r) => r.object === "page")) {
+        const p = page as any;
+        const text = (prop: string) => {
+          const val = p.properties[prop];
+          if (val?.type === "rich_text") return val.rich_text.map((t: { plain_text: string }) => t.plain_text).join("");
+          if (val?.type === "title") return val.title.map((t: { plain_text: string }) => t.plain_text).join("");
+          return "";
+        };
+
+        results.push({
+          profileName: text("Profile"),
+          voiceSummary: text("Voice summary"),
+          preferredPatterns: text("Preferred patterns"),
+          avoid: text("Avoid")
+        });
+      }
+
+      startCursor = response.has_more ? response.next_cursor ?? undefined : undefined;
+    } while (startCursor);
+
+    return results;
+  }
+
   async listSelectedOpportunities(): Promise<NotionSelectionRow[]> {
     if (!this.client) return [];
     const databaseId = await this.ensureDatabase("Content Opportunities");
@@ -211,20 +330,10 @@ export class NotionService {
         database_id: databaseId,
         start_cursor: startCursor,
         filter: {
-          and: [
-            {
-              property: "Editorial owner",
-              rich_text: {
-                is_not_empty: true
-              }
-            },
-            {
-              property: "Status",
-              select: {
-                does_not_equal: "Selected"
-              }
-            }
-          ]
+          property: "Status",
+          select: {
+            equals: "Ready for V1"
+          }
         }
       });
 

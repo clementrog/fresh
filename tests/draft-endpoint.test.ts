@@ -134,7 +134,7 @@ describe("anti-regression: signal-era commands are removed (Phase 9)", () => {
 });
 
 describe("anti-regression: draft creation only through explicit trigger", () => {
-  it("generateDraft is called exactly once in app.ts, inside generateDraftOnDemand", async () => {
+  it("generateDraft is called only in explicit draft trigger methods", async () => {
     const fs = await import("fs");
     const appSource = fs.readFileSync(new URL("../src/app.ts", import.meta.url), "utf-8");
 
@@ -144,16 +144,17 @@ describe("anti-regression: draft creation only through explicit trigger", () => 
     const generateDraftCallLines = lines.filter((line) =>
       line.includes("generateDraft(") &&
       !line.includes("import") &&
-      !line.includes("generateDraftOnDemand")
+      !line.includes("generateDraftOnDemand") &&
+      !line.includes("generateDraftsForReady")
     );
-    expect(generateDraftCallLines.length).toBe(1);
+    expect(generateDraftCallLines.length).toBe(2);
 
     // persistDraftGraph calls (excluding import line)
     const persistLines = lines.filter((line) =>
       line.includes("persistDraftGraph") &&
       !line.includes("import")
     );
-    expect(persistLines.length).toBe(1);
+    expect(persistLines.length).toBe(2);
   });
 
   it("draft:generate is the only command that routes to generateDraftOnDemand", async () => {

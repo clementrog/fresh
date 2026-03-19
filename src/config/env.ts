@@ -20,6 +20,7 @@ export interface AppEnv {
   LLM_TIMEOUT_MS?: number;
   HTTP_PORT?: number;
   LOG_LEVEL?: string;
+  NOTION_TONE_OF_VOICE_DB_ID?: string;
 }
 
 export function loadEnv() {

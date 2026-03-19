@@ -86,7 +86,7 @@ export class EditorialSignalEngineApp {
       port: options.port
     };
 
-    await ensureConvergenceFoundation(this.repositories, this.env);
+    await ensureConvergenceFoundation(this.repositories, this.env, this.notion);
 
     switch (command) {
       case "ingest:run":
@@ -97,6 +97,8 @@ export class EditorialSignalEngineApp {
         return this.intelligenceRun(context);
       case "draft:generate":
         return this.generateDraftOnDemand(context);
+      case "draft:generate-ready":
+        return this.generateDraftsForReady(context);
       case "server:start":
         throw new Error("Use `pnpm server:start` to launch the HTTP server entrypoint.");
       case "setup:notion":
@@ -568,12 +570,17 @@ export class EditorialSignalEngineApp {
         const draftReadiness = assessDraftReadiness(opportunity, opportunity.evidence, {
           sourceItems: draftSourceItems
         });
+        const ownerDisplayName = opportunity.ownerUserId
+          ? inputs.users.find(u => u.id === opportunity.ownerUserId)?.displayName
+          : undefined;
         const syncResult = await this.notion.syncOpportunity(opportunity, result.draft, {
+          ownerDisplayName,
           draftReadiness: { tier: draftReadiness.readinessTier, guidance: draftReadiness.operatorGuidance }
         });
         if (syncResult) {
           run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
           await this.repositories.updateOpportunityNotionSync(opportunity.id, syncResult.notionPageId, opportunity.notionPageFingerprint);
+          await this.notion.writeDraftToPageBody(syncResult.notionPageId, result.draft);
         }
       }
 
@@ -584,6 +591,108 @@ export class EditorialSignalEngineApp {
     } catch (error) {
       const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown draft generation error");
       await this.finishRun(failed, costs, context);
+      throw error;
+    }
+  }
+
+  private async generateDraftsForReady(context: RunContext) {
+    const company = await this.getActiveCompany(context);
+    const run = createRun("draft:generate-ready");
+    run.companyId = company.id;
+    const costs: Array<ReturnType<typeof createCostEntry>> = [];
+    if (!context.dryRun) {
+      await this.repositories.createSyncRun(run);
+    }
+
+    try {
+      const inputs = await this.loadIntelligenceInputs(company.id);
+      const recentOpps = await this.repositories.listRecentActiveOpportunities({ companyId: company.id, take: 200 });
+      const opportunities = recentOpps.map((row) => this.mapOpportunityRow(row));
+
+      // Compute readiness and filter to "ready" opportunities without existing drafts
+      const sourceItemIds = [...new Set(opportunities.flatMap(o => o.evidence.map(e => e.sourceItemId)))];
+      const sourceItemRows = await this.repositories.listSourceItemsByIds(sourceItemIds);
+      const sourceItems = sourceItemRows.map(row => this.mapStoredSourceItem(row));
+
+      const readyOpps = opportunities.filter(opp => {
+        if (opp.status === "V1 generated" || opp.status === "Selected") return false;
+        if (opp.evidence.length === 0 || opp.primaryEvidence.excerpt.length === 0) return false;
+        const readiness = assessDraftReadiness(opp, opp.evidence, { sourceItems });
+        return readiness.readinessTier === "ready";
+      });
+
+      this.logger.info?.({ count: readyOpps.length }, "Opportunities ready for draft generation");
+
+      let generated = 0;
+      let failed = 0;
+      for (const opportunity of readyOpps) {
+        try {
+          const authorUser = inputs.users.find(u => u.id === opportunity.ownerUserId)
+            ?? inputs.users.find(u => u.displayName === opportunity.ownerProfile);
+          if (!authorUser) {
+            this.logger.warn?.({ opportunityId: opportunity.id }, "No matching user, skipping");
+            continue;
+          }
+
+          const editorialNotes = opportunity.notionPageId
+            ? await this.notion.getEditorialNotes(opportunity.notionPageId)
+            : "";
+
+          const result = await generateDraft({
+            opportunity,
+            user: authorUser,
+            llmClient: this.llmClient,
+            sensitivityRulesMarkdown: inputs.sensitivityMarkdown,
+            doctrineMarkdown: inputs.doctrineMarkdown,
+            editorialNotes,
+            layer3Defaults: inputs.layer3Defaults
+          });
+
+          for (const usageEvent of result.usageEvents) {
+            this.recordUsage(run, costs, usageEvent.usage, `${opportunity.id}:${usageEvent.step}`, new Set<string>());
+          }
+
+          if (result.blocked || !result.draft) {
+            this.logger.warn?.({ opportunityId: opportunity.id, reason: result.blockRationale }, "Draft blocked by sensitivity");
+            failed += 1;
+            continue;
+          }
+
+          opportunity.readiness = "V1 generated";
+          opportunity.status = "V1 generated";
+          opportunity.v1History = [...(opportunity.v1History ?? []), result.draft.firstDraftText];
+
+          if (!context.dryRun) {
+            await this.repositories.persistDraftGraph(result.draft, opportunity, company.id);
+            const ownerDisplayName = opportunity.ownerUserId
+              ? inputs.users.find(u => u.id === opportunity.ownerUserId)?.displayName
+              : undefined;
+            const readiness = assessDraftReadiness(opportunity, opportunity.evidence, { sourceItems });
+            const syncResult = await this.notion.syncOpportunity(opportunity, result.draft, {
+              ownerDisplayName,
+              draftReadiness: { tier: readiness.readinessTier, guidance: readiness.operatorGuidance }
+            });
+            if (syncResult) {
+              run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
+              await this.repositories.updateOpportunityNotionSync(opportunity.id, syncResult.notionPageId, opportunity.notionPageFingerprint);
+              await this.notion.writeDraftToPageBody(syncResult.notionPageId, result.draft);
+            }
+          }
+
+          generated += 1;
+          run.counters.draftsCreated += 1;
+          this.logger.info?.({ opportunityId: opportunity.id, owner: opportunity.ownerProfile }, "Draft generated");
+        } catch (error) {
+          this.logger.error?.({ opportunityId: opportunity.id, error: error instanceof Error ? error.message : "unknown" }, "Draft generation failed");
+          failed += 1;
+        }
+      }
+
+      const finished = finalizeRun(run, "completed", `Batch draft: ${generated} generated, ${failed} failed, ${readyOpps.length} candidates`);
+      await this.finishRun(finished, costs, context);
+    } catch (error) {
+      const failedRun = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown batch draft error");
+      await this.finishRun(failedRun, costs, context);
       throw error;
     }
   }

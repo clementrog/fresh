@@ -1,12 +1,14 @@
 import type { AppEnv } from "../config/env.js";
 import { loadConnectorConfigs, loadDoctrineMarkdown, loadProfileBases, loadSensitivityMarkdown } from "../config/loaders.js";
-import type { CompanyRecord, EditorialConfigRecord, SourceConfigRecord, UserRecord } from "../domain/types.js";
+import type { CompanyRecord, EditorialConfigRecord, ProfileBase, SourceConfigRecord, UserRecord } from "../domain/types.js";
 import { createDeterministicId } from "../lib/ids.js";
 import type { RepositoryBundle } from "../db/repositories.js";
+import type { NotionService } from "./notion.js";
 
 export async function ensureConvergenceFoundation(
   repositories: RepositoryBundle,
-  env: AppEnv
+  env: AppEnv,
+  notion?: NotionService
 ): Promise<CompanyRecord> {
   if (typeof (repositories as Partial<RepositoryBundle>).ensureDefaultCompany !== "function") {
     return {
@@ -33,7 +35,11 @@ export async function ensureConvergenceFoundation(
     repositories.getLatestEditorialConfig(company.id)
   ]);
 
-  for (const profile of profiles) {
+  // Merge Tone of voice from Notion if available
+  const toneOverrides = await loadToneOfVoiceOverrides(notion, env.NOTION_TONE_OF_VOICE_DB_ID);
+  const mergedProfiles = profiles.map((profile) => applyToneOverride(profile, toneOverrides));
+
+  for (const profile of mergedProfiles) {
     const user: UserRecord = {
       id: createDeterministicId("user", [company.id, profile.profileId]),
       companyId: company.id,
@@ -99,4 +105,45 @@ export async function ensureConvergenceFoundation(
   }
 
   return company;
+}
+
+type ToneOverride = {
+  toneSummary: string;
+  preferredStructure: string;
+  avoidRules: string[];
+};
+
+async function loadToneOfVoiceOverrides(
+  notion: NotionService | undefined,
+  databaseId: string | undefined
+): Promise<Map<string, ToneOverride>> {
+  const overrides = new Map<string, ToneOverride>();
+  if (!notion || !databaseId) return overrides;
+
+  const toneProfiles = await notion.readToneOfVoiceProfiles(databaseId);
+  for (const tp of toneProfiles) {
+    // Match by first name (lowercase): "Baptiste Le Bihan" → "baptiste"
+    const firstName = tp.profileName.split(" ")[0]?.toLowerCase();
+    if (!firstName) continue;
+
+    overrides.set(firstName, {
+      toneSummary: tp.voiceSummary,
+      preferredStructure: tp.preferredPatterns,
+      avoidRules: tp.avoid.split(/[,\n]/).map((s) => s.trim()).filter(Boolean)
+    });
+  }
+
+  return overrides;
+}
+
+function applyToneOverride(profile: ProfileBase, overrides: Map<string, ToneOverride>): ProfileBase {
+  const override = overrides.get(profile.profileId);
+  if (!override) return profile;
+
+  return {
+    ...profile,
+    toneSummary: override.toneSummary || profile.toneSummary,
+    preferredStructure: override.preferredStructure || profile.preferredStructure,
+    avoidRules: override.avoidRules.length > 0 ? override.avoidRules : profile.avoidRules
+  };
 }

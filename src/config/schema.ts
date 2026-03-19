@@ -29,7 +29,8 @@ export const envSchema = z.object({
   LLM_MODEL: z.string().default("gpt-4.1-mini"),
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(45000),
   HTTP_PORT: z.coerce.number().int().positive().default(3000),
-  LOG_LEVEL: z.string().default("info")
+  LOG_LEVEL: z.string().default("info"),
+  NOTION_TONE_OF_VOICE_DB_ID: z.string().default("")
 });
 
 export const rateLimitSchema = z.object({

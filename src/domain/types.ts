@@ -51,6 +51,7 @@ export type RunType =
   | "market-research:run"
   | "intelligence:run"
   | "draft:generate"
+  | "draft:generate-ready"
   | "server:start"
   | "setup:notion"
   | "selection:scan"

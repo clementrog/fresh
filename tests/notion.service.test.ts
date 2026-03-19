@@ -157,7 +157,7 @@ describe("notion service", () => {
     const updateProps = (pagesUpdate.mock.calls[0] as any[])[0].properties;
     expect(updateProps).not.toHaveProperty("Status");
     expect(updateProps).not.toHaveProperty("Editorial notes");
-    expect(updateProps).not.toHaveProperty("Editorial owner");
+    expect(updateProps).toHaveProperty("Editorial owner");
   });
 
   it("syncOpportunity on create includes Status, Editorial notes, Editorial owner", async () => {
