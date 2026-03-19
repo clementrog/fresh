@@ -83,6 +83,7 @@ export interface ClaapSourceConfig extends SourceSyncConfig {
   source: "claap";
   workspaceIds: string[];
   folderIds: string[];
+  maxRecordingsPerRun: number;
 }
 
 export interface LinearSourceConfig extends SourceSyncConfig {

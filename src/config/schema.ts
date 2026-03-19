@@ -56,7 +56,21 @@ export const notionSourceConfigSchema = sourceBaseSchema.extend({
 export const claapSourceConfigSchema = sourceBaseSchema.extend({
   source: z.literal("claap"),
   workspaceIds: z.array(z.string()),
-  folderIds: z.array(z.string())
+  folderIds: z.array(z.string()),
+  maxRecordingsPerRun: z.number().int().positive().default(50)
+});
+
+export const claapSignalExtractionSchema = z.object({
+  hasSignal: z.boolean(),
+  title: z.string(),
+  summary: z.string(),
+  hookCandidate: z.string(),
+  whyItMatters: z.string(),
+  excerpts: z.array(z.string()).max(3),
+  signalType: z.string(),
+  theme: z.string(),
+  profileHint: z.string().optional(),
+  confidenceScore: z.number().min(0).max(1)
 });
 
 export const linearSourceConfigSchema = sourceBaseSchema.extend({

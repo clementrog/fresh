@@ -223,7 +223,11 @@ function getSourceCreationMode(item: NormalizedSourceItem): SourceCreationMode {
       return notionKind === "market-insight" || notionKind === "claap-signal"
         ? "create-capable"
         : "enrich-only";
-    case "claap":
+    case "claap": {
+      const signalKind = typeof item.metadata?.signalKind === "string"
+        ? item.metadata.signalKind : undefined;
+      return signalKind === "claap-signal" ? "create-capable" : "enrich-only";
+    }
     case "linear":
     default:
       return "enrich-only";
@@ -243,6 +247,11 @@ function isCuratedSource(item: NormalizedSourceItem): boolean {
       return true;
     case "notion":
       return notionKind === "market-insight" || notionKind === "claap-signal";
+    case "claap": {
+      const signalKind = typeof item.metadata?.signalKind === "string"
+        ? item.metadata.signalKind : undefined;
+      return signalKind === "claap-signal";
+    }
     default:
       return false;
   }

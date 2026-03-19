@@ -128,7 +128,7 @@ export class EditorialSignalEngineApp {
     try {
       const company = await this.getActiveCompany(context);
       const staticInputs = await this.loadStaticInputs(context);
-      const registry = createConnectorRegistry(this.env);
+      const registry = createConnectorRegistry(this.env, this.llmClient);
       const sourceMaxCursor = new Map<string, string | null>();
 
       for (const config of staticInputs.configs.filter((entry) => entry.enabled)) {

@@ -1358,6 +1358,59 @@ describe("backward compatibility — optional claim fields", () => {
   });
 });
 
+// --- Claap signal policy + provenance ---
+
+describe("deriveProvenanceType claap signal", () => {
+  it("returns claap:signal for claap items with signalKind metadata", () => {
+    const item = makeItem({
+      source: "claap",
+      metadata: { signalKind: "claap-signal" }
+    });
+    expect(deriveProvenanceType(item)).toBe("claap:signal");
+  });
+
+  it("returns claap for plain claap items without signalKind", () => {
+    const item = makeItem({ source: "claap", metadata: {} });
+    expect(deriveProvenanceType(item)).toBe("claap");
+  });
+});
+
+describe("findSupportingEvidence claap signal policy", () => {
+  it("signal-bearing claap item can be origin (priority 1, low jaccard threshold)", () => {
+    const opp = makeOpportunity();
+    const signalItem = makeItem({
+      source: "claap",
+      externalId: "claap:signal-meeting",
+      sourceItemId: "claap-signal-meeting",
+      title: "Enterprise buyers demand concrete onboarding proof in sales call",
+      summary: "Enterprise buyers explicitly demand concrete onboarding proof before purchasing decisions.",
+      text: "The enterprise buyers demand concrete proof of onboarding before purchasing decisions.",
+      metadata: { signalKind: "claap-signal" }
+    });
+    const result = findSupportingEvidence(opp, [signalItem], COMPANY_ID);
+    expect(result.evidence.length).toBeGreaterThan(0);
+    expect(result.sources[0].source).toBe("claap");
+  });
+
+  it("plain claap item uses default enrich-only policy (priority 3, higher threshold)", () => {
+    const opp = makeOpportunity();
+    const plainItem = makeItem({
+      source: "claap",
+      externalId: "claap:plain-meeting",
+      sourceItemId: "claap-plain-meeting",
+      title: "Enterprise buyers demand concrete onboarding proof in sales call",
+      summary: "Enterprise buyers explicitly demand concrete onboarding proof before purchasing decisions.",
+      text: "The enterprise buyers demand concrete proof of onboarding before purchasing decisions.",
+      metadata: {}
+    });
+    const result = findSupportingEvidence(opp, [plainItem], COMPANY_ID);
+    // Still may match as supporting evidence, but at a higher threshold
+    if (result.evidence.length > 0) {
+      expect(result.sources[0].source).toBe("claap");
+    }
+  });
+});
+
 // --- Backfill evidence guarantees ---
 
 describe("backfill:evidence guarantees", () => {

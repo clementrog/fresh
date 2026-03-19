@@ -59,8 +59,14 @@ function getSourcePolicy(item: NormalizedSourceItem): SourcePolicyEntry {
         return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.10, priority: 1 };
       }
       return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.15, priority: 2 };
-    case "claap":
+    case "claap": {
+      const signalKind = typeof item.metadata?.signalKind === "string"
+        ? item.metadata.signalKind : undefined;
+      if (signalKind === "claap-signal") {
+        return { canBeOrigin: true, canBeSupport: true, minJaccardForSupport: 0.10, priority: 1 };
+      }
       return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.15, priority: 3 };
+    }
     case "linear":
       return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.20, priority: 4 };
     default:
@@ -84,8 +90,11 @@ export function deriveProvenanceType(item: NormalizedSourceItem): string {
       if (notionKind === "claap-signal") return "notion:claap-signal";
       if (notionKind === "internal-proof") return "notion:internal-proof";
       return "notion";
-    case "claap":
-      return "claap";
+    case "claap": {
+      const signalKind = typeof item.metadata?.signalKind === "string"
+        ? item.metadata.signalKind : undefined;
+      return signalKind === "claap-signal" ? "claap:signal" : "claap";
+    }
     case "linear":
       return "linear";
     default:

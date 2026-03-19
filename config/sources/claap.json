@@ -2,12 +2,13 @@
   "source": "claap",
   "enabled": true,
   "storeRawText": true,
-  "retentionDays": 30,
+  "retentionDays": 180,
   "rateLimit": {
-    "requestsPerMinute": 20,
+    "requestsPerMinute": 120,
     "maxRetries": 3,
     "initialDelayMs": 1000
   },
-  "workspaceIds": [],
-  "folderIds": []
+  "workspaceIds": ["c1Bt4rJSYq"],
+  "folderIds": [],
+  "maxRecordingsPerRun": 50
 }
