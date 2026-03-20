@@ -136,6 +136,20 @@ function makeDecisionOutput(overrides: Partial<CreateEnrichDecision> = {}) {
   };
 }
 
+function makeLinearPolicyOutput(classification: "enrich-worthy" | "ignore" | "manual-review-needed" = "enrich-worthy") {
+  return {
+    output: {
+      classification,
+      rationale: `Test: classified as ${classification}`,
+      customerVisibility: classification === "enrich-worthy" ? "shipped" : "ambiguous",
+      sensitivityLevel: "safe",
+      evidenceStrength: classification === "enrich-worthy" ? 0.8 : 0.3
+    },
+    usage: { mode: "provider" as const, promptTokens: 100, completionTokens: 50, estimatedCostUsd: 0.001 },
+    mode: "provider" as const
+  };
+}
+
 describe("prefilterSourceItems", () => {
   it("skips items older than freshness window", () => {
     const old = makeItem({ occurredAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString() });
@@ -440,6 +454,7 @@ describe("runIntelligencePipeline", () => {
     const mockLlmClient = {
       generateStructured: vi.fn()
         .mockResolvedValueOnce(makeScreeningOutput("linear:issue-123"))
+        .mockResolvedValueOnce(makeLinearPolicyOutput("enrich-worthy"))
     } as any;
 
     const result = await runIntelligencePipeline({
@@ -461,7 +476,8 @@ describe("runIntelligencePipeline", () => {
       expect.objectContaining({ sourceItemId: "linear:issue-123" })
     ]);
     expect(result.processedSourceItemIds).toContain("linear:issue-123");
-    expect(mockLlmClient.generateStructured).toHaveBeenCalledTimes(1);
+    // screening + linear-enrichment-policy = 2 calls (no create-enrich call)
+    expect(mockLlmClient.generateStructured).toHaveBeenCalledTimes(2);
   });
 
   it("allows linear items to enrich an existing opportunity when the target is a valid match", async () => {
@@ -475,6 +491,7 @@ describe("runIntelligencePipeline", () => {
     const mockLlmClient = {
       generateStructured: vi.fn()
         .mockResolvedValueOnce(makeScreeningOutput("linear:issue-123"))
+        .mockResolvedValueOnce(makeLinearPolicyOutput("enrich-worthy"))
         .mockResolvedValueOnce(makeDecisionOutput({
           action: "enrich",
           targetOpportunityId: existing.id,
@@ -519,6 +536,7 @@ describe("runIntelligencePipeline", () => {
     const mockLlmClient = {
       generateStructured: vi.fn()
         .mockResolvedValueOnce(makeScreeningOutput("linear:issue-123"))
+        .mockResolvedValueOnce(makeLinearPolicyOutput("enrich-worthy"))
         .mockResolvedValueOnce(makeDecisionOutput({
           action: "create",
           rationale: "Model tried to create a new opportunity from a ticket"
@@ -555,6 +573,7 @@ describe("runIntelligencePipeline", () => {
     const mockLlmClient = {
       generateStructured: vi.fn()
         .mockResolvedValueOnce(makeScreeningOutput("linear:issue-123"))
+        .mockResolvedValueOnce(makeLinearPolicyOutput("enrich-worthy"))
         .mockResolvedValueOnce(makeDecisionOutput({
           action: "skip",
           rationale: "Bug ticket is not useful for this opportunity"
@@ -838,6 +857,7 @@ describe("runIntelligencePipeline", () => {
     const mockLlmClient = {
       generateStructured: vi.fn()
         .mockResolvedValueOnce(makeScreeningOutput("linear:issue-123"))
+        .mockResolvedValueOnce(makeLinearPolicyOutput("enrich-worthy"))
         .mockResolvedValueOnce(makeDecisionOutput({
           action: "enrich",
           targetOpportunityId: existing.id,
@@ -902,11 +922,12 @@ describe("runIntelligencePipeline", () => {
     ]);
   });
 
-  it("linear with no candidates skips before create/enrich — LLM called only once for screening", async () => {
+  it("linear with no candidates skips before create/enrich — LLM called twice (screening + linear policy)", async () => {
     const items = [makeLinearItem()];
     const mockLlmClient = {
       generateStructured: vi.fn()
         .mockResolvedValueOnce(makeScreeningOutput("linear:issue-123"))
+        .mockResolvedValueOnce(makeLinearPolicyOutput("enrich-worthy"))
     } as any;
 
     const result = await runIntelligencePipeline({
@@ -927,7 +948,8 @@ describe("runIntelligencePipeline", () => {
     expect(result.skipped).toEqual([
       expect.objectContaining({ sourceItemId: "linear:issue-123" })
     ]);
-    expect(mockLlmClient.generateStructured).toHaveBeenCalledTimes(1);
+    // screening + linear-enrichment-policy = 2 calls (no create-enrich for enrich-only with no candidates)
+    expect(mockLlmClient.generateStructured).toHaveBeenCalledTimes(2);
   });
 
   it("internal-proof items cannot create opportunities", async () => {

@@ -81,6 +81,17 @@ export const claapPublishabilityReviewSchema = z.object({
   rationale: z.string()
 });
 
+export const linearEnrichmentPolicySchema = z.object({
+  classification: z.enum(["enrich-worthy", "ignore", "manual-review-needed"]),
+  rationale: z.string(),
+  customerVisibility: z.enum(["shipped", "in-progress", "internal-only", "ambiguous"]),
+  sensitivityLevel: z.enum(["safe", "roadmap-sensitive", "pre-shipping", "promise-like"]),
+  evidenceStrength: z.number().min(0).max(1),
+  reviewNote: z.string().optional()
+});
+
+export type LinearEnrichmentClassification = z.infer<typeof linearEnrichmentPolicySchema>;
+
 export const linearSourceConfigSchema = sourceBaseSchema.extend({
   source: z.literal("linear"),
   workspaceIds: z.array(z.string()),
@@ -144,6 +155,8 @@ export const readinessSchema = z.enum(CONTENT_READINESS);
 
 export const notionDatabaseNameSchema = z.enum([
   "Content Opportunities",
+  "Claap Review",
+  "Linear Review",
   "Profiles",
   "Sync Runs"
 ]);

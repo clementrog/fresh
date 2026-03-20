@@ -32,10 +32,15 @@ export class LinearConnector extends BaseConnector<LinearSourceConfig> {
           title
           description
           updatedAt
+          createdAt
+          completedAt
           url
           identifier
+          priority
           state { name }
           team { name }
+          labels { nodes { name } }
+          project { name }
         `
       );
 
@@ -65,7 +70,7 @@ export class LinearConnector extends BaseConnector<LinearSourceConfig> {
           createdAt
           updatedAt
           health
-          project { name }
+          project { name state }
         `
       );
 
@@ -97,8 +102,15 @@ export class LinearConnector extends BaseConnector<LinearSourceConfig> {
       url?: string;
       updatedAt?: string;
       createdAt?: string;
+      completedAt?: string;
       itemType?: string;
       identifier?: string;
+      priority?: number;
+      state?: { name?: string };
+      team?: { name?: string };
+      labels?: { nodes?: Array<{ name?: string }> };
+      project?: { name?: string; state?: string };
+      health?: string;
     };
     const text = payload.description ?? payload.body ?? "";
     const sourceItemId = String(payload.id ?? rawItem.id);
@@ -108,13 +120,25 @@ export class LinearConnector extends BaseConnector<LinearSourceConfig> {
       externalId: `linear:${sourceItemId}`,
       sourceFingerprint: hashParts(["linear", sourceItemId, text]),
       sourceUrl: payload.url ?? "",
-      title: payload.title ?? payload.identifier ?? `Linear item ${rawItem.id}`,
+      title: payload.title
+        ?? (payload.project?.name ? `Project update: ${payload.project.name}` : undefined)
+        ?? payload.identifier
+        ?? `Linear item ${rawItem.id}`,
       text,
       summary: text.slice(0, 200),
       occurredAt: payload.updatedAt ?? payload.createdAt ?? context.now.toISOString(),
       ingestedAt: context.now.toISOString(),
       metadata: {
         itemType: payload.itemType ?? "issue",
+        stateName: payload.state?.name,
+        teamName: payload.team?.name,
+        priority: payload.priority,
+        labels: payload.labels?.nodes?.map(l => l.name) ?? [],
+        projectName: payload.project?.name,
+        createdAt: payload.createdAt,
+        completedAt: payload.completedAt,
+        projectHealth: payload.health,
+        projectState: payload.project?.state,
         includeIssueComments: config.includeIssueComments,
         storeRawText: config.storeRawText
       },

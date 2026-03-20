@@ -17,7 +17,8 @@ import {
   evidenceSignature,
   selectPrimaryEvidence
 } from "./evidence.js";
-import { screeningBatchSchema, createEnrichDecisionSchema } from "../config/schema.js";
+import { screeningBatchSchema, createEnrichDecisionSchema, linearEnrichmentPolicySchema } from "../config/schema.js";
+import type { LinearEnrichmentClassification } from "../config/schema.js";
 import type { LlmClient, LlmUsage } from "./llm.js";
 import { sourceItemDbId } from "../db/repositories.js";
 import { isBlockedByPublishability } from "./evidence-pack.js";
@@ -146,6 +147,109 @@ export async function screenSourceItems(params: {
           sensitivityCategories: []
         });
       }
+    }
+  }
+
+  return { results, usageEvents };
+}
+
+// --- Linear Enrichment Policy ---
+
+const LINEAR_ENRICHMENT_FALLBACK: LinearEnrichmentClassification = {
+  classification: "manual-review-needed",
+  rationale: "LLM evaluation failed",
+  customerVisibility: "ambiguous",
+  sensitivityLevel: "safe",
+  evidenceStrength: 0,
+  reviewNote: "Automatic hold: LLM unavailable"
+};
+
+export async function evaluateLinearEnrichmentPolicy(params: {
+  items: NormalizedSourceItem[];
+  llmClient: LlmClient;
+  doctrineMarkdown: string;
+  sensitivityMarkdown: string;
+}): Promise<{
+  results: Map<string, LinearEnrichmentClassification>;
+  usageEvents: Array<{ step: string; usage: LlmUsage }>;
+}> {
+  const results = new Map<string, LinearEnrichmentClassification>();
+  const usageEvents: Array<{ step: string; usage: LlmUsage }> = [];
+
+  const system = [
+    "You are an editorial policy evaluator for a content pipeline. Your job is to classify Linear issues and project updates for enrichment eligibility.",
+    "",
+    "## Company Doctrine",
+    params.doctrineMarkdown,
+    "",
+    "## Sensitivity Rules",
+    params.sensitivityMarkdown,
+    "",
+    "## Classification rules",
+    "",
+    "Classify each Linear item into one of three categories:",
+    "",
+    "### enrich-worthy",
+    "The item describes a customer-visible, shipped capability or concrete outcome that can strengthen an existing content opportunity.",
+    "Examples: 'Shipped: new onboarding dashboard for mid-market clients', 'Released: automated DSN compliance check'",
+    "",
+    "### ignore",
+    "The item is internal noise: refactors, tech debt, CI/CD fixes, dependency bumps, test improvements, or vague tickets with no customer-facing substance.",
+    "Examples: 'Upgrade Node to v22', 'Fix flaky test in CI', 'Refactor auth middleware', 'Add logging to ingestion pipeline'",
+    "",
+    "### manual-review-needed",
+    "The item is ambiguous, roadmap-sensitive, pre-shipping, or could be promise-like. It might have value but needs human judgment before enriching public content.",
+    "Examples: 'Upcoming: AI-powered payroll suggestions', 'Q3 roadmap: compliance automation v2', 'Beta: predictive scheduling'",
+    "",
+    "## customerVisibility",
+    "- shipped: already live and available to customers",
+    "- in-progress: actively being built but not yet shipped",
+    "- internal-only: internal tooling, infra, or process",
+    "- ambiguous: unclear from the item text",
+    "",
+    "## sensitivityLevel",
+    "- safe: no risk in referencing publicly",
+    "- roadmap-sensitive: reveals future plans not yet announced",
+    "- pre-shipping: work in progress that might not ship as described",
+    "- promise-like: reads like a commitment to customers",
+    "",
+    "## Tie-breaking rule",
+    "When in doubt, choose manual-review-needed. It is always safer to hold an item for review than to auto-enrich or auto-ignore.",
+    "",
+    "Return JSON matching the linearEnrichmentPolicy schema."
+  ].join("\n");
+
+  for (const item of params.items) {
+    const meta = item.metadata ?? {};
+    const prompt = [
+      "## Linear item to classify",
+      `Title: ${item.title}`,
+      `Summary: ${item.summary}`,
+      `Text (first 1000 chars): ${item.text.slice(0, 1000)}`,
+      `Item type: ${meta.itemType ?? "unknown"}`,
+      `State: ${meta.stateName ?? "unknown"}`,
+      `Team: ${meta.teamName ?? "unknown"}`,
+      `Priority: ${meta.priority ?? "unknown"}`,
+      `Labels: ${Array.isArray(meta.labels) ? (meta.labels as string[]).join(", ") : "none"}`,
+      `Project: ${meta.projectName ?? "none"}`,
+      `Created at: ${meta.createdAt ?? "unknown"}`,
+      `Completed at: ${meta.completedAt ?? "not completed"}`
+    ].join("\n");
+
+    try {
+      const response = await params.llmClient.generateStructured({
+        step: "linear-enrichment-policy",
+        system,
+        prompt,
+        schema: linearEnrichmentPolicySchema,
+        allowFallback: true,
+        fallback: () => LINEAR_ENRICHMENT_FALLBACK
+      });
+
+      usageEvents.push({ step: "linear-enrichment-policy", usage: response.usage });
+      results.set(item.externalId, response.output);
+    } catch {
+      results.set(item.externalId, LINEAR_ENRICHMENT_FALLBACK);
     }
   }
 
@@ -658,6 +762,11 @@ export interface IntelligencePipelineResult {
   skipped: Array<{ sourceItemId: string; reason: string }>;
   usageEvents: Array<{ step: string; usage: LlmUsage }>;
   processedSourceItemIds: string[];
+  linearReviewItems: Array<{
+    item: NormalizedSourceItem;
+    classification: LinearEnrichmentClassification;
+  }>;
+  linearClassifications: Map<string, LinearEnrichmentClassification>;
 }
 
 export async function runIntelligencePipeline(
@@ -669,7 +778,9 @@ export async function runIntelligencePipeline(
     enriched: [],
     skipped: [],
     usageEvents: [],
-    processedSourceItemIds: []
+    processedSourceItemIds: [],
+    linearReviewItems: [],
+    linearClassifications: new Map()
   };
 
   // 1. Prefilter
@@ -717,8 +828,80 @@ export async function runIntelligencePipeline(
     retainedAfterScreening.push({ item, screening: sr });
   }
 
-  // 4. Create/enrich per retained item
-  for (const { item, screening: sr } of retainedAfterScreening) {
+  // 4. Linear enrichment policy — triage Linear items before create/enrich
+  const linearItems = retainedAfterScreening.filter(({ item }) => item.source === "linear");
+  const nonLinearItems = retainedAfterScreening.filter(({ item }) => item.source !== "linear");
+
+  let linearEnrichWorthy: Array<{ item: NormalizedSourceItem; screening: ScreeningResult }> = [];
+
+  if (linearItems.length > 0) {
+    try {
+      const linearEval = await evaluateLinearEnrichmentPolicy({
+        items: linearItems.map(({ item }) => item),
+        llmClient: params.llmClient,
+        doctrineMarkdown: params.doctrineMarkdown,
+        sensitivityMarkdown: params.sensitivityMarkdown
+      });
+      result.usageEvents.push(...linearEval.usageEvents);
+
+      for (const { item, screening: sr } of linearItems) {
+        const classification = linearEval.results.get(item.externalId) ?? LINEAR_ENRICHMENT_FALLBACK;
+        result.linearClassifications.set(item.externalId, classification);
+
+        if (classification.classification === "ignore") {
+          result.skipped.push({
+            sourceItemId: item.externalId,
+            reason: `Linear enrichment policy: ignore — ${classification.rationale}`
+          });
+          result.processedSourceItemIds.push(item.externalId);
+        } else if (classification.classification === "manual-review-needed") {
+          result.linearReviewItems.push({ item, classification });
+          result.skipped.push({
+            sourceItemId: item.externalId,
+            reason: `Linear enrichment policy: held for manual review — ${classification.rationale}`
+          });
+          result.processedSourceItemIds.push(item.externalId);
+        } else {
+          // enrich-worthy — stamp classification onto in-memory item metadata
+          item.metadata = {
+            ...item.metadata,
+            linearEnrichmentClassification: classification.classification,
+            linearEnrichmentRationale: classification.rationale,
+            linearCustomerVisibility: classification.customerVisibility,
+            linearSensitivityLevel: classification.sensitivityLevel,
+            linearEvidenceStrength: classification.evidenceStrength,
+            linearReviewNote: classification.reviewNote
+          };
+          linearEnrichWorthy.push({ item, screening: sr });
+        }
+      }
+    } catch (error) {
+      // Fail-closed: classify ALL Linear items as manual-review-needed
+      const failReason = "Linear enrichment policy evaluation failed; all items held for review";
+      for (const { item } of linearItems) {
+        const failClassification: LinearEnrichmentClassification = {
+          classification: "manual-review-needed",
+          rationale: failReason,
+          customerVisibility: "ambiguous",
+          sensitivityLevel: "safe",
+          evidenceStrength: 0,
+          reviewNote: failReason
+        };
+        result.linearClassifications.set(item.externalId, failClassification);
+        result.linearReviewItems.push({ item, classification: failClassification });
+        result.skipped.push({
+          sourceItemId: item.externalId,
+          reason: `Linear enrichment policy: held for manual review — ${failReason}`
+        });
+        result.processedSourceItemIds.push(item.externalId);
+      }
+    }
+  }
+
+  const itemsForCreateEnrich = [...nonLinearItems, ...linearEnrichWorthy];
+
+  // 5. Create/enrich per retained item
+  for (const { item, screening: sr } of itemsForCreateEnrich) {
     if (isBlockedByPublishability(item)) {
       result.skipped.push({ sourceItemId: item.externalId, reason: `Blocked by publishability risk: ${item.metadata?.publishabilityRisk}` });
       result.processedSourceItemIds.push(item.externalId);

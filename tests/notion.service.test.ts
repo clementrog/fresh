@@ -92,14 +92,14 @@ function makeClaapReviewItem(overrides: Record<string, unknown> = {}) {
 }
 
 describe("notion service", () => {
-  it("ensureSchema creates exactly 4 databases", async () => {
+  it("ensureSchema creates exactly 5 databases", async () => {
     const client = makeNotionClient();
     const service = new NotionService("", "parent-page", { client });
 
     const result = await service.ensureSchema();
 
-    expect(result.databases).toHaveLength(4);
-    expect(REQUIRED_DATABASES).toEqual(["Content Opportunities", "Claap Review", "Profiles", "Sync Runs"]);
+    expect(result.databases).toHaveLength(5);
+    expect(REQUIRED_DATABASES).toEqual(["Content Opportunities", "Claap Review", "Linear Review", "Profiles", "Sync Runs"]);
   });
 
   it("ensureDatabase lazily patches missing properties on existing required databases", async () => {
@@ -463,7 +463,7 @@ describe("notion service", () => {
 
     const result = await service.ensureSchema();
 
-    expect(result.databases).toHaveLength(4);
+    expect(result.databases).toHaveLength(5);
     expect(onWarning).toHaveBeenCalledWith(
       "Skipping Operations Guide creation because the configured Notion parent cannot accept child pages."
     );

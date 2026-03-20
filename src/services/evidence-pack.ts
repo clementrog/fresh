@@ -79,8 +79,14 @@ function getSourcePolicy(item: NormalizedSourceItem): SourcePolicyEntry {
       }
       return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.15, priority: 3 };
     }
-    case "linear":
+    case "linear": {
+      const linearClass = typeof item.metadata?.linearEnrichmentClassification === "string"
+        ? item.metadata.linearEnrichmentClassification : undefined;
+      if (linearClass === "manual-review-needed" || linearClass === "ignore") {
+        return { canBeOrigin: false, canBeSupport: false, minJaccardForSupport: 1.0, priority: 99 };
+      }
       return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.20, priority: 4 };
+    }
     default:
       return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.20, priority: 5 };
   }
@@ -109,8 +115,12 @@ export function deriveProvenanceType(item: NormalizedSourceItem): string {
       if (signalKind === "claap-signal-reframeable") return "claap:reframeable";
       return "claap";
     }
-    case "linear":
+    case "linear": {
+      const linearEnrichClass = typeof item.metadata?.linearEnrichmentClassification === "string"
+        ? item.metadata.linearEnrichmentClassification : undefined;
+      if (linearEnrichClass === "enrich-worthy") return "linear:enrich-worthy";
       return "linear";
+    }
     default:
       return item.source;
   }

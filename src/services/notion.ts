@@ -13,6 +13,7 @@ import type {
 export const REQUIRED_DATABASES = [
   "Content Opportunities",
   "Claap Review",
+  "Linear Review",
   "Profiles",
   "Sync Runs"
 ] as const;
@@ -218,6 +219,117 @@ export class NotionService {
       notionPageId: created.id,
       action: "created"
     };
+  }
+
+  async syncLinearReviewItem(item: {
+    itemTitle: string;
+    classification: "manual-review-needed";
+    rationale: string;
+    customerVisibility: string;
+    sensitivityLevel: string;
+    evidenceStrength: number;
+    reviewNote?: string;
+    linearLink: string;
+    itemType: string;
+    stateName?: string;
+    teamName?: string;
+    priority?: number;
+    labels?: string;
+    occurredAt: string;
+    reviewFingerprint: string;
+    linearSourceItemId: string;
+    notionPageId?: string;
+  }): Promise<NotionSyncResult | null> {
+    if (!this.client) {
+      return null;
+    }
+
+    const databaseId = await this.ensureDatabase("Linear Review");
+    let existingPage = item.notionPageId
+      ? await this.retrievePage(item.notionPageId)
+      : null;
+
+    if (!existingPage) {
+      existingPage = await this.findPageByFingerprintWithProperties(databaseId, "Review fingerprint", item.reviewFingerprint);
+    }
+
+    const existingDecision = existingPage
+      ? getSelectPropertyName(existingPage, "Decision")
+      : "";
+    const existingTitle = existingPage
+      ? getTitlePropertyText(existingPage, "Item title")
+      : "";
+    const existingClassification = existingPage
+      ? getSelectPropertyName(existingPage, "Classification")
+      : "";
+    const existingRationale = existingPage
+      ? getRichTextPropertyText(existingPage, "Rationale")
+      : "";
+    const materialChange = Boolean(
+      existingPage
+      && (
+        existingTitle !== item.itemTitle
+        || existingClassification !== item.classification
+        || existingRationale !== item.rationale
+      )
+    );
+
+    const properties = compactProperties({
+      "Item title": titleProperty(item.itemTitle),
+      Classification: selectProperty(item.classification),
+      Rationale: richTextProperty(item.rationale),
+      "Customer visibility": selectProperty(item.customerVisibility),
+      "Sensitivity level": selectProperty(item.sensitivityLevel),
+      "Evidence strength": numberProperty(item.evidenceStrength),
+      "Review note": richTextProperty(item.reviewNote ?? ""),
+      "Linear link": urlProperty(item.linearLink),
+      "Item type": richTextProperty(item.itemType),
+      State: richTextProperty(item.stateName ?? ""),
+      Team: richTextProperty(item.teamName ?? ""),
+      Priority: numberProperty(item.priority ?? 0),
+      Labels: richTextProperty(item.labels ?? ""),
+      "Occurred at": dateProperty(item.occurredAt),
+      Decision: materialChange
+        ? emptySelectProperty()
+        : existingDecision
+          ? selectProperty(existingDecision)
+          : existingPage ? undefined : emptySelectProperty(),
+      "Review fingerprint": richTextProperty(item.reviewFingerprint),
+      "Linear source item id": richTextProperty(item.linearSourceItemId)
+    });
+
+    if (existingPage) {
+      const pageId = getPageId(existingPage);
+      if (!pageId) {
+        throw new Error("Linear review page is missing an id");
+      }
+      await this.client.pages.update({
+        page_id: pageId,
+        archived: false,
+        properties: properties as any
+      });
+      return {
+        notionPageId: pageId,
+        action: "updated"
+      };
+    }
+
+    const created = await this.client.pages.create({
+      parent: { database_id: databaseId },
+      properties: properties as any
+    });
+    return {
+      notionPageId: created.id,
+      action: "created"
+    };
+  }
+
+  async archiveLinearReviewItem(notionPageId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.pages.update({
+      page_id: notionPageId,
+      archived: true
+    } as any);
   }
 
   /** Write draft content into the page body, replacing any existing draft section. */
@@ -782,6 +894,9 @@ export function manualReviewViewSpecs() {
     { name: "Claap Review / Needs rewrite", description: "Filter where Decision = needs rewrite" },
     { name: "Claap Review / Rejected", description: "Filter where Decision = reject" },
     { name: "Claap Review / Approved", description: "Filter where Decision = approve" },
+    { name: "Linear Review / Needs review", description: "Filter where Decision is empty" },
+    { name: "Linear Review / Approved", description: "Filter where Decision = approve" },
+    { name: "Linear Review / Rejected", description: "Filter where Decision = reject" },
     { name: "Sync Runs / Recent", description: "Sort by Started at descending" }
   ];
 }
@@ -834,6 +949,26 @@ function getDatabaseProperties(name: RequiredDatabase) {
         "Occurred at": { date: {} },
         "Review fingerprint": { rich_text: {} },
         "Claap source item id": { rich_text: {} }
+      };
+    case "Linear Review":
+      return {
+        "Item title": { title: {} },
+        Classification: { select: {} },
+        Rationale: { rich_text: {} },
+        "Customer visibility": { select: {} },
+        "Sensitivity level": { select: {} },
+        "Evidence strength": { number: { format: "number" } },
+        "Review note": { rich_text: {} },
+        "Linear link": { url: {} },
+        "Item type": { rich_text: {} },
+        State: { rich_text: {} },
+        Team: { rich_text: {} },
+        Priority: { number: { format: "number" } },
+        Labels: { rich_text: {} },
+        "Occurred at": { date: {} },
+        Decision: { select: {} },
+        "Review fingerprint": { rich_text: {} },
+        "Linear source item id": { rich_text: {} }
       };
     case "Profiles":
       return {

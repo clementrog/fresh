@@ -250,7 +250,9 @@ describe("intelligence sync — created opportunities", () => {
       enriched: [],
       skipped: [],
       usageEvents: [],
-      processedSourceItemIds: ["ext-origin"]
+      processedSourceItemIds: ["ext-origin"],
+      linearReviewItems: [],
+      linearClassifications: new Map()
     });
 
     // Candidate with overlapping topic keywords (payroll, recalculation, compliance)
@@ -325,7 +327,9 @@ describe("intelligence sync — created opportunities", () => {
       enriched: [],
       skipped: [],
       usageEvents: [],
-      processedSourceItemIds: ["ext-origin"]
+      processedSourceItemIds: ["ext-origin"],
+      linearReviewItems: [],
+      linearClassifications: new Map()
     });
 
     repositories.listCandidateSourceItems.mockResolvedValue([] as any);
@@ -401,7 +405,9 @@ describe("intelligence sync — enriched opportunities", () => {
       }],
       skipped: [],
       usageEvents: [],
-      processedSourceItemIds: ["mr-current"]
+      processedSourceItemIds: ["mr-current"],
+      linearReviewItems: [],
+      linearClassifications: new Map()
     });
 
     // Hydration returns both source items — including the older proof
@@ -470,7 +476,9 @@ describe("intelligence sync — claim-aware downgrade reaches Notion", () => {
       enriched: [],
       skipped: [],
       usageEvents: [],
-      processedSourceItemIds: ["ext-origin"]
+      processedSourceItemIds: ["ext-origin"],
+      linearReviewItems: [],
+      linearClassifications: new Map()
     });
 
     // Candidate with overlapping topic but NOT internal-proof

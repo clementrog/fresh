@@ -301,6 +301,63 @@ export class EditorialSignalEngineApp {
           await this.repositories.saveScreeningResults(screeningEntries);
         }
 
+        // Persist Linear enrichment classifications to DB + sync review items to Notion
+        for (const [externalId, classification] of pipelineResult.linearClassifications) {
+          const dbId = sourceItemDbId(company.id, externalId);
+          try {
+            const storedItem = await this.prisma.sourceItem.findUnique({ where: { id: dbId } });
+            if (storedItem) {
+              const existingMeta = isRecord(storedItem.metadataJson) ? storedItem.metadataJson : {};
+              await this.prisma.sourceItem.update({
+                where: { id: dbId },
+                data: {
+                  metadataJson: {
+                    ...existingMeta,
+                    linearEnrichmentClassification: classification.classification,
+                    linearEnrichmentRationale: classification.rationale,
+                    linearCustomerVisibility: classification.customerVisibility,
+                    linearSensitivityLevel: classification.sensitivityLevel,
+                    linearEvidenceStrength: classification.evidenceStrength,
+                    linearReviewNote: classification.reviewNote
+                  }
+                }
+              });
+
+              if (classification.classification === "manual-review-needed") {
+                const reviewFingerprint = hashParts(["linear-review", company.id, dbId]);
+                const syncResult = await this.notion.syncLinearReviewItem({
+                  itemTitle: storedItem.title,
+                  classification: "manual-review-needed",
+                  rationale: classification.rationale,
+                  customerVisibility: classification.customerVisibility,
+                  sensitivityLevel: classification.sensitivityLevel,
+                  evidenceStrength: classification.evidenceStrength,
+                  reviewNote: classification.reviewNote,
+                  linearLink: storedItem.sourceUrl,
+                  itemType: typeof existingMeta.itemType === "string" ? existingMeta.itemType : "issue",
+                  stateName: typeof existingMeta.stateName === "string" ? existingMeta.stateName : undefined,
+                  teamName: typeof existingMeta.teamName === "string" ? existingMeta.teamName : undefined,
+                  priority: typeof existingMeta.priority === "number" ? existingMeta.priority : undefined,
+                  labels: Array.isArray(existingMeta.labels) ? (existingMeta.labels as string[]).join(", ") : undefined,
+                  occurredAt: storedItem.occurredAt.toISOString(),
+                  reviewFingerprint,
+                  linearSourceItemId: dbId,
+                  notionPageId: storedItem.notionPageId ?? undefined
+                });
+                if (syncResult) {
+                  await this.repositories.updateSourceItemNotionSync(dbId, syncResult.notionPageId, reviewFingerprint);
+                }
+              } else if (storedItem.notionPageId) {
+                // Archive any existing Linear Review row for this item
+                await this.notion.archiveLinearReviewItem(storedItem.notionPageId);
+              }
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Unknown error";
+            this.logger.error({ externalId, error: message }, "Failed to persist Linear classification");
+          }
+        }
+
         // Persist created opportunities + evidence-pack enrichment
         for (const opp of pipelineResult.created) {
           await this.prisma.$transaction(async (tx) => {
@@ -421,6 +478,15 @@ export class EditorialSignalEngineApp {
 
         // Persist enriched opportunities
         for (const enriched of pipelineResult.enriched) {
+          // Stamp provenanceType on enrichment log for Linear-classified items
+          const enrichSourceItem = items.find(i =>
+            i.externalId === enriched.logEntry.rawSourceItemId
+          );
+          if (enrichSourceItem?.source === "linear"
+            && enrichSourceItem.metadata?.linearEnrichmentClassification === "enrich-worthy") {
+            enriched.logEntry.provenanceType = "linear-enrichment-policy";
+          }
+
           await this.repositories.enrichOpportunity({
             opportunityId: enriched.opportunity.id,
             enrichmentLogJson: enriched.opportunity.enrichmentLog,
