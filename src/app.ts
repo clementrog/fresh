@@ -1,5 +1,6 @@
 import {
   loadConnectorConfigs,
+  loadDoctrineMarkdown,
   loadMarketResearchRuntimeConfig
 } from "./config/loaders.js";
 import type { AppEnv } from "./config/env.js";
@@ -109,6 +110,8 @@ export class EditorialSignalEngineApp {
         return this.cleanupRetention(context);
       case "backfill:evidence":
         return this.backfillEvidence(context);
+      case "cleanup:claap-publishability":
+        return this.cleanupClaapPublishability(context);
       default:
         throw new Error(`Unsupported command: ${command satisfies never}`);
     }
@@ -128,7 +131,7 @@ export class EditorialSignalEngineApp {
     try {
       const company = await this.getActiveCompany(context);
       const staticInputs = await this.loadStaticInputs(context);
-      const registry = createConnectorRegistry(this.env, this.llmClient);
+      const registry = createConnectorRegistry(this.env, this.llmClient, staticInputs.doctrineMarkdown);
       const sourceMaxCursor = new Map<string, string | null>();
 
       for (const config of staticInputs.configs.filter((entry) => entry.enabled)) {
@@ -861,6 +864,179 @@ export class EditorialSignalEngineApp {
     }
   }
 
+  private async cleanupClaapPublishability(context: RunContext) {
+    const company = await this.getActiveCompany(context);
+    const run = createRun("cleanup:claap-publishability");
+    run.companyId = company.id;
+    if (!context.dryRun) {
+      await this.repositories.createSyncRun(run);
+    }
+
+    try {
+      const inputs = await this.loadIntelligenceInputs(company.id);
+
+      // 1. Load claap source items that need review:
+      //    - signalKind "claap-signal" (not yet assessed)
+      //    - OR already reclassified as harmful/reframeable (may need opportunity archival on re-run)
+      const allClaapSignals = await this.prisma.sourceItem.findMany({
+        where: {
+          companyId: company.id,
+          source: "claap",
+          OR: [
+            { metadataJson: { path: ["signalKind"], equals: "claap-signal" } },
+            { metadataJson: { path: ["publishabilityRisk"], equals: "harmful" } },
+            { metadataJson: { path: ["publishabilityRisk"], equals: "reframeable" } }
+          ]
+        }
+      });
+
+      let reclassified = 0;
+      let archived = 0;
+      let safe = 0;
+
+      for (const sourceItem of allClaapSignals) {
+        const existingMeta = isRecord(sourceItem.metadataJson) ? sourceItem.metadataJson : {};
+        const existingRisk = typeof existingMeta.publishabilityRisk === "string" ? existingMeta.publishabilityRisk : undefined;
+
+        // Already reclassified — skip LLM, jump straight to opportunity archival
+        let risk: string;
+        if (existingRisk === "harmful" || existingRisk === "reframeable") {
+          risk = existingRisk;
+        } else {
+          const rawText = sourceItem.rawText ?? sourceItem.text ?? "";
+          if (rawText.length < 100) {
+            safe += 1;
+            continue;
+          }
+
+          // Run brand safety review with slim schema
+          const { claapPublishabilityReviewSchema } = await import("./config/schema.js");
+
+          const safeFallback = () => ({
+            publishabilityRisk: "safe" as const,
+            rationale: "Fallback: could not assess publishability"
+          });
+
+          const response = await this.llmClient.generateStructured({
+            step: "claap-publishability-reclassification",
+            system: `You are a brand safety reviewer for a LinkedIn content pipeline. Re-evaluate this previously extracted signal for publishability risk.
+
+${inputs.doctrineMarkdown ? `## Company Doctrine\n${inputs.doctrineMarkdown}\n` : ""}
+## Brand Safety
+
+Assess whether this content would damage the company's brand if published on LinkedIn.
+
+Set publishabilityRisk to one of:
+- "safe": Can be published without brand risk.
+- "reframeable": Useful substance but current framing would damage the brand. Provide reframingSuggestion explaining how to reframe it safely.
+- "harmful": Would damage the brand even if reframed (e.g., customer saying they don't trust the product, complaints about core reliability, negative competitive comparison).
+
+Calibration examples:
+- Customer says "your compliance automation saved us 40 hours/month" → safe
+- Customer says "we had doubts about accuracy but after testing it works" → reframeable
+- Customer says "they don't trust the accuracy" or "DSN is the huge blocking point" → harmful
+
+When in doubt, choose harmful.
+
+Provide a rationale explaining your assessment.`,
+            prompt: `Content to review:\n\n${rawText.slice(0, 8000)}`,
+            schema: claapPublishabilityReviewSchema,
+            allowFallback: true,
+            fallback: safeFallback
+          });
+
+          risk = response.output.publishabilityRisk;
+
+          if (risk === "safe") {
+            safe += 1;
+            continue;
+          }
+
+          // Reclassify: update source item metadata
+          const updatedMetadata = {
+            ...existingMeta,
+            publishabilityRisk: risk,
+            signalKind: risk === "reframeable" ? "claap-signal-reframeable" : existingMeta.signalKind
+          };
+          if (response.output.reframingSuggestion) {
+            (updatedMetadata as Record<string, unknown>).reframingSuggestion = response.output.reframingSuggestion;
+          }
+          if (response.output.rationale) {
+            (updatedMetadata as Record<string, unknown>).publishabilityRationale = response.output.rationale;
+          }
+
+          if (!context.dryRun) {
+            await this.prisma.sourceItem.update({
+              where: { id: sourceItem.id },
+              data: { metadataJson: updatedMetadata }
+            });
+          }
+          reclassified += 1;
+        }
+
+        // Find opportunities linked to this source item via direct FK or junction table
+        const affectedOpportunities = await this.prisma.opportunity.findMany({
+          where: {
+            OR: [
+              { evidence: { some: { sourceItemId: sourceItem.id } } },
+              { linkedEvidence: { some: { evidence: { sourceItemId: sourceItem.id } } } }
+            ]
+          },
+          include: {
+            evidence: true
+          }
+        });
+
+        for (const opp of affectedOpportunities) {
+          if (context.dryRun) {
+            this.logger.info({ opportunityId: opp.id, risk }, `[dry-run] Would archive opportunity`);
+            continue;
+          }
+
+          // Archive in DB
+          const existingLog = Array.isArray(opp.enrichmentLogJson) ? opp.enrichmentLogJson : [];
+          const archivalEntry = {
+            createdAt: new Date().toISOString(),
+            rawSourceItemId: sourceItem.id,
+            evidenceIds: [],
+            contextComment: `Archived: source item reclassified as ${risk} by brand safety review`,
+            confidence: 0,
+            reason: `Brand safety: publishabilityRisk=${risk}`
+          };
+
+          await this.prisma.opportunity.update({
+            where: { id: opp.id },
+            data: {
+              status: "Archived",
+              enrichmentLogJson: [...existingLog, archivalEntry]
+            }
+          });
+
+          // Detach evidence
+          await this.repositories.replaceOpportunityRelations(opp.id, [], null);
+
+          // Archive in Notion
+          if (opp.notionPageId) {
+            await this.notion.archiveOpportunityInNotion(opp.notionPageId);
+          }
+
+          archived += 1;
+        }
+      }
+
+      const finished = finalizeRun(
+        run,
+        "completed",
+        `Claap publishability cleanup: ${reclassified} reclassified, ${archived} opportunities archived, ${safe} safe`
+      );
+      await this.finishRun(finished, [], context);
+    } catch (error) {
+      const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown cleanup error");
+      await this.finishRun(failed, [], context);
+      throw error;
+    }
+  }
+
   private async loadIntelligenceInputs(companyId: string) {
     const [editorialConfig, users] = await Promise.all([
       this.repositories.getLatestEditorialConfig(companyId),
@@ -894,8 +1070,11 @@ export class EditorialSignalEngineApp {
   }
 
   private async loadStaticInputs(context: RunContext) {
-    const configs = await loadConnectorConfigs();
-    return { configs };
+    const [configs, doctrineMarkdown] = await Promise.all([
+      loadConnectorConfigs(),
+      loadDoctrineMarkdown().catch(() => "")
+    ]);
+    return { configs, doctrineMarkdown };
   }
 
   private async fetchSourceItems(
@@ -1108,7 +1287,7 @@ export class EditorialSignalEngineApp {
       }
     }
 
-    const primaryEvidence = row.primaryEvidence
+    let primaryEvidence = row.primaryEvidence
       ? mapStoredEvidence(row.primaryEvidence)
       : selectPrimaryEvidence(allEvidence, {
           id: effectivePrimaryId ?? undefined,
@@ -1117,7 +1296,11 @@ export class EditorialSignalEngineApp {
             : undefined
         });
     if (!primaryEvidence) {
-      throw new Error(`Opportunity ${row.id} is missing evidence`);
+      if (row.status === "Archived") {
+        primaryEvidence = { id: "", source: "claap" as const, sourceItemId: "", sourceUrl: "", timestamp: "", excerpt: "[archived]", excerptHash: "", freshnessScore: 0 };
+      } else {
+        throw new Error(`Opportunity ${row.id} is missing evidence`);
+      }
     }
 
     const enrichmentLog = parseEnrichmentLog(row.enrichmentLogJson);

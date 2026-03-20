@@ -46,8 +46,9 @@ const ENV = {
   NOTION_TONE_OF_VOICE_DB_ID: ""
 };
 
-function makeMockLlm(overrides: { hasSignal?: boolean } = {}): LlmClient {
+function makeMockLlm(overrides: { hasSignal?: boolean; publishabilityRisk?: "safe" | "reframeable" | "harmful"; reframingSuggestion?: string } = {}): LlmClient {
   const hasSignal = overrides.hasSignal ?? true;
+  const publishabilityRisk = overrides.publishabilityRisk ?? "safe";
   return {
     generateStructured: vi.fn().mockResolvedValue({
       output: {
@@ -59,7 +60,9 @@ function makeMockLlm(overrides: { hasSignal?: boolean } = {}): LlmClient {
         excerpts: hasSignal ? ["Le DRH a dit: nous avons perdu confiance dans notre DSN actuelle"] : [],
         signalType: hasSignal ? "Pain point" : "",
         theme: hasSignal ? "Compliance" : "",
-        confidenceScore: hasSignal ? 0.85 : 0
+        confidenceScore: hasSignal ? 0.85 : 0,
+        publishabilityRisk,
+        reframingSuggestion: overrides.reframingSuggestion
       },
       usage: { mode: "provider", promptTokens: 100, completionTokens: 50, estimatedCostUsd: 0.01 },
       mode: "provider"
@@ -394,6 +397,186 @@ describe("ClaapConnector", () => {
       for (const chunk of result.chunks!) {
         expect(chunk).toMatch(/^\[/);
       }
+    });
+
+    it("harmful signal → plain item with publishabilityRisk in metadata, no signalKind", async () => {
+      const llm = makeMockLlm({ hasSignal: true, publishabilityRisk: "harmful" });
+      const connector = new ClaapConnector(ENV, llm);
+
+      const longTranscript = "[Customer] They don't trust the accuracy of the DSN output. ".repeat(10);
+      const rawItem: RawSourceItem = {
+        id: "rec-harmful",
+        cursor: "2026-03-19T10:00:00.000Z",
+        payload: {
+          id: "rec-harmful",
+          title: "Customer complaint call",
+          url: "https://app.claap.io/rec-harmful",
+          updatedAt: "2026-03-19T10:00:00.000Z",
+          transcriptSegments: [],
+          assembledTranscript: longTranscript
+        }
+      };
+
+      const result = await connector.normalize(rawItem, CLAAP_CONFIG, CONTEXT);
+
+      expect(result.metadata.signalKind).toBeUndefined();
+      expect(result.metadata.publishabilityRisk).toBe("harmful");
+      expect(result.title).toBe("Customer complaint call");
+    });
+
+    it("reframeable signal → signalKind 'claap-signal-reframeable', confidence ≤ 0.5, reframingSuggestion in metadata", async () => {
+      const llm = makeMockLlm({
+        hasSignal: true,
+        publishabilityRisk: "reframeable",
+        reframingSuggestion: "Focus on the validation outcome, not the doubt"
+      });
+      const connector = new ClaapConnector(ENV, llm);
+
+      const longTranscript = "[Customer] We had doubts about accuracy but after testing it works well. ".repeat(10);
+      const rawItem: RawSourceItem = {
+        id: "rec-reframeable",
+        cursor: "2026-03-19T10:00:00.000Z",
+        payload: {
+          id: "rec-reframeable",
+          title: "Customer validation call",
+          url: "https://app.claap.io/rec-reframeable",
+          updatedAt: "2026-03-19T10:00:00.000Z",
+          transcriptSegments: [],
+          assembledTranscript: longTranscript
+        }
+      };
+
+      const result = await connector.normalize(rawItem, CLAAP_CONFIG, CONTEXT);
+
+      expect(result.metadata.signalKind).toBe("claap-signal-reframeable");
+      expect(result.metadata.publishabilityRisk).toBe("reframeable");
+      expect(result.metadata.reframingSuggestion).toBe("Focus on the validation outcome, not the doubt");
+      expect(result.metadata.confidenceScore).toBeLessThanOrEqual(0.5);
+      // Extracted fields should still be present
+      expect(result.metadata.theme).toBe("Compliance");
+      expect(result.metadata.hookCandidate).toBeDefined();
+    });
+
+    it("safe signal → signalKind 'claap-signal', publishabilityRisk 'safe', confidence unchanged", async () => {
+      const llm = makeMockLlm({ hasSignal: true, publishabilityRisk: "safe" });
+      const connector = new ClaapConnector(ENV, llm);
+
+      const longTranscript = "[Customer] Your compliance automation saved us 40 hours per month. ".repeat(10);
+      const rawItem: RawSourceItem = {
+        id: "rec-safe",
+        cursor: "2026-03-19T10:00:00.000Z",
+        payload: {
+          id: "rec-safe",
+          title: "Happy customer call",
+          url: "https://app.claap.io/rec-safe",
+          updatedAt: "2026-03-19T10:00:00.000Z",
+          transcriptSegments: [],
+          assembledTranscript: longTranscript
+        }
+      };
+
+      const result = await connector.normalize(rawItem, CLAAP_CONFIG, CONTEXT);
+
+      expect(result.metadata.signalKind).toBe("claap-signal");
+      expect(result.metadata.publishabilityRisk).toBe("safe");
+      expect(result.metadata.confidenceScore).toBe(0.85);
+    });
+
+    it("plain item (no LLM) has no publishabilityRisk", async () => {
+      const connector = new ClaapConnector(ENV);
+
+      const longTranscript = "A regular meeting with general discussion about upcoming plans. ".repeat(5);
+      const rawItem: RawSourceItem = {
+        id: "rec-plain",
+        cursor: "2026-03-19T10:00:00.000Z",
+        payload: {
+          id: "rec-plain",
+          title: "Team standup",
+          updatedAt: "2026-03-19T10:00:00.000Z",
+          transcriptSegments: [],
+          assembledTranscript: longTranscript
+        }
+      };
+
+      const result = await connector.normalize(rawItem, CLAAP_CONFIG, CONTEXT);
+
+      expect(result.metadata.publishabilityRisk).toBeUndefined();
+      expect(result.metadata.signalKind).toBeUndefined();
+    });
+
+    it("LLM failure has no publishabilityRisk", async () => {
+      const llm = {
+        generateStructured: vi.fn().mockRejectedValue(new Error("LLM timeout"))
+      } as unknown as LlmClient;
+      const connector = new ClaapConnector(ENV, llm);
+
+      const longTranscript = "Important discussion about compliance and regulatory changes. ".repeat(5);
+      const rawItem: RawSourceItem = {
+        id: "rec-llm-fail",
+        cursor: "2026-03-19T10:00:00.000Z",
+        payload: {
+          id: "rec-llm-fail",
+          title: "Meeting",
+          updatedAt: "2026-03-19T10:00:00.000Z",
+          transcriptSegments: [],
+          assembledTranscript: longTranscript
+        }
+      };
+
+      const result = await connector.normalize(rawItem, CLAAP_CONFIG, CONTEXT);
+
+      expect(result.metadata.publishabilityRisk).toBeUndefined();
+    });
+  });
+
+  describe("prompt", () => {
+    it("includes doctrine in system prompt when provided", async () => {
+      const llm = makeMockLlm({ hasSignal: true });
+      const connector = new ClaapConnector(ENV, llm, "## Our company values honesty");
+
+      const longTranscript = "[Alice] Some important discussion about compliance matters. ".repeat(10);
+      const rawItem: RawSourceItem = {
+        id: "rec-doctrine",
+        cursor: "2026-03-19T10:00:00.000Z",
+        payload: {
+          id: "rec-doctrine",
+          title: "Call",
+          updatedAt: "2026-03-19T10:00:00.000Z",
+          transcriptSegments: [],
+          assembledTranscript: longTranscript
+        }
+      };
+
+      await connector.normalize(rawItem, CLAAP_CONFIG, CONTEXT);
+
+      const generateCall = (llm.generateStructured as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(generateCall.system).toContain("Company Doctrine");
+      expect(generateCall.system).toContain("Our company values honesty");
+      expect(generateCall.system).toContain("Brand Safety");
+    });
+
+    it("includes brand safety in system prompt even without doctrine", async () => {
+      const llm = makeMockLlm({ hasSignal: true });
+      const connector = new ClaapConnector(ENV, llm);
+
+      const longTranscript = "[Alice] Some important discussion about compliance matters. ".repeat(10);
+      const rawItem: RawSourceItem = {
+        id: "rec-nodoctrine",
+        cursor: "2026-03-19T10:00:00.000Z",
+        payload: {
+          id: "rec-nodoctrine",
+          title: "Call",
+          updatedAt: "2026-03-19T10:00:00.000Z",
+          transcriptSegments: [],
+          assembledTranscript: longTranscript
+        }
+      };
+
+      await connector.normalize(rawItem, CLAAP_CONFIG, CONTEXT);
+
+      const generateCall = (llm.generateStructured as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(generateCall.system).toContain("Brand Safety");
+      expect(generateCall.system).not.toContain("Company Doctrine");
     });
   });
 });

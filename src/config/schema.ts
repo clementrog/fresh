@@ -70,7 +70,15 @@ export const claapSignalExtractionSchema = z.object({
   signalType: z.string(),
   theme: z.string(),
   profileHint: z.string().optional(),
-  confidenceScore: z.number().min(0).max(1)
+  confidenceScore: z.number().min(0).max(1),
+  publishabilityRisk: z.enum(["safe", "reframeable", "harmful"]).default("safe"),
+  reframingSuggestion: z.string().optional()
+});
+
+export const claapPublishabilityReviewSchema = z.object({
+  publishabilityRisk: z.enum(["safe", "reframeable", "harmful"]),
+  reframingSuggestion: z.string().optional(),
+  rationale: z.string()
 });
 
 export const linearSourceConfigSchema = sourceBaseSchema.extend({

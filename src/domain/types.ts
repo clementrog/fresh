@@ -56,7 +56,8 @@ export type RunType =
   | "setup:notion"
   | "selection:scan"
   | "cleanup:retention"
-  | "backfill:evidence";
+  | "backfill:evidence"
+  | "cleanup:claap-publishability";
 
 export interface RateLimitConfig {
   requestsPerMinute: number;

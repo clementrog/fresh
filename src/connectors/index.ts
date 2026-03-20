@@ -5,10 +5,10 @@ import { ClaapConnector } from "./claap.js";
 import { LinearConnector } from "./linear.js";
 import { MarketFindingsConnector } from "./market-findings.js";
 import { NotionConnector } from "./notion.js";
-export function createConnectorRegistry(env: AppEnv, llmClient?: LlmClient): Record<ConnectorConfig["source"], SourceConnector<any>> {
+export function createConnectorRegistry(env: AppEnv, llmClient?: LlmClient, doctrineMarkdown?: string): Record<ConnectorConfig["source"], SourceConnector<any>> {
   return {
     notion: new NotionConnector(env),
-    claap: new ClaapConnector(env, llmClient),
+    claap: new ClaapConnector(env, llmClient, doctrineMarkdown),
     linear: new LinearConnector(env),
     "market-findings": new MarketFindingsConnector()
   };

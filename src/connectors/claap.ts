@@ -18,7 +18,10 @@ interface TranscriptSegment {
   endedAt?: number;
 }
 
-const SIGNAL_EXTRACTION_SYSTEM = `You are an editorial signal extractor for a French LinkedIn content pipeline.
+function buildSignalExtractionSystem(doctrineMarkdown?: string): string {
+  const sections: string[] = [];
+
+  sections.push(`You are an editorial signal extractor for a French LinkedIn content pipeline.
 Analyze this Claap recording transcript and determine if it contains an actionable
 editorial signal — a concrete proof point, pain point, adoption signal, market shift,
 or customer insight worth turning into a LinkedIn post.
@@ -34,14 +37,42 @@ If it contains a signal, extract:
 - excerpts: 1-3 key verbatim quotes from the transcript (most impactful)
 - signalType: One of "Proof point", "Pain point", "Adoption signal", "Market shift", "Customer insight"
 - theme: One of "Compliance", "Product adoption", "Market shift", "Operations", "Sales"
-- confidenceScore: 0.0-1.0 confidence that this is worth a LinkedIn post`;
+- confidenceScore: 0.0-1.0 confidence that this is worth a LinkedIn post`);
+
+  if (doctrineMarkdown) {
+    sections.push(`\n## Company Doctrine\n${doctrineMarkdown}`);
+  }
+
+  sections.push(`\n## Brand Safety
+
+Assess every signal for publishability risk. A signal that is factually interesting but would damage the company's brand if published on LinkedIn must be flagged.
+
+Set publishabilityRisk to one of:
+- "safe": The signal can be published as-is without brand risk.
+- "reframeable": The signal contains useful substance but its current framing would damage the brand. Provide a reframingSuggestion explaining how to reframe it safely.
+- "harmful": The signal would damage the brand even if reframed (e.g., a customer saying they don't trust the product, a complaint about core reliability, negative competitive comparison).
+
+Calibration examples:
+- Customer says "your compliance automation saved us 40 hours/month" → safe
+- Customer says "we had doubts about accuracy but after testing it works" → reframeable (reframe: focus on the validation outcome, not the doubt)
+- Customer says "they don't trust the accuracy" or "DSN is the huge blocking point" → harmful
+- Prospect describes a pain point the product solves → safe
+- Prospect describes a pain point AND says the product doesn't solve it → harmful
+
+When in doubt, choose harmful.
+
+If publishabilityRisk is "reframeable", you MUST provide reframingSuggestion.`);
+
+  return sections.join("\n");
+}
 
 export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
   readonly source = "claap" as const;
 
   constructor(
     private readonly env: AppEnv,
-    private readonly llmClient?: LlmClient
+    private readonly llmClient?: LlmClient,
+    private readonly doctrineMarkdown?: string
   ) {
     super();
   }
@@ -126,6 +157,32 @@ export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
       try {
         const extraction = await this.extractSignal(transcript);
         if (extraction && extraction.hasSignal) {
+          const risk = extraction.publishabilityRisk ?? "safe";
+
+          // Harmful: emit plain item with publishabilityRisk in metadata (no signal promotion)
+          if (risk === "harmful") {
+            return {
+              source: "claap",
+              sourceItemId,
+              externalId: `claap:${sourceItemId}`,
+              sourceFingerprint: hashParts(["claap", sourceItemId, payload.updatedAt ?? payload.createdAt ?? "", transcript]),
+              sourceUrl: payload.url ?? "",
+              title: payload.title ?? `Claap recording ${rawItem.id}`,
+              text: transcript,
+              summary: payload.summary ?? transcript.slice(0, 200),
+              speakerName: payload.speaker,
+              occurredAt: payload.updatedAt ?? payload.createdAt ?? context.now.toISOString(),
+              ingestedAt: context.now.toISOString(),
+              metadata: {
+                storeRawText: config.storeRawText,
+                publishabilityRisk: "harmful"
+              },
+              rawPayload: rawItem.payload,
+              rawText: config.storeRawText ? transcript : null,
+              chunks: chunkTranscript(transcript, segments)
+            };
+          }
+
           const profileHint = inferClaapSignalProfileHint({
             signalType: extraction.signalType,
             theme: extraction.theme,
@@ -155,6 +212,48 @@ export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
             .filter(Boolean)
             .join(" ");
 
+          // Reframeable: demoted signal with reduced confidence
+          if (risk === "reframeable") {
+            const demotedConfidence = Math.min(extraction.confidenceScore * 0.6, 0.5);
+            return {
+              source: "claap",
+              sourceItemId,
+              externalId: `claap:${sourceItemId}`,
+              sourceFingerprint: hashParts([
+                "claap",
+                "claap-signal-reframeable",
+                sourceItemId,
+                extraction.title,
+                extraction.signalType,
+                extraction.theme,
+                payload.updatedAt ?? payload.createdAt ?? ""
+              ]),
+              sourceUrl: payload.url ?? "",
+              title: extraction.title,
+              text,
+              summary: summaryText,
+              speakerName: payload.speaker,
+              occurredAt: payload.updatedAt ?? payload.createdAt ?? context.now.toISOString(),
+              ingestedAt: context.now.toISOString(),
+              metadata: {
+                storeRawText: config.storeRawText,
+                signalKind: "claap-signal-reframeable",
+                theme: extraction.theme,
+                signalTypeLabel: extraction.signalType,
+                profileHint,
+                hookCandidate: extraction.hookCandidate,
+                whyItMatters: extraction.whyItMatters,
+                confidenceScore: demotedConfidence,
+                publishabilityRisk: "reframeable",
+                reframingSuggestion: extraction.reframingSuggestion
+              },
+              rawPayload: rawItem.payload,
+              rawText: config.storeRawText ? transcript : null,
+              chunks: extraction.excerpts.length > 0 ? extraction.excerpts : chunkTranscript(transcript, segments)
+            };
+          }
+
+          // Safe: full signal promotion
           return {
             source: "claap",
             sourceItemId,
@@ -183,7 +282,8 @@ export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
               profileHint,
               hookCandidate: extraction.hookCandidate,
               whyItMatters: extraction.whyItMatters,
-              confidenceScore: extraction.confidenceScore
+              confidenceScore: extraction.confidenceScore,
+              publishabilityRisk: "safe"
             },
             rawPayload: rawItem.payload,
             rawText: config.storeRawText ? transcript : null,
@@ -263,12 +363,13 @@ export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
       excerpts: [] as string[],
       signalType: "",
       theme: "",
-      confidenceScore: 0
+      confidenceScore: 0,
+      publishabilityRisk: "safe" as const
     });
 
     const response = await this.llmClient.generateStructured({
       step: "claap-signal-extraction",
-      system: SIGNAL_EXTRACTION_SYSTEM,
+      system: buildSignalExtractionSystem(this.doctrineMarkdown),
       prompt: `Transcript:\n\n${transcript.slice(0, 8000)}`,
       schema: claapSignalExtractionSchema,
       allowFallback: true,

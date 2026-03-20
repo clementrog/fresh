@@ -20,6 +20,7 @@ import {
 import { screeningBatchSchema, createEnrichDecisionSchema } from "../config/schema.js";
 import type { LlmClient, LlmUsage } from "./llm.js";
 import { sourceItemDbId } from "../db/repositories.js";
+import { isBlockedByPublishability } from "./evidence-pack.js";
 
 // --- Prefilter ---
 
@@ -718,6 +719,12 @@ export async function runIntelligencePipeline(
 
   // 4. Create/enrich per retained item
   for (const { item, screening: sr } of retainedAfterScreening) {
+    if (isBlockedByPublishability(item)) {
+      result.skipped.push({ sourceItemId: item.externalId, reason: `Blocked by publishability risk: ${item.metadata?.publishabilityRisk}` });
+      result.processedSourceItemIds.push(item.externalId);
+      continue;
+    }
+
     try {
       const creationMode = getSourceCreationMode(item);
       const { candidates, topScore } = narrowCandidateOpportunities(

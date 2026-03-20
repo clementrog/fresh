@@ -256,6 +256,16 @@ export class NotionService {
     });
   }
 
+  async archiveOpportunityInNotion(notionPageId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.pages.update({
+      page_id: notionPageId,
+      properties: {
+        Status: selectProperty("Archived")
+      } as any
+    });
+  }
+
   async getEditorialNotes(notionPageId: string): Promise<string> {
     if (!this.client) return "";
     try {

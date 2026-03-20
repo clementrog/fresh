@@ -34,6 +34,14 @@ const STOP_WORDS = new Set([
   "help", "still", "even", "back", "much", "many", "only", "right", "old"
 ]);
 
+// --- Publishability guard ---
+
+export function isBlockedByPublishability(item: NormalizedSourceItem): boolean {
+  const risk = typeof item.metadata?.publishabilityRisk === "string"
+    ? item.metadata.publishabilityRisk : undefined;
+  return risk === "reframeable" || risk === "harmful";
+}
+
 // --- Source policy ---
 
 interface SourcePolicyEntry {
@@ -44,6 +52,10 @@ interface SourcePolicyEntry {
 }
 
 function getSourcePolicy(item: NormalizedSourceItem): SourcePolicyEntry {
+  if (isBlockedByPublishability(item)) {
+    return { canBeOrigin: false, canBeSupport: false, minJaccardForSupport: 1.0, priority: 99 };
+  }
+
   const notionKind = typeof item.metadata?.notionKind === "string"
     ? item.metadata.notionKind : undefined;
 
@@ -93,7 +105,9 @@ export function deriveProvenanceType(item: NormalizedSourceItem): string {
     case "claap": {
       const signalKind = typeof item.metadata?.signalKind === "string"
         ? item.metadata.signalKind : undefined;
-      return signalKind === "claap-signal" ? "claap:signal" : "claap";
+      if (signalKind === "claap-signal") return "claap:signal";
+      if (signalKind === "claap-signal-reframeable") return "claap:reframeable";
+      return "claap";
     }
     case "linear":
       return "linear";
