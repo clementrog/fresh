@@ -202,7 +202,8 @@ function buildNotion() {
 
 function buildPrisma() {
   return {
-    $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback({}))
+    $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback({})),
+    $queryRawUnsafe: vi.fn(async () => [{ count: BigInt(0) }])
   };
 }
 

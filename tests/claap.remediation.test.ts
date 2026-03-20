@@ -164,7 +164,8 @@ function buildMocks(opts: {
     opportunity: {
       findMany: vi.fn().mockResolvedValue(opts.opportunities),
       update: opportunityUpdate
-    }
+    },
+    $queryRawUnsafe: vi.fn().mockResolvedValue([{ count: BigInt(0) }])
   };
 
   const notion = {

@@ -254,6 +254,12 @@ export class EditorialSignalEngineApp {
     }
 
     try {
+      // Snapshot pre-run violation count for publishability invariant
+      let preRunViolationCount = 0;
+      if (!context.dryRun) {
+        preRunViolationCount = await this.countPublishabilityViolations();
+      }
+
       const inputs = await this.loadIntelligenceInputs(company.id);
       const rows = await this.repositories.listPendingSourceItems({
         companyId: company.id,
@@ -488,6 +494,10 @@ export class EditorialSignalEngineApp {
             notionPageFingerprint: hashParts([company.id, user.id])
           });
         }
+      }
+
+      if (!context.dryRun) {
+        await this.checkPublishabilityInvariant(run, { preRunCount: preRunViolationCount, mode: "intelligence" });
       }
 
       this.applyFallbackThresholds(run, fallbackSteps);
@@ -1024,6 +1034,10 @@ Provide a rationale explaining your assessment.`,
         }
       }
 
+      if (!context.dryRun) {
+        await this.checkPublishabilityInvariant(run, { mode: "cleanup" });
+      }
+
       const finished = finalizeRun(
         run,
         "completed",
@@ -1180,6 +1194,59 @@ Provide a rationale explaining your assessment.`,
       const dangerousFallback = [...fallbackSteps].some((step) => step.includes("draft") || step.includes("sensitivity"));
       if (dangerousFallback) {
         throw new Error("Run aborted because fallback threshold was exceeded during a sensitive step.");
+      }
+    }
+  }
+
+  private async countPublishabilityViolations(): Promise<number> {
+    const result = await this.prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
+      `SELECT COUNT(DISTINCT o.id)::bigint as count
+       FROM "Opportunity" o
+       WHERE o.status != 'Archived'
+         AND (
+           EXISTS (
+             SELECT 1 FROM "EvidenceReference" e
+             JOIN "SourceItem" s ON s.id = e."sourceItemId"
+             WHERE e."opportunityId" = o.id
+             AND s.source = 'claap'
+             AND (s."metadataJson"->>'publishabilityRisk' = 'harmful'
+               OR s."metadataJson"->>'publishabilityRisk' = 'reframeable')
+           )
+           OR EXISTS (
+             SELECT 1 FROM "OpportunityEvidence" oe
+             JOIN "EvidenceReference" e ON e.id = oe."evidenceId"
+             JOIN "SourceItem" s ON s.id = e."sourceItemId"
+             WHERE oe."opportunityId" = o.id
+             AND s.source = 'claap'
+             AND (s."metadataJson"->>'publishabilityRisk' = 'harmful'
+               OR s."metadataJson"->>'publishabilityRisk' = 'reframeable')
+           )
+         )`
+    );
+    return Number(result[0]?.count ?? 0);
+  }
+
+  /**
+   * Invariant: no non-archived opportunity should have evidence from a blocked source item.
+   *
+   * For cleanup:claap-publishability — warning now, promote to hard failure after stable period.
+   * For intelligence:run — fail hard if the run increased the count, warning-only for pre-existing drift.
+   */
+  private async checkPublishabilityInvariant(
+    run: SyncRun,
+    opts: { preRunCount?: number; mode: "cleanup" | "intelligence" }
+  ) {
+    const count = await this.countPublishabilityViolations();
+    if (count === 0) return;
+
+    const message = `Publishability invariant violation: ${count} non-archived opportunity(s) linked to blocked claap evidence`;
+    run.warnings.push(message);
+    this.logger.error({ count, runType: run.runType }, message);
+
+    if (opts.mode === "intelligence" && opts.preRunCount !== undefined) {
+      const newViolations = count - opts.preRunCount;
+      if (newViolations > 0) {
+        throw new Error(`${message}. This run introduced ${newViolations} new violation(s) — aborting.`);
       }
     }
   }
