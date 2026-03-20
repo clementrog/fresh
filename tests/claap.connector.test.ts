@@ -423,6 +423,9 @@ describe("ClaapConnector", () => {
       expect(result.metadata.publishabilityRisk).toBe("harmful");
       expect(result.title).toBe("Customer complaint call");
       expect(result.metadata.reviewTitle).toBe("Signal détecté dans l'appel commercial");
+      expect(result.metadata.reviewSummary).toBe("Le prospect a exprimé un besoin urgent de conformité DSN.");
+      expect(result.metadata.reviewExcerpts).toEqual(["Le DRH a dit: nous avons perdu confiance dans notre DSN actuelle"]);
+      expect(result.metadata.reviewWhyBlocked).toContain("Blocked as harmful");
     });
 
     it("reframeable signal → signalKind 'claap-signal-reframeable', confidence ≤ 0.5, reframingSuggestion in metadata", async () => {
@@ -454,6 +457,9 @@ describe("ClaapConnector", () => {
       expect(result.metadata.reframingSuggestion).toBe("Focus on the validation outcome, not the doubt");
       expect(result.metadata.confidenceScore).toBeLessThanOrEqual(0.5);
       expect(result.metadata.reviewTitle).toBe("Signal détecté dans l'appel commercial");
+      expect(result.metadata.reviewSummary).toBe("Le prospect a exprimé un besoin urgent de conformité DSN.");
+      expect(result.metadata.reviewExcerpts).toEqual(["Le DRH a dit: nous avons perdu confiance dans notre DSN actuelle"]);
+      expect(result.metadata.reviewWhyBlocked).toContain("Blocked as reframeable");
       // Extracted fields should still be present
       expect(result.metadata.theme).toBe("Compliance");
       expect(result.metadata.hookCandidate).toBeDefined();

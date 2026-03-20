@@ -18,6 +18,16 @@ interface TranscriptSegment {
   endedAt?: number;
 }
 
+function buildReviewWhyBlocked(
+  risk: "harmful" | "reframeable",
+  title: string
+): string {
+  if (risk === "harmful") {
+    return `Blocked as harmful: "${title}" reads like negative feedback about our own product or customer trust. Publishing it would turn a product weakness into public marketing material.`;
+  }
+  return `Blocked as reframeable: "${title}" contains useful substance, but the current framing still exposes a product weakness or negative customer experience. A human must review the evidence and rewrite the angle before any public use.`;
+}
+
 function buildSignalExtractionSystem(doctrineMarkdown?: string): string {
   const sections: string[] = [];
 
@@ -177,7 +187,10 @@ export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
               metadata: {
                 storeRawText: config.storeRawText,
                 publishabilityRisk: "harmful",
-                reviewTitle
+                reviewTitle,
+                reviewSummary: extraction.summary,
+                reviewExcerpts: extraction.excerpts,
+                reviewWhyBlocked: buildReviewWhyBlocked("harmful", reviewTitle)
               },
               rawPayload: rawItem.payload,
               rawText: config.storeRawText ? transcript : null,
@@ -248,7 +261,10 @@ export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
                 confidenceScore: demotedConfidence,
                 publishabilityRisk: "reframeable",
                 reframingSuggestion: extraction.reframingSuggestion,
-                reviewTitle: extraction.title
+                reviewTitle: extraction.title,
+                reviewSummary: extraction.summary,
+                reviewExcerpts: extraction.excerpts,
+                reviewWhyBlocked: buildReviewWhyBlocked("reframeable", extraction.title)
               },
               rawPayload: rawItem.payload,
               rawText: config.storeRawText ? transcript : null,

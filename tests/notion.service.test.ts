@@ -75,6 +75,12 @@ function makeClaapReviewItem(overrides: Record<string, unknown> = {}) {
   return {
     signalTitle: "Signal review title",
     publishabilityRisk: "reframeable" as const,
+    originalSignalSummary: "The customer validated the outcome but described a trust gap during rollout.",
+    keyExcerpts: [
+      "We had doubts at first because the calculation trace was hard to follow.",
+      "After testing, the result was correct and the team adopted it."
+    ],
+    whyBlocked: "Blocked as reframeable because the current framing still foregrounds customer doubt about the product.",
     reframingSuggestion: "Reframe around the validated outcome",
     transcriptLink: "https://app.claap.io/rec-1",
     occurredAt: "2026-03-19T10:00:00.000Z",
@@ -506,6 +512,9 @@ describe("notion service", () => {
     const createProps = (pagesCreate.mock.calls[0] as any[])[0].properties;
     expect(createProps["Signal title"].title[0].text.content).toBe("Signal review title");
     expect(createProps["Publishability risk"].select.name).toBe("reframeable");
+    expect(createProps["Original signal summary"].rich_text[0].text.content).toContain("validated the outcome");
+    expect(createProps["Key excerpts"].rich_text[0].text.content).toContain("We had doubts at first");
+    expect(createProps["Why blocked"].rich_text[0].text.content).toContain("Blocked as reframeable");
     expect(createProps["Reframing suggestion"].rich_text[0].text.content).toBe("Reframe around the validated outcome");
     expect(createProps["Transcript link"].url).toBe("https://app.claap.io/rec-1");
     expect(createProps.Decision.select).toBeNull();
@@ -522,6 +531,7 @@ describe("notion service", () => {
           properties: {
             "Signal title": { type: "title", title: [{ plain_text: "Signal review title" }] },
             "Publishability risk": { type: "select", select: { name: "reframeable" } },
+            "Original signal summary": { type: "rich_text", rich_text: [{ plain_text: "The customer validated the outcome but described a trust gap during rollout." }] },
             "Reframing suggestion": { type: "rich_text", rich_text: [{ plain_text: "Reframe around the validated outcome" }] },
             Decision: { type: "select", select: { name: "needs rewrite" } }
           }
@@ -547,6 +557,7 @@ describe("notion service", () => {
           properties: {
             "Signal title": { type: "title", title: [{ plain_text: "Old title" }] },
             "Publishability risk": { type: "select", select: { name: "reframeable" } },
+            "Original signal summary": { type: "rich_text", rich_text: [{ plain_text: "Old summary" }] },
             "Reframing suggestion": { type: "rich_text", rich_text: [{ plain_text: "Old suggestion" }] },
             Decision: { type: "select", select: { name: "approve" } }
           }

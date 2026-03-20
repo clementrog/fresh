@@ -981,9 +981,16 @@ Provide a rationale explaining your assessment.`,
           }
           if (response.output.rationale) {
             (updatedMetadata as Record<string, unknown>).publishabilityRationale = response.output.rationale;
+            (updatedMetadata as Record<string, unknown>).reviewWhyBlocked = response.output.rationale;
           }
           if (!(updatedMetadata as Record<string, unknown>).reviewTitle) {
             (updatedMetadata as Record<string, unknown>).reviewTitle = sourceItem.title;
+          }
+          if (!(updatedMetadata as Record<string, unknown>).reviewSummary) {
+            (updatedMetadata as Record<string, unknown>).reviewSummary = sourceItem.summary;
+          }
+          if (getStringArray((updatedMetadata as Record<string, unknown>).reviewExcerpts).length === 0) {
+            (updatedMetadata as Record<string, unknown>).reviewExcerpts = getStringArray(sourceItem.chunksJson);
           }
           reviewMetadata = updatedMetadata;
 
@@ -1296,6 +1303,7 @@ Provide a rationale explaining your assessment.`,
       title: string;
       sourceUrl: string;
       occurredAt: Date;
+      summary?: string;
       notionPageId?: string | null;
       notionPageFingerprint?: string | null;
     }
@@ -1316,9 +1324,22 @@ Provide a rationale explaining your assessment.`,
     }
 
     const reviewFingerprint = storedItem.notionPageFingerprint ?? hashParts(["claap-review", companyId, storedItem.id]);
+    const reviewContext = buildClaapReviewContext({
+      risk,
+      title: typeof item.metadata.reviewTitle === "string" ? item.metadata.reviewTitle : item.title,
+      summary: typeof item.metadata.reviewSummary === "string" ? item.metadata.reviewSummary : item.summary,
+      excerpts: getStringArray(item.metadata.reviewExcerpts).length > 0
+        ? getStringArray(item.metadata.reviewExcerpts)
+        : item.chunks,
+      whyBlocked: typeof item.metadata.reviewWhyBlocked === "string" ? item.metadata.reviewWhyBlocked : undefined,
+      fallbackText: item.text
+    });
     const syncResult = await this.notion.syncClaapReviewItem({
-      signalTitle: typeof item.metadata.reviewTitle === "string" ? item.metadata.reviewTitle : item.title,
+      signalTitle: reviewContext.title,
       publishabilityRisk: risk,
+      originalSignalSummary: reviewContext.summary,
+      keyExcerpts: reviewContext.excerpts,
+      whyBlocked: reviewContext.whyBlocked,
       reframingSuggestion: typeof item.metadata.reframingSuggestion === "string" ? item.metadata.reframingSuggestion : undefined,
       transcriptLink: item.sourceUrl,
       occurredAt: item.occurredAt,
@@ -1338,6 +1359,10 @@ Provide a rationale explaining your assessment.`,
       id: string;
       source: string;
       title: string;
+      summary: string;
+      text: string;
+      rawText?: string | null;
+      chunksJson?: unknown;
       sourceUrl: string;
       occurredAt: Date;
       metadataJson?: unknown;
@@ -1362,9 +1387,22 @@ Provide a rationale explaining your assessment.`,
     }
 
     const reviewFingerprint = sourceItem.notionPageFingerprint ?? hashParts(["claap-review", companyId, sourceItem.id]);
+    const reviewContext = buildClaapReviewContext({
+      risk,
+      title: typeof metadata.reviewTitle === "string" ? metadata.reviewTitle : sourceItem.title,
+      summary: typeof metadata.reviewSummary === "string" ? metadata.reviewSummary : sourceItem.summary,
+      excerpts: getStringArray(metadata.reviewExcerpts).length > 0
+        ? getStringArray(metadata.reviewExcerpts)
+        : getStringArray(sourceItem.chunksJson),
+      whyBlocked: typeof metadata.reviewWhyBlocked === "string" ? metadata.reviewWhyBlocked : undefined,
+      fallbackText: sourceItem.rawText ?? sourceItem.text
+    });
     const syncResult = await this.notion.syncClaapReviewItem({
-      signalTitle: typeof metadata.reviewTitle === "string" ? metadata.reviewTitle : sourceItem.title,
+      signalTitle: reviewContext.title,
       publishabilityRisk: risk,
+      originalSignalSummary: reviewContext.summary,
+      keyExcerpts: reviewContext.excerpts,
+      whyBlocked: reviewContext.whyBlocked,
       reframingSuggestion: typeof metadata.reframingSuggestion === "string" ? metadata.reframingSuggestion : undefined,
       transcriptLink: sourceItem.sourceUrl,
       occurredAt: sourceItem.occurredAt.toISOString(),
@@ -1563,6 +1601,61 @@ function mapStoredEvidence(row: {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function getStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+function buildClaapReviewContext(params: {
+  risk: "harmful" | "reframeable";
+  title: string;
+  summary?: string;
+  excerpts?: string[];
+  whyBlocked?: string;
+  fallbackText?: string;
+}) {
+  const excerpts = (params.excerpts ?? [])
+    .filter(Boolean)
+    .slice(0, 3)
+    .map((entry) => entry.trim().slice(0, 280));
+  return {
+    title: params.title,
+    summary: (params.summary ?? "").trim() || params.title,
+    excerpts: excerpts.length > 0 ? excerpts : fallbackReviewExcerpts(params.fallbackText),
+    whyBlocked: params.whyBlocked?.trim() || defaultClaapWhyBlocked(params.risk, params.title)
+  };
+}
+
+function fallbackReviewExcerpts(text?: string): string[] {
+  if (!text) {
+    return [];
+  }
+
+  const normalized = text
+    .split(/\n+/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 20);
+
+  if (normalized.length > 0) {
+    return normalized.slice(0, 3).map((entry) => entry.slice(0, 280));
+  }
+
+  return [text.trim().slice(0, 280)].filter(Boolean);
+}
+
+function defaultClaapWhyBlocked(risk: "harmful" | "reframeable", title: string): string {
+  if (risk === "harmful") {
+    return `Blocked as harmful: "${title}" reads like negative feedback about our own product or customer trust. Publishing it would create public evidence against us.`;
+  }
+  return `Blocked as reframeable: "${title}" contains useful substance, but the current wording still exposes a product weakness or negative customer experience. Review the evidence and rewrite the angle before any public use.`;
 }
 
 function parseEnrichmentLog(value: unknown): EnrichmentLogEntry[] {

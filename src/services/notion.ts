@@ -128,6 +128,9 @@ export class NotionService {
   async syncClaapReviewItem(item: {
     signalTitle: string;
     publishabilityRisk: "reframeable" | "harmful";
+    originalSignalSummary: string;
+    keyExcerpts: string[];
+    whyBlocked: string;
     reframingSuggestion?: string;
     transcriptLink: string;
     occurredAt: string;
@@ -157,6 +160,9 @@ export class NotionService {
     const existingRisk = existingPage
       ? getSelectPropertyName(existingPage, "Publishability risk")
       : "";
+    const existingSummary = existingPage
+      ? getRichTextPropertyText(existingPage, "Original signal summary")
+      : "";
     const existingSuggestion = existingPage
       ? getRichTextPropertyText(existingPage, "Reframing suggestion")
       : "";
@@ -165,6 +171,7 @@ export class NotionService {
       && (
         existingTitle !== item.signalTitle
         || existingRisk !== item.publishabilityRisk
+        || existingSummary !== item.originalSignalSummary
         || existingSuggestion !== (item.reframingSuggestion ?? "")
       )
     );
@@ -172,6 +179,9 @@ export class NotionService {
     const properties = compactProperties({
       "Signal title": titleProperty(item.signalTitle),
       "Publishability risk": selectProperty(item.publishabilityRisk),
+      "Original signal summary": richTextProperty(item.originalSignalSummary),
+      "Key excerpts": richTextProperty(item.keyExcerpts.join("\n\n")),
+      "Why blocked": richTextProperty(item.whyBlocked),
       "Reframing suggestion": richTextProperty(item.reframingSuggestion ?? ""),
       "Transcript link": urlProperty(item.transcriptLink),
       Decision: materialChange
@@ -815,6 +825,9 @@ function getDatabaseProperties(name: RequiredDatabase) {
       return {
         "Signal title": { title: {} },
         "Publishability risk": { select: {} },
+        "Original signal summary": { rich_text: {} },
+        "Key excerpts": { rich_text: {} },
+        "Why blocked": { rich_text: {} },
         "Reframing suggestion": { rich_text: {} },
         "Transcript link": { url: {} },
         Decision: { select: {} },

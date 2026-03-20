@@ -296,7 +296,13 @@ describe("cleanup:claap-publishability", () => {
       metadataJson: {
         publishabilityRisk: "reframeable",
         signalKind: "claap-signal-reframeable",
-        reframingSuggestion: "Lead with the validated outcome"
+        reframingSuggestion: "Lead with the validated outcome",
+        reviewSummary: "Le client voit de la valeur mais le cadrage actuel expose encore une faiblesse produit.",
+        reviewExcerpts: [
+          "La traçabilité n'était pas assez claire au départ.",
+          "Après vérification, le résultat était bon."
+        ],
+        reviewWhyBlocked: "Blocked as reframeable because the original framing still exposes a trust gap."
       }
     });
 
@@ -318,6 +324,12 @@ describe("cleanup:claap-publishability", () => {
     expect(mocks.syncClaapReviewItem).toHaveBeenCalledWith(expect.objectContaining({
       signalTitle: "Sales call",
       publishabilityRisk: "reframeable",
+      originalSignalSummary: "Le client voit de la valeur mais le cadrage actuel expose encore une faiblesse produit.",
+      keyExcerpts: [
+        "La traçabilité n'était pas assez claire au départ.",
+        "Après vérification, le résultat était bon."
+      ],
+      whyBlocked: "Blocked as reframeable because the original framing still exposes a trust gap.",
       reframingSuggestion: "Lead with the validated outcome",
       claapSourceItemId: "si-review-backfill"
     }));

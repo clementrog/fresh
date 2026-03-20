@@ -137,7 +137,13 @@ describe("ingest Claap review queue sync", () => {
       metadata: {
         publishabilityRisk: "reframeable",
         reframingSuggestion: "Lead with the validated result",
-        reviewTitle: "Signal détecté"
+        reviewTitle: "Signal détecté",
+        reviewSummary: "Le client valide le résultat mais la formulation actuelle insiste sur un doute produit.",
+        reviewExcerpts: [
+          "On a eu un doute au début sur la traçabilité.",
+          "Après test, le calcul était bon."
+        ],
+        reviewWhyBlocked: "Blocked as reframeable because the current wording still foregrounds the doubt."
       },
       rawPayload: {}
     };
@@ -156,6 +162,12 @@ describe("ingest Claap review queue sync", () => {
     expect(notion.syncClaapReviewItem).toHaveBeenCalledWith(expect.objectContaining({
       signalTitle: "Signal détecté",
       publishabilityRisk: "reframeable",
+      originalSignalSummary: "Le client valide le résultat mais la formulation actuelle insiste sur un doute produit.",
+      keyExcerpts: [
+        "On a eu un doute au début sur la traçabilité.",
+        "Après test, le calcul était bon."
+      ],
+      whyBlocked: "Blocked as reframeable because the current wording still foregrounds the doubt.",
       reframingSuggestion: "Lead with the validated result",
       transcriptLink: "https://app.claap.io/rec-1",
       claapSourceItemId: "si-claap-1"
