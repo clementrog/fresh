@@ -265,12 +265,20 @@ export class NotionService {
     const existingRationale = existingPage
       ? getRichTextPropertyText(existingPage, "Rationale")
       : "";
+    const existingCustomerVisibility = existingPage
+      ? getSelectPropertyName(existingPage, "Customer visibility")
+      : "";
+    const existingSensitivityLevel = existingPage
+      ? getSelectPropertyName(existingPage, "Sensitivity level")
+      : "";
     const materialChange = Boolean(
       existingPage
       && (
         existingTitle !== item.itemTitle
         || existingClassification !== item.classification
         || existingRationale !== item.rationale
+        || existingCustomerVisibility !== item.customerVisibility
+        || existingSensitivityLevel !== item.sensitivityLevel
       )
     );
 

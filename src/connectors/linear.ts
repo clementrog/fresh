@@ -66,6 +66,7 @@ export class LinearConnector extends BaseConnector<LinearSourceConfig> {
         "projectUpdates",
         `
           id
+          url
           body
           createdAt
           updatedAt
@@ -114,12 +115,16 @@ export class LinearConnector extends BaseConnector<LinearSourceConfig> {
     };
     const text = payload.description ?? payload.body ?? "";
     const sourceItemId = String(payload.id ?? rawItem.id);
+    const sourceUrl = payload.url
+      || (payload.itemType === "project_update" && payload.project?.name
+        ? `https://linear.app/project-update/${sourceItemId}`
+        : "");
     return {
       source: "linear",
       sourceItemId,
       externalId: `linear:${sourceItemId}`,
       sourceFingerprint: hashParts(["linear", sourceItemId, text]),
-      sourceUrl: payload.url ?? "",
+      sourceUrl,
       title: payload.title
         ?? (payload.project?.name ? `Project update: ${payload.project.name}` : undefined)
         ?? payload.identifier

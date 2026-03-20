@@ -302,6 +302,7 @@ export class EditorialSignalEngineApp {
         }
 
         // Persist Linear enrichment classifications to DB + sync review items to Notion
+        const linearPersistFailedIds = new Set<string>();
         for (const [externalId, classification] of pipelineResult.linearClassifications) {
           const dbId = sourceItemDbId(company.id, externalId);
           try {
@@ -355,7 +356,17 @@ export class EditorialSignalEngineApp {
           } catch (error) {
             const message = error instanceof Error ? error.message : "Unknown error";
             this.logger.error({ externalId, error: message }, "Failed to persist Linear classification");
+            linearPersistFailedIds.add(externalId);
           }
+        }
+
+        // Exclude Linear items whose classification persistence failed from the processed set
+        // so they remain pending for retry on the next run
+        if (linearPersistFailedIds.size > 0) {
+          pipelineResult.processedSourceItemIds = pipelineResult.processedSourceItemIds.filter(
+            (id) => !linearPersistFailedIds.has(id)
+          );
+          run.warnings.push(`Linear classification persistence failed for ${linearPersistFailedIds.size} item(s): ${[...linearPersistFailedIds].join(", ")}`);
         }
 
         // Persist created opportunities + evidence-pack enrichment
