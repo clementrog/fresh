@@ -422,6 +422,7 @@ describe("ClaapConnector", () => {
       expect(result.metadata.signalKind).toBeUndefined();
       expect(result.metadata.publishabilityRisk).toBe("harmful");
       expect(result.title).toBe("Customer complaint call");
+      expect(result.metadata.reviewTitle).toBe("Signal détecté dans l'appel commercial");
     });
 
     it("reframeable signal → signalKind 'claap-signal-reframeable', confidence ≤ 0.5, reframingSuggestion in metadata", async () => {
@@ -452,6 +453,7 @@ describe("ClaapConnector", () => {
       expect(result.metadata.publishabilityRisk).toBe("reframeable");
       expect(result.metadata.reframingSuggestion).toBe("Focus on the validation outcome, not the doubt");
       expect(result.metadata.confidenceScore).toBeLessThanOrEqual(0.5);
+      expect(result.metadata.reviewTitle).toBe("Signal détecté dans l'appel commercial");
       // Extracted fields should still be present
       expect(result.metadata.theme).toBe("Compliance");
       expect(result.metadata.hookCandidate).toBeDefined();

@@ -161,6 +161,7 @@ export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
 
           // Harmful: emit plain item with publishabilityRisk in metadata (no signal promotion)
           if (risk === "harmful") {
+            const reviewTitle = extraction.title || payload.title || `Claap recording ${rawItem.id}`;
             return {
               source: "claap",
               sourceItemId,
@@ -175,7 +176,8 @@ export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
               ingestedAt: context.now.toISOString(),
               metadata: {
                 storeRawText: config.storeRawText,
-                publishabilityRisk: "harmful"
+                publishabilityRisk: "harmful",
+                reviewTitle
               },
               rawPayload: rawItem.payload,
               rawText: config.storeRawText ? transcript : null,
@@ -245,7 +247,8 @@ export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
                 whyItMatters: extraction.whyItMatters,
                 confidenceScore: demotedConfidence,
                 publishabilityRisk: "reframeable",
-                reframingSuggestion: extraction.reframingSuggestion
+                reframingSuggestion: extraction.reframingSuggestion,
+                reviewTitle: extraction.title
               },
               rawPayload: rawItem.payload,
               rawText: config.storeRawText ? transcript : null,

@@ -12,6 +12,7 @@ import type {
 
 export const REQUIRED_DATABASES = [
   "Content Opportunities",
+  "Claap Review",
   "Profiles",
   "Sync Runs"
 ] as const;
@@ -122,6 +123,91 @@ export class NotionService {
         "Editorial notes": richTextProperty("")
       }
     });
+  }
+
+  async syncClaapReviewItem(item: {
+    signalTitle: string;
+    publishabilityRisk: "reframeable" | "harmful";
+    reframingSuggestion?: string;
+    transcriptLink: string;
+    occurredAt: string;
+    reviewFingerprint: string;
+    claapSourceItemId: string;
+    notionPageId?: string;
+  }): Promise<NotionSyncResult | null> {
+    if (!this.client) {
+      return null;
+    }
+
+    const databaseId = await this.ensureDatabase("Claap Review");
+    let existingPage = item.notionPageId
+      ? await this.retrievePage(item.notionPageId)
+      : null;
+
+    if (!existingPage) {
+      existingPage = await this.findPageByFingerprintWithProperties(databaseId, "Review fingerprint", item.reviewFingerprint);
+    }
+
+    const existingDecision = existingPage
+      ? getSelectPropertyName(existingPage, "Decision")
+      : "";
+    const existingTitle = existingPage
+      ? getTitlePropertyText(existingPage, "Signal title")
+      : "";
+    const existingRisk = existingPage
+      ? getSelectPropertyName(existingPage, "Publishability risk")
+      : "";
+    const existingSuggestion = existingPage
+      ? getRichTextPropertyText(existingPage, "Reframing suggestion")
+      : "";
+    const materialChange = Boolean(
+      existingPage
+      && (
+        existingTitle !== item.signalTitle
+        || existingRisk !== item.publishabilityRisk
+        || existingSuggestion !== (item.reframingSuggestion ?? "")
+      )
+    );
+
+    const properties = compactProperties({
+      "Signal title": titleProperty(item.signalTitle),
+      "Publishability risk": selectProperty(item.publishabilityRisk),
+      "Reframing suggestion": richTextProperty(item.reframingSuggestion ?? ""),
+      "Transcript link": urlProperty(item.transcriptLink),
+      Decision: materialChange
+        ? emptySelectProperty()
+        : existingDecision
+          ? selectProperty(existingDecision)
+          : existingPage ? undefined : emptySelectProperty(),
+      "Occurred at": dateProperty(item.occurredAt),
+      "Review fingerprint": richTextProperty(item.reviewFingerprint),
+      "Claap source item id": richTextProperty(item.claapSourceItemId)
+    });
+
+    if (existingPage) {
+      const pageId = getPageId(existingPage);
+      if (!pageId) {
+        throw new Error("Claap review page is missing an id");
+      }
+      await this.client.pages.update({
+        page_id: pageId,
+        archived: false,
+        properties: properties as any
+      });
+      return {
+        notionPageId: pageId,
+        action: "updated"
+      };
+    }
+
+    const created = await this.client.pages.create({
+      parent: { database_id: databaseId },
+      properties: properties as any
+    });
+    return {
+      notionPageId: created.id,
+      action: "created"
+    };
   }
 
   /** Write draft content into the page body, replacing any existing draft section. */
@@ -265,6 +351,14 @@ export class NotionService {
         Status: selectProperty("Archived")
       } as any
     });
+  }
+
+  async archiveClaapReviewItem(notionPageId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.pages.update({
+      page_id: notionPageId,
+      archived: true
+    } as any);
   }
 
   async getEditorialNotes(notionPageId: string): Promise<string> {
@@ -464,6 +558,39 @@ export class NotionService {
     return page?.id ?? null;
   }
 
+  private async findPageByFingerprintWithProperties(databaseId: string, propertyName: string, fingerprint: string) {
+    if (!this.client) {
+      return null;
+    }
+
+    const response = await this.client.databases.query({
+      database_id: databaseId,
+      filter: {
+        property: propertyName,
+        rich_text: {
+          equals: fingerprint
+        }
+      }
+    } as any);
+
+    return response.results.find((result) => result.object === "page") ?? null;
+  }
+
+  private async retrievePage(pageId: string) {
+    if (!this.client) {
+      return null;
+    }
+
+    try {
+      return await this.client.pages.retrieve({ page_id: pageId });
+    } catch (error) {
+      if (isNotionObjectNotFoundError(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
   private async ensureDatabase(name: RequiredDatabase) {
     if (!this.client) {
       return "";
@@ -641,6 +768,10 @@ export function manualReviewViewSpecs() {
     { name: "Content Opportunities / Picked", description: "Filter where Status = Selected" },
     { name: "Content Opportunities / Draft ready", description: "Filter where Status = V1 generated" },
     { name: "Content Opportunities / Rejected or Archived", description: "Filter where Status = Rejected or Archived" },
+    { name: "Claap Review / Needs review", description: "Filter where Decision is empty" },
+    { name: "Claap Review / Needs rewrite", description: "Filter where Decision = needs rewrite" },
+    { name: "Claap Review / Rejected", description: "Filter where Decision = reject" },
+    { name: "Claap Review / Approved", description: "Filter where Decision = approve" },
     { name: "Sync Runs / Recent", description: "Sort by Started at descending" }
   ];
 }
@@ -679,6 +810,17 @@ function getDatabaseProperties(name: RequiredDatabase) {
         "Selected at": { date: {} },
         "Last digest at": { date: {} },
         "Opportunity fingerprint": { rich_text: {} }
+      };
+    case "Claap Review":
+      return {
+        "Signal title": { title: {} },
+        "Publishability risk": { select: {} },
+        "Reframing suggestion": { rich_text: {} },
+        "Transcript link": { url: {} },
+        Decision: { select: {} },
+        "Occurred at": { date: {} },
+        "Review fingerprint": { rich_text: {} },
+        "Claap source item id": { rich_text: {} }
       };
     case "Profiles":
       return {
@@ -870,6 +1012,52 @@ function selectProperty(value: string) {
   };
 }
 
+function emptySelectProperty() {
+  return {
+    select: null
+  };
+}
+
 function numberProperty(value: number) {
   return { number: value };
+}
+
+function urlProperty(value: string) {
+  return {
+    url: value || null
+  };
+}
+
+function compactProperties(properties: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(properties).filter(([, value]) => value !== undefined)
+  );
+}
+
+function getPageProperties(page: unknown) {
+  if (!page || typeof page !== "object") return {};
+  return ((page as { properties?: Record<string, unknown> }).properties ?? {});
+}
+
+function getPageId(page: unknown) {
+  if (!page || typeof page !== "object") return "";
+  return String((page as { id?: string }).id ?? "");
+}
+
+function getRichTextPropertyText(page: unknown, propertyName: string) {
+  const value = getPageProperties(page)[propertyName] as { type?: string; rich_text?: Array<{ plain_text?: string }> } | undefined;
+  if (value?.type !== "rich_text") return "";
+  return value.rich_text?.map((entry) => entry.plain_text ?? "").join("") ?? "";
+}
+
+function getTitlePropertyText(page: unknown, propertyName: string) {
+  const value = getPageProperties(page)[propertyName] as { type?: string; title?: Array<{ plain_text?: string }> } | undefined;
+  if (value?.type !== "title") return "";
+  return value.title?.map((entry) => entry.plain_text ?? "").join("") ?? "";
+}
+
+function getSelectPropertyName(page: unknown, propertyName: string) {
+  const value = getPageProperties(page)[propertyName] as { type?: string; select?: { name?: string | null } | null } | undefined;
+  if (value?.type !== "select") return "";
+  return value.select?.name ?? "";
 }

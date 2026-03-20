@@ -71,15 +71,29 @@ function makeOpportunity(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function makeClaapReviewItem(overrides: Record<string, unknown> = {}) {
+  return {
+    signalTitle: "Signal review title",
+    publishabilityRisk: "reframeable" as const,
+    reframingSuggestion: "Reframe around the validated outcome",
+    transcriptLink: "https://app.claap.io/rec-1",
+    occurredAt: "2026-03-19T10:00:00.000Z",
+    reviewFingerprint: "claap-review-fp-1",
+    claapSourceItemId: "si-claap-1",
+    notionPageId: undefined as string | undefined,
+    ...overrides
+  };
+}
+
 describe("notion service", () => {
-  it("ensureSchema creates exactly 3 databases", async () => {
+  it("ensureSchema creates exactly 4 databases", async () => {
     const client = makeNotionClient();
     const service = new NotionService("", "parent-page", { client });
 
     const result = await service.ensureSchema();
 
-    expect(result.databases).toHaveLength(3);
-    expect(REQUIRED_DATABASES).toEqual(["Content Opportunities", "Profiles", "Sync Runs"]);
+    expect(result.databases).toHaveLength(4);
+    expect(REQUIRED_DATABASES).toEqual(["Content Opportunities", "Claap Review", "Profiles", "Sync Runs"]);
   });
 
   it("ensureDatabase lazily patches missing properties on existing required databases", async () => {
@@ -443,7 +457,7 @@ describe("notion service", () => {
 
     const result = await service.ensureSchema();
 
-    expect(result.databases).toHaveLength(3);
+    expect(result.databases).toHaveLength(4);
     expect(onWarning).toHaveBeenCalledWith(
       "Skipping Operations Guide creation because the configured Notion parent cannot accept child pages."
     );
@@ -458,11 +472,115 @@ describe("notion service", () => {
     expect(viewNames).toContain("Content Opportunities / To review");
     expect(viewNames).toContain("Content Opportunities / Picked");
     expect(viewNames).toContain("Content Opportunities / Draft ready");
+    expect(viewNames).toContain("Claap Review / Needs review");
+    expect(viewNames).toContain("Claap Review / Needs rewrite");
+    expect(viewNames).toContain("Claap Review / Rejected");
+    expect(viewNames).toContain("Claap Review / Approved");
     expect(viewNames).toContain("Sync Runs / Recent");
     // Old signal-centric views should not be present
     expect(viewNames).not.toContain("Signal Feed / Needs review");
     expect(viewNames).not.toContain("Signal Feed / Sensitive review");
     expect(viewNames).not.toContain("Content Opportunities / Needs routing");
+  });
+
+  it("syncClaapReviewItem creates a review row with the expected fields", async () => {
+    const pagesCreate = vi.fn(async () => ({ id: "review-page-created" }));
+    const client = makeNotionClient({
+      pages: {
+        create: pagesCreate,
+        update: vi.fn(async () => ({})),
+        retrieve: vi.fn(async () => null)
+      },
+      databases: {
+        query: vi.fn(async () => ({ results: [], has_more: false, next_cursor: null })),
+        create: vi.fn(async () => ({ id: "db-review" })),
+        retrieve: vi.fn(async () => ({ properties: {} })),
+        update: vi.fn(async () => ({}))
+      }
+    });
+    const service = new NotionService("", "parent-page", { client });
+
+    await service.syncClaapReviewItem(makeClaapReviewItem());
+
+    expect(pagesCreate).toHaveBeenCalledTimes(1);
+    const createProps = (pagesCreate.mock.calls[0] as any[])[0].properties;
+    expect(createProps["Signal title"].title[0].text.content).toBe("Signal review title");
+    expect(createProps["Publishability risk"].select.name).toBe("reframeable");
+    expect(createProps["Reframing suggestion"].rich_text[0].text.content).toBe("Reframe around the validated outcome");
+    expect(createProps["Transcript link"].url).toBe("https://app.claap.io/rec-1");
+    expect(createProps.Decision.select).toBeNull();
+  });
+
+  it("syncClaapReviewItem preserves an existing non-empty decision on normal resync", async () => {
+    const pagesUpdate = vi.fn(async () => ({}));
+    const client = makeNotionClient({
+      pages: {
+        create: vi.fn(async () => ({ id: "review-page-created" })),
+        update: pagesUpdate,
+        retrieve: vi.fn(async () => ({
+          id: "existing-review-page",
+          properties: {
+            "Signal title": { type: "title", title: [{ plain_text: "Signal review title" }] },
+            "Publishability risk": { type: "select", select: { name: "reframeable" } },
+            "Reframing suggestion": { type: "rich_text", rich_text: [{ plain_text: "Reframe around the validated outcome" }] },
+            Decision: { type: "select", select: { name: "needs rewrite" } }
+          }
+        }))
+      }
+    });
+    const service = new NotionService("", "parent-page", { client });
+
+    await service.syncClaapReviewItem(makeClaapReviewItem({ notionPageId: "existing-review-page" }));
+
+    const updateProps = (pagesUpdate.mock.calls[0] as any[])[0].properties;
+    expect(updateProps.Decision.select.name).toBe("needs rewrite");
+  });
+
+  it("syncClaapReviewItem resets decision when the review basis changes materially", async () => {
+    const pagesUpdate = vi.fn(async () => ({}));
+    const client = makeNotionClient({
+      pages: {
+        create: vi.fn(async () => ({ id: "review-page-created" })),
+        update: pagesUpdate,
+        retrieve: vi.fn(async () => ({
+          id: "existing-review-page",
+          properties: {
+            "Signal title": { type: "title", title: [{ plain_text: "Old title" }] },
+            "Publishability risk": { type: "select", select: { name: "reframeable" } },
+            "Reframing suggestion": { type: "rich_text", rich_text: [{ plain_text: "Old suggestion" }] },
+            Decision: { type: "select", select: { name: "approve" } }
+          }
+        }))
+      }
+    });
+    const service = new NotionService("", "parent-page", { client });
+
+    await service.syncClaapReviewItem(makeClaapReviewItem({ notionPageId: "existing-review-page" }));
+
+    const updateProps = (pagesUpdate.mock.calls[0] as any[])[0].properties;
+    expect(updateProps.Decision.select).toBeNull();
+  });
+
+  it("archiveClaapReviewItem archives the review page", async () => {
+    const pagesUpdate = vi.fn(async () => ({}));
+    const service = new NotionService("", "parent-page", {
+      client: makeNotionClient({
+        pages: {
+          create: vi.fn(async () => ({ id: "page-created" })),
+          update: pagesUpdate,
+          retrieve: vi.fn(async () => null)
+        }
+      })
+    });
+
+    await service.archiveClaapReviewItem("review-page-1");
+
+    expect(pagesUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        page_id: "review-page-1",
+        archived: true
+      })
+    );
   });
 });
 

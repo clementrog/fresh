@@ -147,12 +147,13 @@ export class EditorialSignalEngineApp {
           const normalized = await registry[config.source].normalize(rawItem, config as never, context);
           run.counters.normalized += 1;
           if (!context.dryRun) {
-            await this.repositories.upsertSourceItem(
+            const storedItem = await this.repositories.upsertSourceItem(
               normalized,
               computeRawTextExpiry(this.findConfig(staticInputs.configs, normalized.source), context.now),
               this.prisma,
               company.id
             );
+            await this.syncClaapReviewQueueForNormalizedItem(company.id, normalized, storedItem);
           }
         }
 
@@ -910,6 +911,7 @@ export class EditorialSignalEngineApp {
       for (const sourceItem of allClaapSignals) {
         const existingMeta = isRecord(sourceItem.metadataJson) ? sourceItem.metadataJson : {};
         const existingRisk = typeof existingMeta.publishabilityRisk === "string" ? existingMeta.publishabilityRisk : undefined;
+        let reviewMetadata: Record<string, unknown> = existingMeta;
 
         // Already reclassified — skip LLM, jump straight to opportunity archival
         let risk: string;
@@ -961,6 +963,9 @@ Provide a rationale explaining your assessment.`,
           risk = response.output.publishabilityRisk;
 
           if (risk === "safe") {
+            if (!context.dryRun) {
+              await this.syncClaapReviewQueueForStoredItem(company.id, sourceItem);
+            }
             safe += 1;
             continue;
           }
@@ -977,6 +982,10 @@ Provide a rationale explaining your assessment.`,
           if (response.output.rationale) {
             (updatedMetadata as Record<string, unknown>).publishabilityRationale = response.output.rationale;
           }
+          if (!(updatedMetadata as Record<string, unknown>).reviewTitle) {
+            (updatedMetadata as Record<string, unknown>).reviewTitle = sourceItem.title;
+          }
+          reviewMetadata = updatedMetadata;
 
           if (!context.dryRun) {
             await this.prisma.sourceItem.update({
@@ -985,6 +994,13 @@ Provide a rationale explaining your assessment.`,
             });
           }
           reclassified += 1;
+        }
+
+        if (!context.dryRun) {
+          await this.syncClaapReviewQueueForStoredItem(company.id, {
+            ...sourceItem,
+            metadataJson: reviewMetadata
+          });
         }
 
         // Find opportunities linked to this source item via direct FK or junction table
@@ -1268,6 +1284,97 @@ Provide a rationale explaining your assessment.`,
       run.notionPageId = notionSync.notionPageId;
       await this.repositories.updateSyncRunNotionSync(run.id, notionSync.notionPageId, run.notionPageFingerprint);
       await this.repositories.updateSyncRun(run);
+    }
+  }
+
+  private async syncClaapReviewQueueForNormalizedItem(
+    companyId: string,
+    item: NormalizedSourceItem,
+    storedItem: {
+      id: string;
+      source: string;
+      title: string;
+      sourceUrl: string;
+      occurredAt: Date;
+      notionPageId?: string | null;
+      notionPageFingerprint?: string | null;
+    }
+  ) {
+    if (item.source !== "claap") {
+      return;
+    }
+
+    const risk = typeof item.metadata.publishabilityRisk === "string"
+      ? item.metadata.publishabilityRisk
+      : undefined;
+
+    if (risk !== "harmful" && risk !== "reframeable") {
+      if (storedItem.notionPageId) {
+        await this.notion.archiveClaapReviewItem(storedItem.notionPageId);
+      }
+      return;
+    }
+
+    const reviewFingerprint = storedItem.notionPageFingerprint ?? hashParts(["claap-review", companyId, storedItem.id]);
+    const syncResult = await this.notion.syncClaapReviewItem({
+      signalTitle: typeof item.metadata.reviewTitle === "string" ? item.metadata.reviewTitle : item.title,
+      publishabilityRisk: risk,
+      reframingSuggestion: typeof item.metadata.reframingSuggestion === "string" ? item.metadata.reframingSuggestion : undefined,
+      transcriptLink: item.sourceUrl,
+      occurredAt: item.occurredAt,
+      reviewFingerprint,
+      claapSourceItemId: storedItem.id,
+      notionPageId: storedItem.notionPageId ?? undefined
+    });
+
+    if (syncResult) {
+      await this.repositories.updateSourceItemNotionSync(storedItem.id, syncResult.notionPageId, reviewFingerprint);
+    }
+  }
+
+  private async syncClaapReviewQueueForStoredItem(
+    companyId: string,
+    sourceItem: {
+      id: string;
+      source: string;
+      title: string;
+      sourceUrl: string;
+      occurredAt: Date;
+      metadataJson?: unknown;
+      notionPageId?: string | null;
+      notionPageFingerprint?: string | null;
+    }
+  ) {
+    if (sourceItem.source !== "claap") {
+      return;
+    }
+
+    const metadata = isRecord(sourceItem.metadataJson) ? sourceItem.metadataJson : {};
+    const risk = typeof metadata.publishabilityRisk === "string"
+      ? metadata.publishabilityRisk
+      : undefined;
+
+    if (risk !== "harmful" && risk !== "reframeable") {
+      if (sourceItem.notionPageId) {
+        await this.notion.archiveClaapReviewItem(sourceItem.notionPageId);
+      }
+      return;
+    }
+
+    const reviewFingerprint = sourceItem.notionPageFingerprint ?? hashParts(["claap-review", companyId, sourceItem.id]);
+    const syncResult = await this.notion.syncClaapReviewItem({
+      signalTitle: typeof metadata.reviewTitle === "string" ? metadata.reviewTitle : sourceItem.title,
+      publishabilityRisk: risk,
+      reframingSuggestion: typeof metadata.reframingSuggestion === "string" ? metadata.reframingSuggestion : undefined,
+      transcriptLink: sourceItem.sourceUrl,
+      occurredAt: sourceItem.occurredAt.toISOString(),
+      reviewFingerprint,
+      claapSourceItemId: sourceItem.id,
+      notionPageId: sourceItem.notionPageId ?? undefined
+    });
+
+    if (syncResult) {
+      await this.repositories.updateSourceItemNotionSync(sourceItem.id, syncResult.notionPageId, reviewFingerprint);
     }
   }
 
