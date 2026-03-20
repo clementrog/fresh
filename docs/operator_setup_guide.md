@@ -361,6 +361,8 @@ Pendant `intelligence:run`, chaque item Linear (issue ou project update) est év
 - Le LLM n'a pas pu évaluer l'item (fallback conservateur)
 - L'évaluation a échoué au niveau de la fonction (fail-closed : tous les items Linear sont retenus)
 
+> **Important** : la queue `Linear Review` n'est pas rétroactive en V1. Elle montre les nouveaux items Linear évalués par cette politique, pas un historique complet des anciens items déjà traités avant son déploiement.
+
 ### Actions opérateur
 
 | Action | Propriété Decision | Effet (V1) |
