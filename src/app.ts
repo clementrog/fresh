@@ -396,10 +396,13 @@ export class EditorialSignalEngineApp {
           const ownerDisplayName = opp.ownerUserId
             ? inputs.users.find(u => u.id === opp.ownerUserId)?.displayName
             : undefined;
+          const reframingNote = typeof originItem?.metadata?.reframingSuggestion === "string"
+            ? originItem.metadata.reframingSuggestion : undefined;
           const opportunitySync = await this.notion.syncOpportunity(syncedOpportunity, null, {
             ownerDisplayName,
             provenanceType,
-            draftReadiness: { tier: readiness.readinessTier, guidance: readiness.operatorGuidance }
+            draftReadiness: { tier: readiness.readinessTier, guidance: readiness.operatorGuidance },
+            reframingNote
           });
           if (opportunitySync) {
             run.counters[opportunitySync.action === "created" ? "notionCreates" : "notionUpdates"] += 1;

@@ -77,7 +77,7 @@ export class NotionService {
   async syncOpportunity(
     opportunity: ContentOpportunity,
     draft?: DraftV1 | null,
-    options?: { ownerDisplayName?: string; provenanceType?: string; draftReadiness?: { tier: string; guidance: string[] } }
+    options?: { ownerDisplayName?: string; provenanceType?: string; draftReadiness?: { tier: string; guidance: string[] }; reframingNote?: string }
   ): Promise<NotionSyncResult | null> {
     const ownerDisplay = options?.ownerDisplayName ?? opportunity.ownerProfile ?? "";
     const enrichmentLogText = formatEnrichmentLog(opportunity.enrichmentLog);
@@ -105,6 +105,7 @@ export class NotionService {
         "Provenance type": richTextProperty(options?.provenanceType ?? opportunity.primaryEvidence.source),
         "Draft readiness": selectProperty(readinessSelect),
         "What's missing": richTextProperty(whatsMissing),
+        "Reframing note": richTextProperty(options?.reframingNote ?? ""),
         "Evidence count": numberProperty(opportunity.evidence.length),
         "Primary evidence": richTextProperty(opportunity.primaryEvidence.excerpt),
         "Supporting evidence count": numberProperty(Math.max(0, opportunity.evidence.length - 1)),
@@ -660,6 +661,7 @@ function getDatabaseProperties(name: RequiredDatabase) {
         "Provenance type": { rich_text: {} },
         "Draft readiness": { select: {} },
         "What's missing": { rich_text: {} },
+        "Reframing note": { rich_text: {} },
         "Evidence count": { number: { format: "number" } },
         "Suggested format": { rich_text: {} },
         "Hook suggestion 1": { rich_text: {} },
