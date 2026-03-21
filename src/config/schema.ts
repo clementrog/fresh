@@ -30,7 +30,11 @@ export const envSchema = z.object({
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(45000),
   HTTP_PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.string().default("info"),
-  NOTION_TONE_OF_VOICE_DB_ID: z.string().default("")
+  NOTION_TONE_OF_VOICE_DB_ID: z.string().default(""),
+  ADMIN_ENABLED: z.string().default(""),
+  ADMIN_USER: z.string().default(""),
+  ADMIN_PASSWORD: z.string().default(""),
+  ADMIN_ALLOW_REMOTE: z.string().default("")
 });
 
 export const rateLimitSchema = z.object({

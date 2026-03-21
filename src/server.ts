@@ -1,7 +1,9 @@
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { EditorialSignalEngineApp } from "./app.js";
+import { registerAdminPlugin } from "./admin/plugin.js";
 import { loadEnv } from "./config/env.js";
+import { getPrisma } from "./db/client.js";
 import { NotFoundError, ForbiddenError, UnprocessableError } from "./lib/errors.js";
 import { createLogger } from "./lib/logger.js";
 
@@ -48,6 +50,15 @@ async function main() {
   const logger = createLogger(env);
   const app = new EditorialSignalEngineApp(env, logger);
   const server = Fastify({ logger: true });
+
+  if (env.ADMIN_ENABLED === "true") {
+    registerAdminPlugin(server, getPrisma(), {
+      user: env.ADMIN_USER,
+      password: env.ADMIN_PASSWORD,
+      allowRemote: env.ADMIN_ALLOW_REMOTE === "true",
+      defaultCompanySlug: env.DEFAULT_COMPANY_SLUG,
+    });
+  }
 
   registerDraftRoute(server, app);
 
