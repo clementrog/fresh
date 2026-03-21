@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { describe, expect, it, vi } from "vitest";
 
 import { AdminQueries } from "../src/admin/queries.js";
@@ -32,7 +33,7 @@ function mockPrisma() {
 // ── Disposition query shape ─────────────────────────────────────────────────
 
 describe("disposition query shape", () => {
-  it("orphaned includes all three evidence-path checks and NOT exclusions", async () => {
+  it("orphaned includes evidence-path checks and DbNull-guarded NOT exclusions", async () => {
     const prisma = mockPrisma();
     const queries = new AdminQueries(prisma);
 
@@ -44,13 +45,13 @@ describe("disposition query shape", () => {
     expect(where.evidenceReferences.every.opportunityLinks).toEqual({ none: {} });
     expect(where.evidenceReferences.every.primaryForOpportunities).toEqual({ none: {} });
     expect(where.processedAt).toEqual({ not: null });
-    expect(where.NOT).toEqual(
-      expect.arrayContaining([
-        { screeningResultJson: { path: ["decision"], equals: "skip" } },
-        { metadataJson: { path: ["publishabilityRisk"], equals: "harmful" } },
-        { metadataJson: { path: ["publishabilityRisk"], equals: "reframeable" } }
-      ])
-    );
+
+    // NOT elements are AND-guarded with DbNull existence checks
+    expect(where.NOT).toHaveLength(3);
+    for (const notClause of where.NOT) {
+      expect(notClause.AND).toBeDefined();
+      expect(notClause.AND.length).toBe(2);
+    }
   });
 
   it("blocked uses OR with harmful and reframeable", async () => {
@@ -66,7 +67,7 @@ describe("disposition query shape", () => {
     expect(where.OR[1]).toEqual({ metadataJson: { path: ["publishabilityRisk"], equals: "reframeable" } });
   });
 
-  it("unsynced requires notionPageId null + processedAt not null + NOT exclusions", async () => {
+  it("unsynced requires notionPageId null + processedAt not null + DbNull-guarded NOT", async () => {
     const prisma = mockPrisma();
     const queries = new AdminQueries(prisma);
 
@@ -76,13 +77,10 @@ describe("disposition query shape", () => {
 
     expect(where.notionPageId).toBeNull();
     expect(where.processedAt).toEqual({ not: null });
-    expect(where.NOT).toEqual(
-      expect.arrayContaining([
-        { screeningResultJson: { path: ["decision"], equals: "skip" } },
-        { metadataJson: { path: ["publishabilityRisk"], equals: "harmful" } },
-        { metadataJson: { path: ["publishabilityRisk"], equals: "reframeable" } }
-      ])
-    );
+    expect(where.NOT).toHaveLength(3);
+    for (const notClause of where.NOT) {
+      expect(notClause.AND).toBeDefined();
+    }
   });
 
   it("single disposition merges directly without OR wrapper", async () => {
@@ -93,7 +91,6 @@ describe("disposition query shape", () => {
 
     const where = prisma.sourceItem.count.mock.calls[0][0].where;
 
-    // blocked's own OR (harmful/reframeable) is merged directly into where
     expect(where.OR).toHaveLength(2);
     expect(where.OR[0]).toEqual({ metadataJson: { path: ["publishabilityRisk"], equals: "harmful" } });
   });

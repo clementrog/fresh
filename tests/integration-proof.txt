@@ -1,0 +1,12 @@
+
+ RUN  v3.2.4 /Users/clement/projects/fresh
+
+ ✓ tests/repositories.integration.test.ts > repository DB integrity > rejects duplicate fingerprints within the same company 50ms
+ ✓ tests/repositories.integration.test.ts > repository DB integrity > cascades evidence deletion when a source item is removed 25ms
+ ✓ tests/admin-dispositions.integration.test.ts > disposition filter integration > seeds fixtures and validates disposition filters against real DB 209ms
+
+ Test Files  2 passed (2)
+      Tests  3 passed (3)
+   Start at  22:01:23
+   Duration  1.16s (transform 62ms, setup 0ms, collect 188ms, tests 302ms, environment 0ms, prepare 228ms)
+

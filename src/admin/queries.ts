@@ -25,6 +25,28 @@ interface AdminRunFilters {
   runType?: string;
 }
 
+// NOT with a JSON path that evaluates to NULL in PostgreSQL produces NOT(NULL)=NULL,
+// which silently excludes the row.  Guard each NOT element with a DbNull existence
+// check so the condition is FALSE (not NULL) when the path is absent.
+const SCREENED_OUT_GUARD: Prisma.SourceItemWhereInput = {
+  AND: [
+    { screeningResultJson: { path: ["decision"], not: Prisma.DbNull } },
+    { screeningResultJson: { path: ["decision"], equals: "skip" } }
+  ]
+};
+const HARMFUL_GUARD: Prisma.SourceItemWhereInput = {
+  AND: [
+    { metadataJson: { path: ["publishabilityRisk"], not: Prisma.DbNull } },
+    { metadataJson: { path: ["publishabilityRisk"], equals: "harmful" } }
+  ]
+};
+const REFRAMEABLE_GUARD: Prisma.SourceItemWhereInput = {
+  AND: [
+    { metadataJson: { path: ["publishabilityRisk"], not: Prisma.DbNull } },
+    { metadataJson: { path: ["publishabilityRisk"], equals: "reframeable" } }
+  ]
+};
+
 export const DISPOSITION_CLAUSES: Record<Disposition, Prisma.SourceItemWhereInput> = {
   "screened-out": {
     screeningResultJson: { path: ["decision"], equals: "skip" }
@@ -44,20 +66,12 @@ export const DISPOSITION_CLAUSES: Record<Disposition, Prisma.SourceItemWhereInpu
         primaryForOpportunities: { none: {} }
       }
     },
-    NOT: [
-      { screeningResultJson: { path: ["decision"], equals: "skip" } },
-      { metadataJson: { path: ["publishabilityRisk"], equals: "harmful" } },
-      { metadataJson: { path: ["publishabilityRisk"], equals: "reframeable" } }
-    ]
+    NOT: [SCREENED_OUT_GUARD, HARMFUL_GUARD, REFRAMEABLE_GUARD]
   },
   unsynced: {
     processedAt: { not: null },
     notionPageId: null,
-    NOT: [
-      { screeningResultJson: { path: ["decision"], equals: "skip" } },
-      { metadataJson: { path: ["publishabilityRisk"], equals: "harmful" } },
-      { metadataJson: { path: ["publishabilityRisk"], equals: "reframeable" } }
-    ]
+    NOT: [SCREENED_OUT_GUARD, HARMFUL_GUARD, REFRAMEABLE_GUARD]
   }
 };
 

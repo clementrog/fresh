@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
 import { DISPOSITION_CLAUSES, type Disposition } from "../src/admin/queries.js";
@@ -6,13 +7,31 @@ import { DISPOSITION_CLAUSES, type Disposition } from "../src/admin/queries.js";
 // Evaluates Prisma-style WHERE clauses against in-memory objects.
 // Covers the exact operator subset used by DISPOSITION_CLAUSES:
 //   - direct equality, null checks
-//   - { not: null }
-//   - { path: [...], equals: value } (JSON field queries)
+//   - { not: null }, { not: Prisma.DbNull }
+//   - { path: [...], equals: value }, { path: [...], not: Prisma.DbNull }
 //   - { every: { ... } }, { none: {} } (relation array operators)
-//   - OR, NOT logical combinators
+//   - AND, OR, NOT logical combinators
+
+function isDbNull(v: unknown): boolean {
+  return v === null || v === Prisma.DbNull;
+}
+
+function resolveJsonPath(value: unknown, pathParts: string[]): unknown {
+  let current: unknown = value;
+  for (const part of pathParts) {
+    if (current === null || current === undefined) return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
 
 function matchesWhere(item: Record<string, unknown>, where: Record<string, unknown>): boolean {
   for (const [key, condition] of Object.entries(where)) {
+    if (key === "AND") {
+      const clauses = Array.isArray(condition) ? condition : [condition];
+      if (!(clauses as Record<string, unknown>[]).every((c) => matchesWhere(item, c))) return false;
+      continue;
+    }
     if (key === "OR") {
       const clauses = condition as Record<string, unknown>[];
       if (!clauses.some((c) => matchesWhere(item, c))) return false;
@@ -34,21 +53,24 @@ function matchesWhere(item: Record<string, unknown>, where: Record<string, unkno
     if (typeof condition === "object" && condition !== null) {
       const cond = condition as Record<string, unknown>;
 
-      // { not: null } — value must not be null/undefined
-      if ("not" in cond && cond.not === null) {
+      // { not: null } or { not: Prisma.DbNull } — value must not be null/undefined
+      if ("not" in cond && isDbNull(cond.not)) {
         if (value === null || value === undefined) return false;
         continue;
       }
 
-      // { path: ["field"], equals: "value" } — JSON field query
+      // { path: [...], equals: value } — JSON field equality
       if ("path" in cond && "equals" in cond) {
-        const pathParts = cond.path as string[];
-        let current: unknown = value;
-        for (const part of pathParts) {
-          if (current === null || current === undefined) return false;
-          current = (current as Record<string, unknown>)[part];
-        }
-        if (current !== cond.equals) return false;
+        const resolved = resolveJsonPath(value, cond.path as string[]);
+        if (resolved === undefined || resolved === null) return false;
+        if (resolved !== cond.equals) return false;
+        continue;
+      }
+
+      // { path: [...], not: Prisma.DbNull } — JSON path must exist (not null)
+      if ("path" in cond && "not" in cond && isDbNull(cond.not)) {
+        const resolved = resolveJsonPath(value, cond.path as string[]);
+        if (resolved === undefined || resolved === null) return false;
         continue;
       }
 
@@ -178,6 +200,16 @@ const fixtures = {
     evidenceReferences: []
   },
 
+  // screeningResultJson exists but lacks "decision" — NOT screened-out
+  noDecision: {
+    id: "si_nodecision",
+    processedAt: new Date("2026-01-01"),
+    notionPageId: null,
+    screeningResultJson: { status: "done" },
+    metadataJson: {},
+    evidenceReferences: []
+  },
+
   // Screened out
   screenedOut: {
     id: "si_screened",
@@ -236,6 +268,10 @@ describe("screened-out disposition semantics", () => {
 
   it("rejects item with null screening result", () => {
     expect(matches(fixtures.unprocessed, "screened-out")).toBe(false);
+  });
+
+  it("rejects item where screeningResultJson exists but lacks decision key", () => {
+    expect(matches(fixtures.noDecision, "screened-out")).toBe(false);
   });
 });
 
@@ -297,6 +333,10 @@ describe("orphaned disposition semantics", () => {
   it("rejects blocked-reframeable item (NOT exclusion)", () => {
     expect(matches(fixtures.blockedReframeable, "orphaned")).toBe(false);
   });
+
+  it("includes item where screeningResultJson exists but lacks decision", () => {
+    expect(matches(fixtures.noDecision, "orphaned")).toBe(true);
+  });
 });
 
 describe("unsynced disposition semantics", () => {
@@ -322,6 +362,10 @@ describe("unsynced disposition semantics", () => {
 
   it("rejects blocked-reframeable item (NOT exclusion)", () => {
     expect(matches(fixtures.blockedReframeable, "unsynced")).toBe(false);
+  });
+
+  it("includes item where screeningResultJson exists but lacks decision", () => {
+    expect(matches(fixtures.noDecision, "unsynced")).toBe(true);
   });
 });
 

@@ -14,7 +14,6 @@ import {
   jsonViewer,
   detailSection,
   collapsible,
-  withCompany,
   buildDetailUrl,
   backLink
 } from "../components.js";
@@ -188,7 +187,7 @@ export function registerSourceItemPages(
       const oppTitle = e.opportunity?.title ?? e.primaryForOpportunities?.[0]?.title ?? "—";
       const oppId = e.opportunity?.id ?? e.primaryForOpportunities?.[0]?.id ?? null;
       return [
-        oppId ? linkTo(withCompany(`/admin/opportunities/${oppId}`, companySlug), truncate(oppTitle, 40)) : "—",
+        oppId ? linkTo(buildDetailUrl(`/admin/opportunities/${oppId}`, companySlug, returnTo), truncate(oppTitle, 40)) : "—",
         truncate(e.excerpt, 80),
         e.speakerOrAuthor ?? "—",
         String(e.freshnessScore.toFixed(2))

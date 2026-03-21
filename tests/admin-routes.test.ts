@@ -900,6 +900,72 @@ describe("filter context drilldowns", () => {
     expect(res.body).not.toContain("Back to list");
     expect(res.body).not.toContain("evil.com");
   });
+
+  it("source-item detail threads returnTo into opportunity cross-links", async () => {
+    const server = Fastify({ logger: false });
+    const prisma = mockPrisma();
+    // Return a source item with evidence referencing an opportunity
+    prisma.sourceItem.findUnique = vi.fn(async ({ where }: { where: { id: string } }) => {
+      if (where.id === "si_1") {
+        return {
+          id: "si_1",
+          companyId: "comp_1",
+          source: "claap",
+          title: "Test Item",
+          summary: "A test summary",
+          sourceUrl: "https://example.com",
+          occurredAt: new Date("2026-01-01"),
+          processedAt: null,
+          metadataJson: {},
+          rawPayloadJson: {},
+          screeningResultJson: { decision: "retain" },
+          evidenceReferences: [
+            {
+              opportunity: { id: "opp_1", title: "Related Opp" },
+              primaryForOpportunities: [],
+              opportunityLinks: [],
+              excerpt: "some excerpt",
+              speakerOrAuthor: "someone",
+              freshnessScore: 0.8
+            }
+          ]
+        };
+      }
+      return null;
+    });
+    registerAdminPlugin(server, prisma, DEFAULT_OPTIONS);
+
+    const returnTo = "/admin/source-items?disposition=orphaned";
+    const res = await server.inject({
+      method: "GET",
+      url: `/admin/source-items/si_1?returnTo=${encodeURIComponent(returnTo)}`,
+      headers: { authorization: basicAuth("admin", "secret") }
+    });
+
+    expect(res.statusCode).toBe(200);
+    // The opportunity cross-link should carry the returnTo
+    const oppHrefs = extractHrefs(res.body).filter((h) => h.includes("/admin/opportunities/opp_1"));
+    expect(oppHrefs.length).toBeGreaterThan(0);
+    for (const href of oppHrefs) {
+      expect(href).toContain("returnTo=");
+      const rt = decodeURIComponent(href.split("returnTo=")[1]);
+      expect(rt).toContain("/admin/source-items");
+      expect(rt).toContain("disposition=orphaned");
+    }
+  });
+
+  it("opportunity detail renders back link from cross-page returnTo", async () => {
+    const server = buildServer();
+    const returnTo = "/admin/source-items?disposition=orphaned";
+    const res = await server.inject({
+      method: "GET",
+      url: `/admin/opportunities/opp_1?returnTo=${encodeURIComponent(returnTo)}`,
+      headers: { authorization: basicAuth("admin", "secret") }
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain("Back to list");
+    expect(res.body).toContain("/admin/source-items?disposition=orphaned");
+  });
 });
 
 // ── Safeguard B: Data-contract rendering ─────────────────────────────────────
