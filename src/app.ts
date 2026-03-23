@@ -32,7 +32,7 @@ import { LlmClient } from "./services/llm.js";
 import { buildSpikeWarnings, createCostEntry, createRun, finalizeRun } from "./services/observability.js";
 import { NotionService } from "./services/notion.js";
 import { computeRawTextExpiry } from "./services/retention.js";
-import { ensureConvergenceFoundation } from "./services/convergence.js";
+import { ensureConvergenceFoundation, resolveProfileId } from "./services/convergence.js";
 import { runIntelligencePipeline } from "./services/intelligence.js";
 import { runMarketResearch } from "./services/market-research.js";
 import { findSupportingEvidence, assessDraftReadiness, deriveProvenanceType, computeReadinessTier, generateOperatorGuidance } from "./services/evidence-pack.js";
@@ -112,6 +112,8 @@ export class EditorialSignalEngineApp {
         return this.backfillEvidence(context);
       case "cleanup:claap-publishability":
         return this.cleanupClaapPublishability(context);
+      case "tone:inspect":
+        return this.inspectToneProfiles();
       default:
         throw new Error(`Unsupported command: ${command satisfies never}`);
     }
@@ -120,6 +122,30 @@ export class EditorialSignalEngineApp {
   private async setupNotion() {
     const result = await this.notion.ensureSchema();
     this.logger.info({ databases: result.databases, views: result.viewSpecs }, "Notion schema ensured");
+  }
+
+  private async inspectToneProfiles() {
+    const databaseId = this.env.NOTION_TONE_OF_VOICE_DB_ID;
+    if (!databaseId) {
+      console.log("[tone:inspect] NOTION_TONE_OF_VOICE_DB_ID is not set — nothing to inspect.");
+      return;
+    }
+
+    const toneProfiles = await this.notion.readToneOfVoiceProfiles(databaseId);
+    if (toneProfiles.length === 0) {
+      console.log("[tone:inspect] No tone-of-voice profiles found in database.");
+      return;
+    }
+
+    for (const tp of toneProfiles) {
+      const profileId = resolveProfileId(tp.profileName);
+      const truncate = (s: string, max = 200) => s.length > max ? `${s.slice(0, max)}...` : s;
+
+      console.log(`\nProfile "${tp.profileName}" → ${profileId ?? "(unmatched)"} (source: ${tp.source})`);
+      console.log(`  voiceSummary: ${truncate(tp.voiceSummary) || "(empty)"}`);
+      console.log(`  preferredPatterns: ${truncate(tp.preferredPatterns) || "(empty)"}`);
+      console.log(`  avoid: ${truncate(tp.avoid) || "(empty)"}`);
+    }
   }
 
   private async ingestRun(context: RunContext) {

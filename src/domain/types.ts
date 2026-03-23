@@ -57,7 +57,8 @@ export type RunType =
   | "selection:scan"
   | "cleanup:retention"
   | "backfill:evidence"
-  | "cleanup:claap-publishability";
+  | "cleanup:claap-publishability"
+  | "tone:inspect";
 
 export interface RateLimitConfig {
   requestsPerMinute: number;

@@ -1,6 +1,6 @@
 import type { AppEnv } from "../config/env.js";
 import { loadConnectorConfigs, loadDoctrineMarkdown, loadProfileBases, loadSensitivityMarkdown } from "../config/loaders.js";
-import type { CompanyRecord, EditorialConfigRecord, ProfileBase, SourceConfigRecord, UserRecord } from "../domain/types.js";
+import { PROFILE_IDS, type CompanyRecord, type EditorialConfigRecord, type ProfileBase, type SourceConfigRecord, type UserRecord } from "../domain/types.js";
 import { createDeterministicId } from "../lib/ids.js";
 import type { RepositoryBundle } from "../db/repositories.js";
 import type { NotionService } from "./notion.js";
@@ -117,6 +117,16 @@ type ToneOverride = {
   avoidRules: string[];
 };
 
+export function resolveProfileId(profileName: string): string | undefined {
+  const words = profileName.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return undefined;
+
+  const matches = words.filter((w) => (PROFILE_IDS as readonly string[]).includes(w));
+  if (matches.length === 1) return matches[0];
+  // Ambiguous (multiple matches) or no match — skip
+  return undefined;
+}
+
 async function loadToneOfVoiceOverrides(
   notion: NotionService | undefined,
   databaseId: string | undefined
@@ -126,11 +136,13 @@ async function loadToneOfVoiceOverrides(
 
   const toneProfiles = await notion.readToneOfVoiceProfiles(databaseId);
   for (const tp of toneProfiles) {
-    // Match by first name (lowercase): "Baptiste Le Bihan" → "baptiste"
-    const firstName = tp.profileName.split(" ")[0]?.toLowerCase();
-    if (!firstName) continue;
+    const profileId = resolveProfileId(tp.profileName);
+    if (!profileId) {
+      console.warn(`[tone-of-voice] Skipping unmatched profile name: "${tp.profileName}"`);
+      continue;
+    }
 
-    overrides.set(firstName, {
+    overrides.set(profileId, {
       toneSummary: tp.voiceSummary,
       preferredStructure: tp.preferredPatterns,
       avoidRules: tp.avoid.split(/[,\n]/).map((s) => s.trim()).filter(Boolean)

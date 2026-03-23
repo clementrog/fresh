@@ -616,3 +616,243 @@ describe("mapReadinessTierToSelect", () => {
     expect(mapReadinessTierToSelect("needs-more-proof")).toBe("Needs more proof");
   });
 });
+
+// --- readToneOfVoiceProfiles: body fallback ---
+
+describe("readToneOfVoiceProfiles body fallback", () => {
+  function makeTonePageWithProperties(profileName: string, voiceSummary: string, preferredPatterns: string, avoid: string) {
+    return {
+      object: "page",
+      id: `page-${profileName.toLowerCase().replace(/\s/g, "-")}`,
+      properties: {
+        Profile: { type: "title", title: [{ plain_text: profileName }] },
+        "Voice summary": { type: "rich_text", rich_text: voiceSummary ? [{ plain_text: voiceSummary }] : [] },
+        "Preferred patterns": { type: "rich_text", rich_text: preferredPatterns ? [{ plain_text: preferredPatterns }] : [] },
+        Avoid: { type: "rich_text", rich_text: avoid ? [{ plain_text: avoid }] : [] }
+      }
+    };
+  }
+
+  function makeBlocksResponse(blocks: Array<{ type: string; text: string; has_children?: boolean; id?: string }>) {
+    return {
+      results: blocks.map((b, i) => ({
+        id: b.id ?? `block-${i}`,
+        type: b.type,
+        has_children: b.has_children ?? false,
+        [b.type]: { rich_text: [{ plain_text: b.text }] }
+      })),
+      has_more: false,
+      next_cursor: null
+    };
+  }
+
+  it("reads page body when all properties are empty", async () => {
+    const blocksChildrenList = vi.fn(async () =>
+      makeBlocksResponse([
+        { type: "heading_2", text: "Qui est Quentin sur la page" },
+        { type: "paragraph", text: "Direct, conversational" },
+        { type: "heading_2", text: "Comment il structure sa pensée" },
+        { type: "paragraph", text: "Hook then insight" },
+        { type: "heading_2", text: "Anti-modèles explicites" },
+        { type: "paragraph", text: "No jargon" }
+      ])
+    );
+
+    const databasesQuery = vi.fn(async () => ({
+      results: [makeTonePageWithProperties("New Quentin", "", "", "")],
+      has_more: false,
+      next_cursor: null
+    }));
+
+    const client = makeNotionClient({
+      databases: {
+        query: databasesQuery,
+        create: vi.fn(async () => ({ id: "db-tone" })),
+        retrieve: vi.fn(async () => ({ properties: {} })),
+        update: vi.fn(async () => ({}))
+      },
+      blocks: { children: { list: blocksChildrenList } }
+    });
+
+    const service = new NotionService("token", "parent-page", { client });
+    const result = await service.readToneOfVoiceProfiles("db-tone");
+
+    expect(blocksChildrenList).toHaveBeenCalledWith(
+      expect.objectContaining({ block_id: "page-new-quentin" })
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].voiceSummary).toBe("Direct, conversational");
+    expect(result[0].preferredPatterns).toBe("Hook then insight");
+    expect(result[0].avoid).toBe("No jargon");
+    expect(result[0].source).toBe("body");
+    expect(result[0].pageId).toBe("page-new-quentin");
+  });
+
+  it("does NOT read page body when properties are populated", async () => {
+    const blocksChildrenList = vi.fn();
+
+    const databasesQuery = vi.fn(async () => ({
+      results: [makeTonePageWithProperties("Baptiste Le Bihan", "Confident tone", "Statement > Evidence", "Hedging")],
+      has_more: false,
+      next_cursor: null
+    }));
+
+    const client = makeNotionClient({
+      databases: {
+        query: databasesQuery,
+        create: vi.fn(async () => ({ id: "db-tone" })),
+        retrieve: vi.fn(async () => ({ properties: {} })),
+        update: vi.fn(async () => ({}))
+      },
+      blocks: { children: { list: blocksChildrenList } }
+    });
+
+    const service = new NotionService("token", "parent-page", { client });
+    const result = await service.readToneOfVoiceProfiles("db-tone");
+
+    expect(blocksChildrenList).not.toHaveBeenCalled();
+    expect(result).toHaveLength(1);
+    expect(result[0].voiceSummary).toBe("Confident tone");
+    expect(result[0].preferredPatterns).toBe("Statement > Evidence");
+    expect(result[0].avoid).toBe("Hedging");
+    expect(result[0].source).toBe("properties");
+  });
+
+  it("does NOT read page body when only some properties are populated (partial)", async () => {
+    const blocksChildrenList = vi.fn();
+
+    const databasesQuery = vi.fn(async () => ({
+      results: [makeTonePageWithProperties("Thomas", "Only voice summary filled", "", "")],
+      has_more: false,
+      next_cursor: null
+    }));
+
+    const client = makeNotionClient({
+      databases: {
+        query: databasesQuery,
+        create: vi.fn(async () => ({ id: "db-tone" })),
+        retrieve: vi.fn(async () => ({ properties: {} })),
+        update: vi.fn(async () => ({}))
+      },
+      blocks: { children: { list: blocksChildrenList } }
+    });
+
+    const service = new NotionService("token", "parent-page", { client });
+    const result = await service.readToneOfVoiceProfiles("db-tone");
+
+    expect(blocksChildrenList).not.toHaveBeenCalled();
+    expect(result[0].voiceSummary).toBe("Only voice summary filled");
+    expect(result[0].preferredPatterns).toBe("");
+    expect(result[0].avoid).toBe("");
+    expect(result[0].source).toBe("properties");
+  });
+
+  it("recurses into child blocks", async () => {
+    const blocksChildrenList = vi.fn(async ({ block_id }: { block_id: string }) => {
+      if (block_id === "page-quentin") {
+        return {
+          results: [
+            {
+              id: "toggle-1",
+              type: "heading_2",
+              has_children: true,
+              heading_2: { rich_text: [{ plain_text: "Règles" }] }
+            }
+          ],
+          has_more: false,
+          next_cursor: null
+        };
+      }
+      if (block_id === "toggle-1") {
+        return {
+          results: [
+            {
+              id: "child-1",
+              type: "paragraph",
+              has_children: false,
+              paragraph: { rich_text: [{ plain_text: "Nested rule content" }] }
+            }
+          ],
+          has_more: false,
+          next_cursor: null
+        };
+      }
+      return { results: [], has_more: false, next_cursor: null };
+    });
+
+    const databasesQuery = vi.fn(async () => ({
+      results: [{
+        object: "page",
+        id: "page-quentin",
+        properties: {
+          Profile: { type: "title", title: [{ plain_text: "Quentin" }] },
+          "Voice summary": { type: "rich_text", rich_text: [] },
+          "Preferred patterns": { type: "rich_text", rich_text: [] },
+          Avoid: { type: "rich_text", rich_text: [] }
+        }
+      }],
+      has_more: false,
+      next_cursor: null
+    }));
+
+    const client = makeNotionClient({
+      databases: {
+        query: databasesQuery,
+        create: vi.fn(async () => ({ id: "db-tone" })),
+        retrieve: vi.fn(async () => ({ properties: {} })),
+        update: vi.fn(async () => ({}))
+      },
+      blocks: { children: { list: blocksChildrenList } }
+    });
+
+    const service = new NotionService("token", "parent-page", { client });
+    const result = await service.readToneOfVoiceProfiles("db-tone");
+
+    expect(result[0].avoid).toBe("Nested rule content");
+  });
+
+  it("property-backed equivalence: identical output for populated properties", async () => {
+    const blocksChildrenList = vi.fn();
+
+    const databasesQuery = vi.fn(async () => ({
+      results: [
+        makeTonePageWithProperties("Baptiste Le Bihan", "Confident", "Statement > Evidence", "Hedging"),
+        makeTonePageWithProperties("Thomas", "Analytical", "Data > Conclusion", "Vagueness")
+      ],
+      has_more: false,
+      next_cursor: null
+    }));
+
+    const client = makeNotionClient({
+      databases: {
+        query: databasesQuery,
+        create: vi.fn(async () => ({ id: "db-tone" })),
+        retrieve: vi.fn(async () => ({ properties: {} })),
+        update: vi.fn(async () => ({}))
+      },
+      blocks: { children: { list: blocksChildrenList } }
+    });
+
+    const service = new NotionService("token", "parent-page", { client });
+    const result = await service.readToneOfVoiceProfiles("db-tone");
+
+    // No block API calls made
+    expect(blocksChildrenList).not.toHaveBeenCalled();
+
+    // Same field values as property-based extraction
+    expect(result[0]).toMatchObject({
+      profileName: "Baptiste Le Bihan",
+      voiceSummary: "Confident",
+      preferredPatterns: "Statement > Evidence",
+      avoid: "Hedging",
+      source: "properties"
+    });
+    expect(result[1]).toMatchObject({
+      profileName: "Thomas",
+      voiceSummary: "Analytical",
+      preferredPatterns: "Data > Conclusion",
+      avoid: "Vagueness",
+      source: "properties"
+    });
+  });
+});

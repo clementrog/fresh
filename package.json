@@ -25,7 +25,8 @@
     "selection:scan": "tsx src/cli.ts selection:scan",
     "cleanup:retention": "tsx src/cli.ts cleanup:retention",
     "backfill:evidence": "tsx src/cli.ts backfill:evidence",
-    "cleanup:claap-publishability": "tsx src/cli.ts cleanup:claap-publishability"
+    "cleanup:claap-publishability": "tsx src/cli.ts cleanup:claap-publishability",
+    "tone:inspect": "tsx src/cli.ts tone:inspect"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
