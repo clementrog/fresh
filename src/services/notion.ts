@@ -360,15 +360,8 @@ export class NotionService {
       heading_2: { rich_text: [{ text: { content: "Draft V1" } }] }
     });
 
-    // Hook as a plain paragraph (first line of the post)
-    if (draft.hook) {
-      blocks.push({
-        type: "paragraph",
-        paragraph: { rich_text: [{ text: { content: draft.hook.slice(0, 2000) } }] }
-      });
-    }
-
     // Main draft text as paragraphs (split on double newlines, respect 2000 char limit)
+    // Note: firstDraftText already begins with the hook, so we don't write draft.hook separately.
     const paragraphs = draft.firstDraftText.split(/\n{2,}/);
     for (const para of paragraphs) {
       if (!para.trim()) continue;
