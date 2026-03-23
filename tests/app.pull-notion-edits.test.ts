@@ -430,6 +430,10 @@ describe("opportunity:pull-notion-edits command", () => {
     expect(persistedRun.warnings[0]).toContain("fp-ghost");
     expect(persistedRun.warnings[0]).toContain("unprotected");
 
+    // Notes field surfaces the unresolved count for list-view visibility
+    expect(persistedRun.notes).toContain("1 unresolved");
+    expect(persistedRun.notes).toContain("see warnings");
+
     // Checkbox NOT cleared (user can investigate)
     expect(notion.clearReEvaluationCheckbox).not.toHaveBeenCalled();
     // notionEditsPending never set (nothing was resolved)

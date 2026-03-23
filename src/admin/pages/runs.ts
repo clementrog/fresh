@@ -76,11 +76,13 @@ export function registerRunPages(
         .map(([k, v]) => `${k}: ${v}`)
         .join(", ");
       const statusColor = run.status === "completed" ? "green" : run.status === "failed" ? "red" : "blue";
+      const warnings = Array.isArray(run.warningsJson) ? run.warningsJson as unknown[] : [];
+      const warningBadge = warnings.length > 0 ? " " + badge(`${warnings.length} warning${warnings.length > 1 ? "s" : ""}`, "orange") : "";
 
       return [
         linkTo(buildDetailUrl(`/admin/runs/${run.id}`, companySlug, returnTo), run.runType),
         run.source ? sourceBadge(run.source) : "—",
-        badge(run.status, statusColor as "green" | "red" | "blue"),
+        badge(run.status, statusColor as "green" | "red" | "blue") + warningBadge,
         counterStr || "—",
         formatDate(run.startedAt),
         formatDate(run.finishedAt),
@@ -132,8 +134,12 @@ export function registerRunPages(
 
     const countersHtml = detailSection("Counters", jsonViewer(run.countersJson));
 
-    const warningsHtml = run.warningsJson
-      ? detailSection("Warnings", collapsible("Show warnings", jsonViewer(run.warningsJson)))
+    const warnings = Array.isArray(run.warningsJson) ? run.warningsJson as string[] : [];
+    const warningsHtml = warnings.length > 0
+      ? detailSection(
+          `${badge(`${warnings.length} warning${warnings.length > 1 ? "s" : ""}`, "orange")} Warnings`,
+          `<ul>${warnings.map(w => `<li>${escapeHtml(String(w))}</li>`).join("")}</ul>`
+        )
       : "";
 
     const llmStatsHtml = run.llmStatsJson

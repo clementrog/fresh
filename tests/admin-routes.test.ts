@@ -1851,6 +1851,57 @@ describe("empty-state rendering — phase 3", () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toContain("No cost entries");
   });
+
+  it("run detail shows warnings expanded when present", async () => {
+    const server = Fastify({ logger: false });
+    const prisma = mockPrisma();
+    prisma.syncRun.findUnique = vi.fn(async () => ({
+      id: "run_warn",
+      companyId: "comp_1",
+      runType: "opportunity:pull-notion-edits",
+      source: null,
+      status: "completed",
+      startedAt: new Date("2026-01-01T10:00:00Z"),
+      finishedAt: new Date("2026-01-01T10:05:00Z"),
+      countersJson: {},
+      warningsJson: ["Unresolved re-evaluation request: notionPageId=np-ghost fingerprint=fp-ghost — checkbox left checked, user edits unprotected until resolved"],
+      llmStatsJson: null,
+      tokenTotalsJson: null,
+      notes: "Pull-edits processed 0, 1 unresolved (see warnings)",
+      notionPageId: null,
+      notionPageFingerprint: "fp",
+      createdAt: new Date("2026-01-01"),
+      costEntries: []
+    }));
+    registerAdminPlugin(server, prisma, DEFAULT_OPTIONS);
+
+    const res = await server.inject({
+      method: "GET",
+      url: "/admin/runs/run_warn",
+      headers: { authorization: basicAuth("admin", "secret") }
+    });
+    expect(res.statusCode).toBe(200);
+    // Warning badge visible
+    expect(res.body).toContain("1 warning");
+    expect(res.body).toContain("badge-orange");
+    // Warning text expanded (not behind collapsible)
+    expect(res.body).toContain("np-ghost");
+    expect(res.body).toContain("unprotected");
+    // No collapsible wrapper
+    expect(res.body).not.toContain("Show warnings");
+  });
+
+  it("run list shows no warning badge when warnings are empty", async () => {
+    const server = buildServer();
+    const res = await server.inject({
+      method: "GET",
+      url: "/admin/runs",
+      headers: { authorization: basicAuth("admin", "secret") }
+    });
+    expect(res.statusCode).toBe(200);
+    // The default mock has no warningsJson, so no warning badge in table rows
+    expect(res.body).not.toContain("warning</span>");
+  });
 });
 
 // ── Shape-drift detection: Phase 3 ──────────────────────────────────────────

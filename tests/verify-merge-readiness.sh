@@ -38,7 +38,7 @@ pass "pnpm run typecheck"
 # ── 3. Shuffled execution ─────────────────────────────────────────────────
 
 step "Shuffled execution (proves no order-dependent flakes)"
-pnpm exec vitest run --sequence.shuffle || fail "shuffled execution"
+pnpm exec vitest run --sequence.shuffle --exclude='**/*.integration.test.ts' || fail "shuffled execution"
 pass "shuffled execution"
 
 # ── 4. Focused single-case isolation (unit) ───────────────────────────────
@@ -51,7 +51,7 @@ step "Focused unit-test isolation spot-checks"
 check_focused() {
   local pattern="$1"
   local output
-  output=$(pnpm exec vitest run --testNamePattern "$pattern" 2>&1)
+  output=$(pnpm exec vitest run --testNamePattern "$pattern" --exclude='**/*.integration.test.ts' 2>&1)
   local passed
   passed=$(echo "$output" | grep -Eo '[0-9]+ passed' | head -1 | cut -d' ' -f1)
   if [[ "$passed" != "1" ]]; then

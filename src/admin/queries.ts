@@ -345,6 +345,7 @@ export class AdminQueries {
         startedAt: true,
         finishedAt: true,
         countersJson: true,
+        warningsJson: true,
         notes: true
       }
     });

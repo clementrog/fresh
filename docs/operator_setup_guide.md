@@ -410,10 +410,25 @@ Le script `tests/verify-merge-readiness.sh` inclut un smoke test dry-run automat
 ### Demandes non résolues
 
 Si une checkbox est cochée mais aucune opportunité ne correspond dans la base (identifiant Notion ou fingerprint inconnu), la demande est :
-- Comptée comme "skipped" dans les notes du Sync Run
-- Enregistrée comme warning dans le Sync Run (visible dans Notion et en base)
+- Comptée comme "unresolved" dans les notes du Sync Run (visible dans la liste admin et dans Notion)
+- Enregistrée comme warning dans le Sync Run avec les identifiants exacts (visible dans le détail admin et dans le champ "Warning flags" Notion)
+- Signalée par un badge orange dans la liste admin des runs
 - La checkbox reste cochée pour investigation manuelle
-- **Attention** : tant que la demande n'est pas résolue, les champs éditables de l'opportunité ne sont pas protégés contre les sync sortants
+
+**Attention** : tant que la demande n'est pas résolue, les champs éditables de cette opportunité dans Notion ne sont pas protégés contre les sync sortants. Un `intelligence:run` pourrait écraser les modifications utilisateur.
+
+**Comment remédier :**
+
+1. Ouvrir le Sync Run dans l'admin (`/admin/runs`) — chercher un run `opportunity:pull-notion-edits` avec un badge orange
+2. Lire le warning : il contient le `notionPageId` et le `fingerprint` de la row Notion non résolue
+3. Ouvrir la row correspondante dans la base "Content Opportunities" de Notion
+4. Vérifier le champ "Opportunity fingerprint" — s'il diffère de celui affiché dans le warning, c'est un problème d'identifiant
+5. Causes possibles :
+   - L'opportunité a été supprimée de la base Postgres (vérifier avec `SELECT * FROM "Opportunity" WHERE "notionPageId" = '...'`)
+   - L'opportunité appartient à un autre company (vérifier le `--company` flag utilisé)
+   - Le fingerprint Notion a été modifié manuellement (ne jamais éditer ce champ)
+6. Corriger la cause, puis relancer `pnpm opportunity:pull-notion-edits`
+7. Vérifier que le warning disparaît et que la checkbox est décochée
 
 ---
 

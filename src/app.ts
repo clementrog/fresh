@@ -959,7 +959,11 @@ export class EditorialSignalEngineApp {
         this.logger.info({ opportunityId: pending.id }, "Cleared orphaned notionEditsPending flag");
       }
 
-      const finished = finalizeRun(run, "completed", `Pull-edits processed ${processed}, skipped ${editRequests.length - resolved.length}, failed ${failed}`);
+      const unresolved = editRequests.length - resolved.length;
+      const noteParts = [`Pull-edits processed ${processed}`];
+      if (unresolved > 0) noteParts.push(`${unresolved} unresolved (see warnings)`);
+      if (failed > 0) noteParts.push(`${failed} failed`);
+      const finished = finalizeRun(run, "completed", noteParts.join(", "));
       await this.finishRun(finished, [], context);
     } catch (error) {
       const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown pull-edits error");
