@@ -34,7 +34,11 @@ export const envSchema = z.object({
   ADMIN_ENABLED: z.string().default(""),
   ADMIN_USER: z.string().default(""),
   ADMIN_PASSWORD: z.string().default(""),
-  ADMIN_ALLOW_REMOTE: z.string().default("")
+  ADMIN_ALLOW_REMOTE: z.string().default(""),
+  HUBSPOT_ACCESS_TOKEN: z.string().default(""),
+  HUBSPOT_PORTAL_ID: z.string().default(""),
+  SALES_LLM_PROVIDER: llmProviderSchema.default("anthropic"),
+  SALES_LLM_MODEL: z.string().default("claude-sonnet-4-6")
 });
 
 export const rateLimitSchema = z.object({

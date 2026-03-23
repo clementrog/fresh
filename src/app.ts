@@ -114,6 +114,12 @@ export class EditorialSignalEngineApp {
         return this.cleanupClaapPublishability(context);
       case "tone:inspect":
         return this.inspectToneProfiles();
+      case "sales:sync":
+      case "sales:extract":
+      case "sales:detect":
+      case "sales:match":
+      case "sales:cleanup":
+        throw new Error(`${command} is a Sales command. Use \`pnpm ${command}\` instead.`);
       default:
         throw new Error(`Unsupported command: ${command satisfies never}`);
     }

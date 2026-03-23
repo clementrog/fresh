@@ -19,7 +19,7 @@ export const SENSITIVITY_CATEGORIES = [
 
 export type SensitivityCategory = (typeof SENSITIVITY_CATEGORIES)[number];
 
-export const SOURCE_KINDS = ["notion", "claap", "linear", "market-findings", "market-research"] as const;
+export const SOURCE_KINDS = ["notion", "claap", "linear", "market-findings", "market-research", "hubspot"] as const;
 
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 
@@ -58,7 +58,12 @@ export type RunType =
   | "cleanup:retention"
   | "backfill:evidence"
   | "cleanup:claap-publishability"
-  | "tone:inspect";
+  | "tone:inspect"
+  | "sales:sync"
+  | "sales:extract"
+  | "sales:detect"
+  | "sales:match"
+  | "sales:cleanup";
 
 export interface RateLimitConfig {
   requestsPerMinute: number;

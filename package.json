@@ -26,10 +26,17 @@
     "cleanup:retention": "tsx src/cli.ts cleanup:retention",
     "backfill:evidence": "tsx src/cli.ts backfill:evidence",
     "cleanup:claap-publishability": "tsx src/cli.ts cleanup:claap-publishability",
-    "tone:inspect": "tsx src/cli.ts tone:inspect"
+    "tone:inspect": "tsx src/cli.ts tone:inspect",
+    "sales:sync": "tsx src/sales/cli.ts sales:sync",
+    "sales:extract": "tsx src/sales/cli.ts sales:extract",
+    "sales:detect": "tsx src/sales/cli.ts sales:detect",
+    "sales:match": "tsx src/sales/cli.ts sales:match",
+    "sales:check-config": "tsx src/sales/cli.ts sales:check-config",
+    "sales:cleanup": "tsx src/sales/cli.ts sales:cleanup"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
+    "@hubspot/api-client": "^12.0.1",
     "@notionhq/client": "^2.3.0",
     "@prisma/client": "^6.5.0",
     "date-fns": "^4.1.0",

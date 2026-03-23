@@ -1,0 +1,635 @@
+import { Prisma } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
+import { createDeterministicId } from "../../lib/ids.js";
+import type {
+  ConfidenceLevel,
+  DismissReason,
+  RecommendationActionType,
+  RecommendationStatus,
+  SalesDoctrineConfig
+} from "../domain/types.js";
+
+type PrismaTransaction = Omit<
+  PrismaClient,
+  "$connect" | "$disconnect" | "$on" | "$transaction" | "$extends" | "$use"
+>;
+
+// ---------------------------------------------------------------------------
+// Deterministic ID helpers
+// ---------------------------------------------------------------------------
+
+export function salesDealDbId(companyId: string, hubspotDealId: string): string {
+  return createDeterministicId("sd", [companyId, hubspotDealId]);
+}
+
+export function salesContactDbId(companyId: string, hubspotContactId: string): string {
+  return createDeterministicId("sc", [companyId, hubspotContactId]);
+}
+
+export function salesHubspotCompanyDbId(companyId: string, hubspotCompanyId: string): string {
+  return createDeterministicId("shc", [companyId, hubspotCompanyId]);
+}
+
+export function salesActivityDbId(companyId: string, hubspotEngagementId: string): string {
+  return createDeterministicId("sa", [companyId, hubspotEngagementId]);
+}
+
+export function salesSignalDbId(companyId: string, parts: string[]): string {
+  return createDeterministicId("ss", [companyId, ...parts]);
+}
+
+export function salesExtractedFactDbId(companyId: string, parts: string[]): string {
+  return createDeterministicId("sef", [companyId, ...parts]);
+}
+
+export function salesRecommendationDbId(companyId: string, dealId: string, signalId: string): string {
+  return createDeterministicId("sr", [companyId, dealId, signalId]);
+}
+
+export function salesDraftDbId(companyId: string, recommendationId: string, channelType: string): string {
+  return createDeterministicId("sdr", [companyId, recommendationId, channelType, Date.now().toString()]);
+}
+
+export function salesDoctrineDbId(companyId: string, version: number): string {
+  return createDeterministicId("sdoc", [companyId, version.toString()]);
+}
+
+function toJson(value: Record<string, unknown>): Prisma.InputJsonValue {
+  return value as Prisma.InputJsonValue;
+}
+
+// ---------------------------------------------------------------------------
+// Recommendation include for detail queries
+// ---------------------------------------------------------------------------
+
+const recommendationInclude = {
+  deal: true,
+  signal: true,
+  evidence: { include: { evidence: true } },
+  actions: { orderBy: { createdAt: "desc" as const } },
+  drafts: { orderBy: { createdAt: "desc" as const } },
+  user: true
+} satisfies Prisma.SalesRecommendationInclude;
+
+// ---------------------------------------------------------------------------
+// SalesRepositoryBundle
+// ---------------------------------------------------------------------------
+
+export class SalesRepositoryBundle {
+  constructor(private readonly prisma: PrismaClient) {}
+
+  // ---- Deals ----
+
+  async upsertDeal(params: {
+    companyId: string;
+    hubspotDealId: string;
+    dealName: string;
+    pipeline: string;
+    stage: string;
+    amount: number | null;
+    ownerEmail: string | null;
+    hubspotOwnerId: string | null;
+    lastActivityDate: Date | null;
+    closeDateExpected: Date | null;
+    propertiesJson: Record<string, unknown>;
+    staleDays: number;
+  }, tx: PrismaTransaction = this.prisma) {
+    const id = salesDealDbId(params.companyId, params.hubspotDealId);
+    return tx.salesDeal.upsert({
+      where: {
+        companyId_hubspotDealId: {
+          companyId: params.companyId,
+          hubspotDealId: params.hubspotDealId
+        }
+      },
+      create: { id, ...params, propertiesJson: toJson(params.propertiesJson) },
+      update: {
+        dealName: params.dealName,
+        pipeline: params.pipeline,
+        stage: params.stage,
+        amount: params.amount,
+        ownerEmail: params.ownerEmail,
+        hubspotOwnerId: params.hubspotOwnerId,
+        lastActivityDate: params.lastActivityDate,
+        closeDateExpected: params.closeDateExpected,
+        propertiesJson: toJson(params.propertiesJson),
+        staleDays: params.staleDays
+      }
+    });
+  }
+
+  async getDealByHubspotId(companyId: string, hubspotDealId: string) {
+    return this.prisma.salesDeal.findUnique({
+      where: {
+        companyId_hubspotDealId: { companyId, hubspotDealId }
+      }
+    });
+  }
+
+  async listDeals(companyId: string, options?: { stage?: string; skip?: number; take?: number }) {
+    return this.prisma.salesDeal.findMany({
+      where: { companyId, ...(options?.stage ? { stage: options.stage } : {}) },
+      orderBy: { updatedAt: "desc" },
+      skip: options?.skip ?? 0,
+      take: options?.take ?? 100
+    });
+  }
+
+  async listStaleDeals(companyId: string, minStaleDays: number) {
+    return this.prisma.salesDeal.findMany({
+      where: { companyId, staleDays: { gte: minStaleDays } },
+      orderBy: { staleDays: "desc" }
+    });
+  }
+
+  async countDeals(companyId: string) {
+    return this.prisma.salesDeal.count({ where: { companyId } });
+  }
+
+  // ---- Contacts ----
+
+  async upsertContact(params: {
+    companyId: string;
+    hubspotContactId: string;
+    email: string | null;
+    firstName: string | null;
+    lastName: string | null;
+    title: string | null;
+    company: string | null;
+    propertiesJson: Record<string, unknown>;
+  }, tx: PrismaTransaction = this.prisma) {
+    const id = salesContactDbId(params.companyId, params.hubspotContactId);
+    return tx.salesContact.upsert({
+      where: {
+        companyId_hubspotContactId: {
+          companyId: params.companyId,
+          hubspotContactId: params.hubspotContactId
+        }
+      },
+      create: { id, ...params, propertiesJson: toJson(params.propertiesJson) },
+      update: {
+        email: params.email,
+        firstName: params.firstName,
+        lastName: params.lastName,
+        title: params.title,
+        company: params.company,
+        propertiesJson: toJson(params.propertiesJson)
+      }
+    });
+  }
+
+  // ---- HubSpot companies ----
+
+  async upsertHubspotCompany(params: {
+    companyId: string;
+    hubspotCompanyId: string;
+    name: string;
+    domain: string | null;
+    industry: string | null;
+    size: string | null;
+    propertiesJson: Record<string, unknown>;
+  }, tx: PrismaTransaction = this.prisma) {
+    const id = salesHubspotCompanyDbId(params.companyId, params.hubspotCompanyId);
+    return tx.salesHubspotCompany.upsert({
+      where: {
+        companyId_hubspotCompanyId: {
+          companyId: params.companyId,
+          hubspotCompanyId: params.hubspotCompanyId
+        }
+      },
+      create: { id, ...params, propertiesJson: toJson(params.propertiesJson) },
+      update: {
+        name: params.name,
+        domain: params.domain,
+        industry: params.industry,
+        size: params.size,
+        propertiesJson: toJson(params.propertiesJson)
+      }
+    });
+  }
+
+  // ---- Deal associations ----
+
+  async linkDealContact(dealId: string, contactId: string, tx: PrismaTransaction = this.prisma) {
+    return tx.dealContact.upsert({
+      where: { dealId_contactId: { dealId, contactId } },
+      create: { dealId, contactId },
+      update: {}
+    });
+  }
+
+  async linkDealCompany(dealId: string, salesCompanyId: string, tx: PrismaTransaction = this.prisma) {
+    return tx.dealCompany.upsert({
+      where: { dealId_salesCompanyId: { dealId, salesCompanyId } },
+      create: { dealId, salesCompanyId },
+      update: {}
+    });
+  }
+
+  // ---- Activities ----
+
+  async upsertActivity(params: {
+    companyId: string;
+    hubspotEngagementId: string;
+    type: string;
+    body: string | null;
+    timestamp: Date;
+    dealId: string | null;
+    contactId: string | null;
+    rawTextExpiresAt: Date | null;
+  }, tx: PrismaTransaction = this.prisma) {
+    const id = salesActivityDbId(params.companyId, params.hubspotEngagementId);
+    return tx.salesActivity.upsert({
+      where: {
+        companyId_hubspotEngagementId: {
+          companyId: params.companyId,
+          hubspotEngagementId: params.hubspotEngagementId
+        }
+      },
+      create: { id, ...params },
+      update: {
+        body: params.body,
+        timestamp: params.timestamp,
+        dealId: params.dealId,
+        contactId: params.contactId,
+        rawTextExpiresAt: params.rawTextExpiresAt
+      }
+    });
+  }
+
+  async listUnextractedActivities(companyId: string, take = 50) {
+    return this.prisma.salesActivity.findMany({
+      where: {
+        companyId,
+        extractedAt: null,
+        body: { not: null },
+        rawTextCleaned: false
+      },
+      orderBy: { timestamp: "desc" },
+      take
+    });
+  }
+
+  async markActivityExtracted(id: string) {
+    return this.prisma.salesActivity.update({
+      where: { id },
+      data: { extractedAt: new Date() }
+    });
+  }
+
+  async listCleanupCandidateActivities(now: Date) {
+    return this.prisma.salesActivity.findMany({
+      where: {
+        rawTextCleaned: false,
+        rawTextExpiresAt: { lte: now }
+      }
+    });
+  }
+
+  async cleanupActivityRawText(id: string) {
+    return this.prisma.salesActivity.update({
+      where: { id },
+      data: {
+        body: null,
+        rawTextCleaned: true
+      }
+    });
+  }
+
+  // ---- Signals ----
+
+  async createSignal(params: {
+    id: string;
+    companyId: string;
+    signalType: string;
+    title: string;
+    description: string;
+    sourceItemId: string | null;
+    dealId: string | null;
+    confidence: ConfidenceLevel;
+    metadataJson: Record<string, unknown>;
+    detectedAt: Date;
+  }) {
+    return this.prisma.salesSignal.upsert({
+      where: { id: params.id },
+      create: { ...params, metadataJson: toJson(params.metadataJson) },
+      update: {}
+    });
+  }
+
+  async listUnmatchedSignals(companyId: string) {
+    return this.prisma.salesSignal.findMany({
+      where: { companyId, matchedAt: null },
+      orderBy: { detectedAt: "desc" }
+    });
+  }
+
+  async markSignalMatched(id: string) {
+    return this.prisma.salesSignal.update({
+      where: { id },
+      data: { matchedAt: new Date() }
+    });
+  }
+
+  async listRecentSignals(companyId: string, take = 50) {
+    return this.prisma.salesSignal.findMany({
+      where: { companyId },
+      orderBy: { detectedAt: "desc" },
+      take
+    });
+  }
+
+  async listSignalsForDeal(dealId: string) {
+    return this.prisma.salesSignal.findMany({
+      where: { dealId },
+      orderBy: { detectedAt: "desc" }
+    });
+  }
+
+  async countSignals(companyId: string) {
+    return this.prisma.salesSignal.count({ where: { companyId } });
+  }
+
+  // ---- Extracted facts ----
+
+  async createExtractedFact(params: {
+    id: string;
+    companyId: string;
+    activityId: string | null;
+    dealId: string;
+    category: string;
+    label: string;
+    extractedValue: string;
+    confidence: number;
+    sourceText: string;
+  }) {
+    return this.prisma.salesExtractedFact.upsert({
+      where: { id: params.id },
+      create: params,
+      update: {}
+    });
+  }
+
+  async listExtractionsForDeal(dealId: string) {
+    return this.prisma.salesExtractedFact.findMany({
+      where: { dealId },
+      orderBy: { createdAt: "desc" }
+    });
+  }
+
+  async countExtractions(companyId: string) {
+    return this.prisma.salesExtractedFact.count({ where: { companyId } });
+  }
+
+  // ---- Recommendations ----
+
+  async createRecommendation(params: {
+    id: string;
+    companyId: string;
+    dealId: string;
+    signalId: string;
+    userId: string | null;
+    whyNow: string;
+    recommendedAngle: string;
+    nextStepType: string;
+    matchedContextJson: Record<string, unknown>;
+    confidence: ConfidenceLevel;
+    priorityRank: number;
+  }) {
+    return this.prisma.salesRecommendation.upsert({
+      where: { id: params.id },
+      create: { ...params, matchedContextJson: toJson(params.matchedContextJson) },
+      update: {
+        whyNow: params.whyNow,
+        recommendedAngle: params.recommendedAngle,
+        nextStepType: params.nextStepType,
+        matchedContextJson: toJson(params.matchedContextJson),
+        confidence: params.confidence,
+        priorityRank: params.priorityRank
+      }
+    });
+  }
+
+  async updateRecommendationStatus(
+    id: string,
+    status: RecommendationStatus,
+    extra?: { dismissReason?: DismissReason; snoozedUntil?: Date }
+  ) {
+    return this.prisma.salesRecommendation.update({
+      where: { id },
+      data: {
+        status,
+        dismissReason: extra?.dismissReason ?? null,
+        snoozedUntil: extra?.snoozedUntil ?? null
+      }
+    });
+  }
+
+  async getRecommendation(id: string) {
+    return this.prisma.salesRecommendation.findUnique({
+      where: { id },
+      include: recommendationInclude
+    });
+  }
+
+  async listRecommendationsForUser(companyId: string, userId: string | null, options?: {
+    status?: RecommendationStatus;
+    skip?: number;
+    take?: number;
+  }) {
+    return this.prisma.salesRecommendation.findMany({
+      where: {
+        companyId,
+        ...(userId ? { userId } : {}),
+        ...(options?.status ? { status: options.status } : {})
+      },
+      include: { deal: true, signal: true },
+      orderBy: { priorityRank: "desc" },
+      skip: options?.skip ?? 0,
+      take: options?.take ?? 50
+    });
+  }
+
+  async listRecommendationsForDeal(dealId: string) {
+    return this.prisma.salesRecommendation.findMany({
+      where: { dealId },
+      include: { signal: true },
+      orderBy: { priorityRank: "desc" }
+    });
+  }
+
+  async countRecommendations(companyId: string, status?: RecommendationStatus) {
+    return this.prisma.salesRecommendation.count({
+      where: { companyId, ...(status ? { status } : {}) }
+    });
+  }
+
+  async countRecommendationsForDealSince(dealId: string, since: Date) {
+    return this.prisma.salesRecommendation.count({
+      where: { dealId, createdAt: { gte: since } }
+    });
+  }
+
+  // countRecommendationsForUserToday removed — requires timezone-aware
+  // day-boundary computation (Company.defaultTimezone). Deferred to Slice 4
+  // where the suppression engine can implement it correctly.
+
+  // ---- Evidence linking ----
+
+  async linkRecommendationEvidence(recommendationId: string, evidenceId: string, relevanceNote = "") {
+    return this.prisma.recommendationEvidence.upsert({
+      where: { recommendationId_evidenceId: { recommendationId, evidenceId } },
+      create: { recommendationId, evidenceId, relevanceNote },
+      update: { relevanceNote }
+    });
+  }
+
+  // ---- Actions ----
+
+  async createAction(params: {
+    recommendationId: string;
+    userId: string | null;
+    actionType: RecommendationActionType;
+    reason: string | null;
+    metadataJson?: Record<string, unknown>;
+  }) {
+    const id = createDeterministicId("ra", [
+      params.recommendationId,
+      params.actionType,
+      Date.now().toString()
+    ]);
+    return this.prisma.recommendationAction.create({
+      data: {
+        id,
+        recommendationId: params.recommendationId,
+        userId: params.userId,
+        actionType: params.actionType,
+        reason: params.reason,
+        metadataJson: toJson(params.metadataJson ?? {})
+      }
+    });
+  }
+
+  // ---- Drafts ----
+
+  async createDraft(params: {
+    companyId: string;
+    recommendationId: string;
+    channelType: string;
+    subject: string | null;
+    body: string;
+    repProfileId: string | null;
+    confidenceScore: number;
+  }) {
+    const id = salesDraftDbId(params.companyId, params.recommendationId, params.channelType);
+    return this.prisma.salesDraft.create({
+      data: { id, ...params }
+    });
+  }
+
+  async getDraftForRecommendation(recommendationId: string) {
+    return this.prisma.salesDraft.findFirst({
+      where: { recommendationId },
+      orderBy: { createdAt: "desc" }
+    });
+  }
+
+  // ---- Doctrine ----
+
+  async upsertDoctrine(companyId: string, version: number, doctrineJson: SalesDoctrineConfig) {
+    const id = salesDoctrineDbId(companyId, version);
+    return this.prisma.salesDoctrine.upsert({
+      where: { companyId_version: { companyId, version } },
+      create: { id, companyId, version, doctrineJson: toJson(doctrineJson as unknown as Record<string, unknown>) },
+      update: { doctrineJson: toJson(doctrineJson as unknown as Record<string, unknown>) }
+    });
+  }
+
+  async getLatestDoctrine(companyId: string) {
+    return this.prisma.salesDoctrine.findFirst({
+      where: { companyId },
+      orderBy: { version: "desc" }
+    });
+  }
+
+  // ---- Sync runs (reuses shared SyncRun/CostLedgerEntry tables) ----
+
+  async createSyncRun(params: {
+    companyId: string;
+    runType: string;
+    source?: string;
+  }) {
+    const id = createDeterministicId("run", [params.companyId, params.runType, Date.now().toString()]);
+    return this.prisma.syncRun.create({
+      data: {
+        id,
+        companyId: params.companyId,
+        runType: params.runType,
+        source: params.source ?? null,
+        status: "running",
+        startedAt: new Date(),
+        countersJson: {},
+        warningsJson: [],
+        notionPageFingerprint: ""
+      }
+    });
+  }
+
+  async finalizeSyncRun(
+    id: string,
+    status: "completed" | "failed",
+    counters: Record<string, number>,
+    warnings: string[] = [],
+    notes?: string
+  ) {
+    return this.prisma.syncRun.update({
+      where: { id },
+      data: {
+        status,
+        finishedAt: new Date(),
+        countersJson: counters,
+        warningsJson: warnings,
+        notes: notes ?? null
+      }
+    });
+  }
+
+  async createCostEntry(params: {
+    runId: string;
+    step: string;
+    model: string;
+    mode: string;
+    promptTokens: number;
+    completionTokens: number;
+    estimatedCostUsd: number;
+  }) {
+    const id = createDeterministicId("cost", [params.runId, params.step, Date.now().toString()]);
+    return this.prisma.costLedgerEntry.create({
+      data: { id, ...params }
+    });
+  }
+
+  // ---- Cursor helpers (reuses shared SourceCursor table) ----
+
+  async getCursor(companyId: string, source: string) {
+    const row = await this.prisma.sourceCursor.findUnique({
+      where: { companyId_source: { companyId, source } }
+    });
+    return row?.cursor ?? null;
+  }
+
+  async setCursor(companyId: string, source: string, cursor: string) {
+    const id = createDeterministicId("cur", [companyId, source]);
+    return this.prisma.sourceCursor.upsert({
+      where: { companyId_source: { companyId, source } },
+      create: { id, companyId, source, cursor },
+      update: { cursor }
+    });
+  }
+
+  // ---- Transaction helper ----
+
+  async transaction<T>(fn: (tx: PrismaTransaction) => Promise<T>): Promise<T> {
+    return this.prisma.$transaction(fn);
+  }
+}

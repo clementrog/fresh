@@ -1,0 +1,34 @@
+Environment variables loaded from .env
+Prisma schema loaded from prisma/schema.prisma
+Datasource "db": PostgreSQL database "linc_editorial", schema "public" at "localhost:5432"
+
+6 migrations found in prisma/migrations
+
+Applying migration `20260323120000_add_sales_models`
+
+The following migration(s) have been applied:
+
+migrations/
+  └─ 20260323120000_add_sales_models/
+    └─ migration.sql
+      
+All migrations have been successfully applied.
+                     indexname                      |                                                                        indexdef                                                                        
+----------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------
+ DealCompany_pkey                                   | CREATE UNIQUE INDEX "DealCompany_pkey" ON public."DealCompany" USING btree ("dealId", "salesCompanyId")
+ SalesActivity_companyId_hubspotEngagementId_key    | CREATE UNIQUE INDEX "SalesActivity_companyId_hubspotEngagementId_key" ON public."SalesActivity" USING btree ("companyId", "hubspotEngagementId")
+ SalesActivity_pkey                                 | CREATE UNIQUE INDEX "SalesActivity_pkey" ON public."SalesActivity" USING btree (id)
+ SalesContact_companyId_hubspotContactId_key        | CREATE UNIQUE INDEX "SalesContact_companyId_hubspotContactId_key" ON public."SalesContact" USING btree ("companyId", "hubspotContactId")
+ SalesContact_pkey                                  | CREATE UNIQUE INDEX "SalesContact_pkey" ON public."SalesContact" USING btree (id)
+ SalesDeal_companyId_hubspotDealId_key              | CREATE UNIQUE INDEX "SalesDeal_companyId_hubspotDealId_key" ON public."SalesDeal" USING btree ("companyId", "hubspotDealId")
+ SalesDeal_pkey                                     | CREATE UNIQUE INDEX "SalesDeal_pkey" ON public."SalesDeal" USING btree (id)
+ SalesHubspotCompany_companyId_hubspotCompanyId_key | CREATE UNIQUE INDEX "SalesHubspotCompany_companyId_hubspotCompanyId_key" ON public."SalesHubspotCompany" USING btree ("companyId", "hubspotCompanyId")
+ SalesHubspotCompany_pkey                           | CREATE UNIQUE INDEX "SalesHubspotCompany_pkey" ON public."SalesHubspotCompany" USING btree (id)
+(9 lignes)
+
+             conname             |                                          pg_get_constraintdef                                           
+---------------------------------+---------------------------------------------------------------------------------------------------------
+ DealCompany_dealId_fkey         | FOREIGN KEY ("dealId") REFERENCES "SalesDeal"(id) ON UPDATE CASCADE ON DELETE CASCADE
+ DealCompany_salesCompanyId_fkey | FOREIGN KEY ("salesCompanyId") REFERENCES "SalesHubspotCompany"(id) ON UPDATE CASCADE ON DELETE CASCADE
+(2 lignes)
+

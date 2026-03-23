@@ -25,6 +25,10 @@ export interface AppEnv {
   ADMIN_USER?: string;
   ADMIN_PASSWORD?: string;
   ADMIN_ALLOW_REMOTE?: string;
+  HUBSPOT_ACCESS_TOKEN?: string;
+  HUBSPOT_PORTAL_ID?: string;
+  SALES_LLM_PROVIDER?: "openai" | "anthropic";
+  SALES_LLM_MODEL?: string;
 }
 
 export function loadEnv() {
