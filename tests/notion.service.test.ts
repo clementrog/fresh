@@ -108,7 +108,10 @@ describe("notion service", () => {
       id: "db-opps",
       title: [{ plain_text: "Content Opportunities" }],
       parent: { type: "page_id", page_id: "parent-page" },
-      properties: { Title: { title: {} } }
+      properties: {
+        Title: { title: {} },
+        "Draft readiness": { id: "old-readiness", select: {} }
+      }
     }));
     const databasesUpdate = vi.fn(async () => ({}));
     const client = makeNotionClient({
@@ -142,8 +145,10 @@ describe("notion service", () => {
     expect(databasesUpdate).toHaveBeenCalledTimes(1);
     const patchCall = (databasesUpdate.mock.calls[0] as any[])[0];
     expect(patchCall.database_id).toBe("db-opps");
+    expect(patchCall.properties["Draft readiness"]).toEqual({ name: "How close is this to a draft?" });
     // Should include new properties like Enrichment log that aren't in the existing DB
     expect(patchCall.properties).toHaveProperty("Enrichment log");
+    expect(patchCall.properties).not.toHaveProperty("How close is this to a draft?");
 
     // Second call should NOT patch again (cached)
     databasesUpdate.mockClear();
@@ -178,6 +183,8 @@ describe("notion service", () => {
     expect(updateProps).not.toHaveProperty("Status");
     expect(updateProps).not.toHaveProperty("Editorial notes");
     expect(updateProps).toHaveProperty("Editorial owner");
+    expect(updateProps).toHaveProperty("How close is this to a draft?");
+    expect(updateProps).not.toHaveProperty("Draft readiness");
   });
 
   it("syncOpportunity on create includes Status, Editorial notes, Editorial owner", async () => {
@@ -206,6 +213,8 @@ describe("notion service", () => {
     expect(createProps).toHaveProperty("Status");
     expect(createProps).toHaveProperty("Editorial notes");
     expect(createProps).toHaveProperty("Editorial owner");
+    expect(createProps).toHaveProperty("How close is this to a draft?");
+    expect(createProps).not.toHaveProperty("Draft readiness");
   });
 
   it("syncOpportunity does not write Related signals, Routing status, Readiness, V1 history", async () => {
@@ -598,22 +607,22 @@ describe("notion service", () => {
 // --- mapReadinessTierToSelect ---
 
 describe("mapReadinessTierToSelect", () => {
-  it("ready → 'Ready to draft'", () => {
-    expect(mapReadinessTierToSelect("ready")).toBe("Ready to draft");
+  it("ready → 'Draft now'", () => {
+    expect(mapReadinessTierToSelect("ready")).toBe("Draft now");
   });
 
-  it("promising → 'Promising — needs help' (em-dash, no comma)", () => {
+  it("promising → 'Good idea — one more input' (em-dash, no comma)", () => {
     const result = mapReadinessTierToSelect("promising");
-    expect(result).toBe("Promising — needs help");
+    expect(result).toBe("Good idea — one more input");
     expect(result).not.toContain(","); // Notion API rejects commas in select options
   });
 
-  it("undefined → 'Needs more proof'", () => {
-    expect(mapReadinessTierToSelect(undefined)).toBe("Needs more proof");
+  it("undefined → 'Too early'", () => {
+    expect(mapReadinessTierToSelect(undefined)).toBe("Too early");
   });
 
-  it("needs-more-proof → 'Needs more proof'", () => {
-    expect(mapReadinessTierToSelect("needs-more-proof")).toBe("Needs more proof");
+  it("needs-more-proof → 'Too early'", () => {
+    expect(mapReadinessTierToSelect("needs-more-proof")).toBe("Too early");
   });
 });
 

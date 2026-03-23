@@ -21,6 +21,9 @@ export const REQUIRED_DATABASES = [
 type RequiredDatabase = (typeof REQUIRED_DATABASES)[number];
 type NotionClientLike = Client;
 
+const READINESS_PROPERTY_NAME = "How close is this to a draft?";
+const LEGACY_READINESS_PROPERTY_NAME = "Draft readiness";
+
 export type NotionBindingStore = {
   getNotionDatabaseBinding(parentPageId: string, name: RequiredDatabase): Promise<{ databaseId: string } | null>;
   upsertNotionDatabaseBinding(parentPageId: string, name: RequiredDatabase, databaseId: string): Promise<unknown>;
@@ -105,7 +108,7 @@ export class NotionService {
         "Format rationale": richTextProperty(""),
         "Source URL": richTextProperty(opportunity.primaryEvidence.sourceUrl),
         "Provenance type": richTextProperty(options?.provenanceType ?? opportunity.primaryEvidence.source),
-        "Draft readiness": selectProperty(readinessSelect),
+        [READINESS_PROPERTY_NAME]: selectProperty(readinessSelect),
         "What's missing": richTextProperty(whatsMissing),
         "Reframing note": richTextProperty(options?.reframingNote ?? ""),
         "Evidence count": numberProperty(opportunity.evidence.length),
@@ -801,16 +804,26 @@ export class NotionService {
     const expected = getDatabaseProperties(name);
     const current = await this.client.databases.retrieve({ database_id: databaseId });
     const currentProps = (current as any).properties ?? {};
-    const missing: Record<string, unknown> = {};
+    const patch: Record<string, unknown> = {};
+
+    if (name === "Content Opportunities"
+      && currentProps[LEGACY_READINESS_PROPERTY_NAME]
+      && !currentProps[READINESS_PROPERTY_NAME]) {
+      patch[LEGACY_READINESS_PROPERTY_NAME] = {
+        name: READINESS_PROPERTY_NAME
+      };
+    }
+
     for (const [key, definition] of Object.entries(expected)) {
-      if (!currentProps[key]) {
-        missing[key] = definition;
+      const existsAsLegacyReadiness = key === READINESS_PROPERTY_NAME && Boolean(currentProps[LEGACY_READINESS_PROPERTY_NAME]);
+      if (!currentProps[key] && !existsAsLegacyReadiness) {
+        patch[key] = definition;
       }
     }
-    if (Object.keys(missing).length > 0) {
+    if (Object.keys(patch).length > 0) {
       await this.client.databases.update({
         database_id: databaseId,
-        properties: missing as any
+        properties: patch as any
       });
     }
   }
@@ -984,7 +997,7 @@ function getDatabaseProperties(name: RequiredDatabase) {
         "Source of origin": { rich_text: {} },
         "Source URL": { rich_text: {} },
         "Provenance type": { rich_text: {} },
-        "Draft readiness": { select: {} },
+        [READINESS_PROPERTY_NAME]: { select: {} },
         "What's missing": { rich_text: {} },
         "Reframing note": { rich_text: {} },
         "Evidence count": { number: { format: "number" } },
@@ -1076,9 +1089,9 @@ function getDatabaseProperties(name: RequiredDatabase) {
 
 export function mapReadinessTierToSelect(tier?: string): string {
   switch (tier) {
-    case "ready": return "Ready to draft";
-    case "promising": return "Promising — needs help";
-    default: return "Needs more proof";
+    case "ready": return "Draft now";
+    case "promising": return "Good idea — one more input";
+    default: return "Too early";
   }
 }
 
