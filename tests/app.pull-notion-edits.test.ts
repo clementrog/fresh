@@ -389,4 +389,20 @@ describe("opportunity:pull-notion-edits command", () => {
     expect(repositories.findOpportunityByNotionPageFingerprint).toHaveBeenCalledWith("npf-1", COMPANY_ID);
     expect(repositories.updateOpportunityEditableFields).toHaveBeenCalled();
   });
+
+  it("sync run is persisted with companyId set", async () => {
+    const { app, repositories, notion } = buildApp();
+    const row = makeOpportunityRow();
+
+    notion.listReEvaluationRequests.mockResolvedValue([makeEditRequest()]);
+    repositories.findOpportunityByNotionPageId.mockResolvedValue(row as any);
+    repositories.findOpportunityById.mockResolvedValue(row as any);
+
+    await app.run("opportunity:pull-notion-edits");
+
+    expect(repositories.createSyncRun).toHaveBeenCalledTimes(1);
+    const syncRun = (repositories.createSyncRun as any).mock.calls[0][0];
+    expect(syncRun.companyId).toBe(COMPANY_ID);
+    expect(syncRun.runType).toBe("opportunity:pull-notion-edits");
+  });
 });

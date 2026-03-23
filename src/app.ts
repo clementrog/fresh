@@ -848,6 +848,7 @@ export class EditorialSignalEngineApp {
   private async pullNotionEdits(context: RunContext) {
     const company = await this.getActiveCompany(context);
     const run = createRun("opportunity:pull-notion-edits");
+    run.companyId = company.id;
 
     try {
       // Phase A — Discovery (read-only)

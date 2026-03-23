@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:integration": "bash -c 'set -o pipefail && INTEGRATION=1 NO_COLOR=1 vitest run --reporter=verbose tests/*.integration.test.ts 2>&1 | tee tests/integration-proof.txt'",
+    "test:integration": "bash -c 'set -o pipefail && prisma migrate deploy && INTEGRATION=1 NO_COLOR=1 vitest run --reporter=verbose tests/*.integration.test.ts 2>&1 | tee tests/integration-proof.txt'",
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
