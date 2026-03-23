@@ -1,5 +1,10 @@
 import type { PrismaClient } from "@prisma/client";
+import { Client } from "@hubspot/api-client";
 import type { AppEnv } from "../config/env.js";
+import { createLogger } from "../lib/logger.js";
+import { SalesRepositoryBundle } from "./db/sales-repositories.js";
+import { createHubSpotApiAdapter, HubSpotSyncService } from "./connectors/hubspot.js";
+import type { SyncResult } from "./connectors/hubspot.js";
 
 export interface ConfigCheckResult {
   ok: boolean;
@@ -11,8 +16,10 @@ export interface ConfigCheckResult {
  *
  * `checkConfig()` validates that the env/config prerequisites for Sales are
  * present and minimally valid. It does NOT call external services (HubSpot API,
- * LLM providers). External-service reachability checks belong in a `preflight`
- * method that will be added in Slice 2 once the HubSpot connector exists.
+ * LLM providers).
+ *
+ * `runSync()` pulls CRM data from HubSpot into the Sales tables. It validates
+ * only what sync needs (HUBSPOT_ACCESS_TOKEN) — it does NOT require LLM keys.
  */
 export class SalesApp {
   constructor(
@@ -60,5 +67,33 @@ export class SalesApp {
     details.llm = `${llmProvider} key present`;
 
     return { ok: true, details };
+  }
+
+  async runSync(companyId: string): Promise<SyncResult> {
+    if (!this.env.HUBSPOT_ACCESS_TOKEN) {
+      throw new Error("HUBSPOT_ACCESS_TOKEN is not configured");
+    }
+
+    const logger = createLogger(this.env);
+    const repos = new SalesRepositoryBundle(this.prisma);
+    const client = new Client({ accessToken: this.env.HUBSPOT_ACCESS_TOKEN });
+    const api = createHubSpotApiAdapter(client);
+    const service = new HubSpotSyncService(api, repos, logger);
+
+    const result = await service.runSync(companyId);
+
+    logger.info(
+      {
+        deals: result.counters.deals,
+        contacts: result.counters.contacts,
+        companies: result.counters.companies,
+        activities: result.counters.activities,
+        associations: result.counters.associations,
+        warnings: result.warnings.length,
+      },
+      "HubSpot sync completed"
+    );
+
+    return result;
   }
 }

@@ -33,12 +33,24 @@ async function main() {
         break;
       }
 
-      case "sales:sync":
+      case "sales:sync": {
+        const companySlug = env.DEFAULT_COMPANY_SLUG ?? "default";
+        const company = await prisma.company.findUnique({ where: { slug: companySlug } });
+        if (!company) {
+          logger.error(`Company "${companySlug}" not found. Initialize it via the Content CLI first.`);
+          process.exit(1);
+        }
+        logger.info(`Starting HubSpot sync for company "${company.name}" (${company.id})`);
+        await app.runSync(company.id);
+        logger.info("HubSpot sync finished");
+        break;
+      }
+
       case "sales:extract":
       case "sales:detect":
       case "sales:match":
       case "sales:cleanup":
-        logger.warn(`Command ${command} is not yet implemented (Slice 2+)`);
+        logger.warn(`Command ${command} is not yet implemented (Slice 3+)`);
         break;
 
       default:
