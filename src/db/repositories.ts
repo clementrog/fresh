@@ -421,6 +421,7 @@ export class RepositoryBundle {
         supportingEvidenceCount,
         evidenceFreshness: opportunity.evidenceFreshness,
         editorialOwner: opportunity.editorialOwner,
+        editorialNotes: opportunity.editorialNotes ?? "",
         selectedAt: opportunity.selectedAt ? new Date(opportunity.selectedAt) : null,
         lastDigestAt: null,
         v1HistoryJson: toJson(opportunity.v1History),
@@ -445,6 +446,7 @@ export class RepositoryBundle {
         supportingEvidenceCount,
         evidenceFreshness: opportunity.evidenceFreshness,
         editorialOwner: opportunity.editorialOwner,
+        editorialNotes: opportunity.editorialNotes ?? "",
         selectedAt: opportunity.selectedAt ? new Date(opportunity.selectedAt) : null,
         lastDigestAt: null,
         v1HistoryJson: toJson(opportunity.v1History),
@@ -638,10 +640,69 @@ export class RepositoryBundle {
     });
   }
 
-  async findOpportunityByNotionPageId(notionPageId: string) {
+  async findOpportunityByNotionPageId(notionPageId: string, companyId?: string) {
     return this.prisma.opportunity.findFirst({
-      where: { notionPageId },
+      where: { notionPageId, ...(companyId ? { companyId } : {}) },
       include: opportunityInclude
+    });
+  }
+
+  async findOpportunityByNotionPageFingerprint(fingerprint: string, companyId?: string) {
+    return this.prisma.opportunity.findFirst({
+      where: { notionPageFingerprint: fingerprint, ...(companyId ? { companyId } : {}) },
+      include: opportunityInclude
+    });
+  }
+
+  async updateOpportunityEditableFields(params: {
+    opportunityId: string;
+    title: string;
+    angle: string;
+    whyNow: string;
+    whatItIsAbout: string;
+    whatItIsNotAbout: string;
+    editorialNotes: string;
+  }) {
+    return this.prisma.opportunity.update({
+      where: { id: params.opportunityId },
+      data: {
+        title: params.title,
+        angle: params.angle,
+        whyNow: params.whyNow,
+        whatItIsAbout: params.whatItIsAbout,
+        whatItIsNotAbout: params.whatItIsNotAbout,
+        editorialNotes: params.editorialNotes
+      },
+      include: opportunityInclude
+    });
+  }
+
+  async updateEvidenceSourceUrl(evidenceId: string, sourceUrl: string) {
+    return this.prisma.evidenceReference.update({
+      where: { id: evidenceId },
+      data: { sourceUrl }
+    });
+  }
+
+  async markEditsPending(opportunityIds: string[], companyId: string) {
+    if (opportunityIds.length === 0) return;
+    return this.prisma.opportunity.updateMany({
+      where: { id: { in: opportunityIds }, companyId },
+      data: { notionEditsPending: true }
+    });
+  }
+
+  async clearEditsPending(opportunityId: string) {
+    return this.prisma.opportunity.update({
+      where: { id: opportunityId },
+      data: { notionEditsPending: false }
+    });
+  }
+
+  async findEditsPendingOpportunities(companyId: string): Promise<Array<{ id: string; notionPageId: string | null; notionPageFingerprint: string }>> {
+    return this.prisma.opportunity.findMany({
+      where: { notionEditsPending: true, companyId },
+      select: { id: true, notionPageId: true, notionPageFingerprint: true }
     });
   }
 

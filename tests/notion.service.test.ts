@@ -63,6 +63,8 @@ function makeOpportunity(overrides: Record<string, unknown> = {}) {
     suggestedFormat: "Article",
     enrichmentLog: [],
     editorialOwner: undefined,
+    editorialNotes: "",
+    notionEditsPending: false,
     selectedAt: undefined,
     v1History: [],
     notionPageId: undefined as string | undefined,
@@ -157,7 +159,7 @@ describe("notion service", () => {
     expect(databasesUpdate).not.toHaveBeenCalled();
   });
 
-  it("syncOpportunity on update omits Status, Editorial notes, Editorial owner", async () => {
+  it("syncOpportunity on update writes editable fields when no pending request", async () => {
     const pagesUpdate = vi.fn(async () => ({}));
     const client = makeNotionClient({
       pages: {
@@ -174,17 +176,64 @@ describe("notion service", () => {
     });
 
     const service = new NotionService("", "parent-page", { client });
-    const opp = makeOpportunity({ notionPageId: "existing-page" });
+    const opp = makeOpportunity({ notionPageId: "existing-page", notionEditsPending: false });
 
     await service.syncOpportunity(opp, null);
 
     expect(pagesUpdate).toHaveBeenCalledTimes(1);
     const updateProps = (pagesUpdate.mock.calls[0] as any[])[0].properties;
     expect(updateProps).not.toHaveProperty("Status");
-    expect(updateProps).not.toHaveProperty("Editorial notes");
+    expect(updateProps).toHaveProperty("Title");
+    expect(updateProps).toHaveProperty("Angle");
+    expect(updateProps).toHaveProperty("Why now");
+    expect(updateProps).toHaveProperty("What it is about");
+    expect(updateProps).toHaveProperty("What it is not about");
+    expect(updateProps).toHaveProperty("Source URL");
+    expect(updateProps).toHaveProperty("Editorial notes");
     expect(updateProps).toHaveProperty("Editorial owner");
     expect(updateProps).toHaveProperty("How close is this to a draft?");
+    expect(updateProps).toHaveProperty("Evidence count");
+    expect(updateProps).not.toHaveProperty("Request re-evaluation");
     expect(updateProps).not.toHaveProperty("Draft readiness");
+  });
+
+  it("syncOpportunity on update suppresses editable fields when edits pending", async () => {
+    const pagesUpdate = vi.fn(async () => ({}));
+    const client = makeNotionClient({
+      pages: {
+        create: vi.fn(async () => ({ id: "page-created" })),
+        update: pagesUpdate
+      },
+      databases: {
+        query: vi.fn(async () => ({ results: [], has_more: false, next_cursor: null })),
+        create: vi.fn(async () => ({ id: "db-opps" })),
+        retrieve: vi.fn(async () => ({ properties: {} })),
+        update: vi.fn(async () => ({}))
+      },
+      search: vi.fn(async () => ({ results: [] }))
+    });
+
+    const service = new NotionService("", "parent-page", { client });
+    const opp = makeOpportunity({ notionPageId: "existing-page", notionEditsPending: true });
+
+    await service.syncOpportunity(opp, null);
+
+    expect(pagesUpdate).toHaveBeenCalledTimes(1);
+    const updateProps = (pagesUpdate.mock.calls[0] as any[])[0].properties;
+    // System fields still written
+    expect(updateProps).toHaveProperty("How close is this to a draft?");
+    expect(updateProps).toHaveProperty("Evidence count");
+    expect(updateProps).toHaveProperty("Editorial owner");
+    // Editable fields suppressed
+    expect(updateProps).not.toHaveProperty("Title");
+    expect(updateProps).not.toHaveProperty("Angle");
+    expect(updateProps).not.toHaveProperty("Why now");
+    expect(updateProps).not.toHaveProperty("What it is about");
+    expect(updateProps).not.toHaveProperty("What it is not about");
+    expect(updateProps).not.toHaveProperty("Source URL");
+    expect(updateProps).not.toHaveProperty("Editorial notes");
+    // Checkbox never touched
+    expect(updateProps).not.toHaveProperty("Request re-evaluation");
   });
 
   it("syncOpportunity on create includes Status, Editorial notes, Editorial owner", async () => {
@@ -212,9 +261,12 @@ describe("notion service", () => {
     const createProps = (pagesCreate.mock.calls[0] as any[])[0].properties;
     expect(createProps).toHaveProperty("Status");
     expect(createProps).toHaveProperty("Editorial notes");
+    expect(createProps).toHaveProperty("Title");
+    expect(createProps).toHaveProperty("Angle");
     expect(createProps).toHaveProperty("Editorial owner");
     expect(createProps).toHaveProperty("How close is this to a draft?");
     expect(createProps).not.toHaveProperty("Draft readiness");
+    expect(createProps).not.toHaveProperty("Request re-evaluation");
   });
 
   it("syncOpportunity does not write Related signals, Routing status, Readiness, V1 history", async () => {

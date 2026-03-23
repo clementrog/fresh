@@ -63,7 +63,8 @@ export type RunType =
   | "sales:extract"
   | "sales:detect"
   | "sales:match"
-  | "sales:cleanup";
+  | "sales:cleanup"
+  | "opportunity:pull-notion-edits";
 
 export interface RateLimitConfig {
   requestsPerMinute: number;
@@ -262,6 +263,8 @@ export interface ContentOpportunity {
   suggestedFormat: string;
   enrichmentLog: EnrichmentLogEntry[];
   editorialOwner?: string;
+  editorialNotes?: string;
+  notionEditsPending?: boolean;
   selectedAt?: string;
   v1History?: string[];
   notionPageId?: string;
@@ -407,6 +410,18 @@ export interface NotionSelectionRow {
   notionPageId: string;
   fingerprint: string;
   editorialOwner: string;
+}
+
+export interface NotionEditRequest {
+  notionPageId: string;
+  fingerprint: string;
+  title: string;
+  angle: string;
+  whyNow: string;
+  whatItIsAbout: string;
+  whatItIsNotAbout: string;
+  sourceUrl: string;
+  editorialNotes: string;
 }
 
 export interface NotionSyncResult {

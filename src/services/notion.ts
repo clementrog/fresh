@@ -5,6 +5,7 @@ import type {
   ContentOpportunity,
   DraftV1,
   EnrichmentLogEntry,
+  NotionEditRequest,
   NotionSelectionRow,
   NotionSyncResult,
   SyncRun
@@ -82,49 +83,59 @@ export class NotionService {
   async syncOpportunity(
     opportunity: ContentOpportunity,
     draft?: DraftV1 | null,
-    options?: { ownerDisplayName?: string; provenanceType?: string; draftReadiness?: { tier: string; guidance: string[] }; reframingNote?: string }
+    options?: { ownerDisplayName?: string; provenanceType?: string; draftReadiness?: { tier: string; guidance: string[] }; reframingNote?: string; writeEditableFields?: boolean }
   ): Promise<NotionSyncResult | null> {
     const ownerDisplay = options?.ownerDisplayName ?? opportunity.ownerProfile ?? "";
     const enrichmentLogText = formatEnrichmentLog(opportunity.enrichmentLog);
     const readinessSelect = mapReadinessTierToSelect(options?.draftReadiness?.tier);
     const whatsMissing = formatOperatorGuidance(options?.draftReadiness?.guidance ?? []);
+    const writeEditable = options?.writeEditableFields ?? !opportunity.notionEditsPending;
+
+    const systemProperties = {
+      "Owner profile": richTextProperty(ownerDisplay),
+      "Narrative pillar": richTextProperty(opportunity.narrativePillar ?? ""),
+      "Source of origin": richTextProperty(opportunity.primaryEvidence.source),
+      "Suggested format": richTextProperty(opportunity.suggestedFormat),
+      "Hook suggestion 1": richTextProperty(""),
+      "Hook suggestion 2": richTextProperty(""),
+      "Format rationale": richTextProperty(""),
+      "Provenance type": richTextProperty(options?.provenanceType ?? opportunity.primaryEvidence.source),
+      [READINESS_PROPERTY_NAME]: selectProperty(readinessSelect),
+      "What's missing": richTextProperty(whatsMissing),
+      "Reframing note": richTextProperty(options?.reframingNote ?? ""),
+      "Evidence count": numberProperty(opportunity.evidence.length),
+      "Primary evidence": richTextProperty(opportunity.primaryEvidence.excerpt),
+      "Supporting evidence count": numberProperty(Math.max(0, opportunity.evidence.length - 1)),
+      "Evidence freshness": numberProperty(opportunity.evidenceFreshness),
+      "Evidence excerpts": richTextProperty(opportunity.evidenceExcerpts.join("\n\n")),
+      "Enrichment log": richTextProperty(enrichmentLogText),
+      "V1 draft": richTextProperty(draft ? `V1 generated on ${new Date().toISOString().slice(0, 10)}` : ""),
+      "Selected at": opportunity.selectedAt ? dateProperty(opportunity.selectedAt) : emptyDateProperty(),
+      "Editorial owner": richTextProperty(ownerDisplay),
+      "Opportunity fingerprint": richTextProperty(opportunity.notionPageFingerprint)
+    };
+
+    const editableProperties = {
+      Title: titleProperty(opportunity.title),
+      Angle: richTextProperty(opportunity.angle),
+      "Why now": richTextProperty(opportunity.whyNow),
+      "What it is about": richTextProperty(opportunity.whatItIsAbout),
+      "What it is not about": richTextProperty(opportunity.whatItIsNotAbout),
+      "Source URL": richTextProperty(opportunity.primaryEvidence.sourceUrl),
+      "Editorial notes": richTextProperty(opportunity.editorialNotes ?? "")
+    };
+
     return this.upsertDatabasePage({
       databaseName: "Content Opportunities",
       notionPageId: opportunity.notionPageId,
       fingerprintProperty: "Opportunity fingerprint",
       fingerprint: opportunity.notionPageFingerprint,
-      properties: {
-        Title: titleProperty(opportunity.title),
-        "Owner profile": richTextProperty(ownerDisplay),
-        "Narrative pillar": richTextProperty(opportunity.narrativePillar ?? ""),
-        Angle: richTextProperty(opportunity.angle),
-        "Why now": richTextProperty(opportunity.whyNow),
-        "What it is about": richTextProperty(opportunity.whatItIsAbout),
-        "What it is not about": richTextProperty(opportunity.whatItIsNotAbout),
-        "Source of origin": richTextProperty(opportunity.primaryEvidence.source),
-        "Suggested format": richTextProperty(opportunity.suggestedFormat),
-        "Hook suggestion 1": richTextProperty(""),
-        "Hook suggestion 2": richTextProperty(""),
-        "Format rationale": richTextProperty(""),
-        "Source URL": richTextProperty(opportunity.primaryEvidence.sourceUrl),
-        "Provenance type": richTextProperty(options?.provenanceType ?? opportunity.primaryEvidence.source),
-        [READINESS_PROPERTY_NAME]: selectProperty(readinessSelect),
-        "What's missing": richTextProperty(whatsMissing),
-        "Reframing note": richTextProperty(options?.reframingNote ?? ""),
-        "Evidence count": numberProperty(opportunity.evidence.length),
-        "Primary evidence": richTextProperty(opportunity.primaryEvidence.excerpt),
-        "Supporting evidence count": numberProperty(Math.max(0, opportunity.evidence.length - 1)),
-        "Evidence freshness": numberProperty(opportunity.evidenceFreshness),
-        "Evidence excerpts": richTextProperty(opportunity.evidenceExcerpts.join("\n\n")),
-        "Enrichment log": richTextProperty(enrichmentLogText),
-        "V1 draft": richTextProperty(draft ? `V1 generated on ${new Date().toISOString().slice(0, 10)}` : ""),
-        "Selected at": opportunity.selectedAt ? dateProperty(opportunity.selectedAt) : emptyDateProperty(),
-        "Editorial owner": richTextProperty(ownerDisplay),
-        "Opportunity fingerprint": richTextProperty(opportunity.notionPageFingerprint)
-      },
+      properties: writeEditable
+        ? { ...systemProperties, ...editableProperties }
+        : systemProperties,
       createOnlyProperties: {
         Status: selectProperty(opportunity.status),
-        "Editorial notes": richTextProperty("")
+        ...editableProperties
       }
     });
   }
@@ -610,6 +621,52 @@ export class NotionService {
     return rows;
   }
 
+  async listReEvaluationRequests(): Promise<NotionEditRequest[]> {
+    if (!this.client) return [];
+    const databaseId = await this.ensureDatabase("Content Opportunities");
+    const rows: NotionEditRequest[] = [];
+    let startCursor: string | undefined;
+
+    do {
+      const response = await this.client.databases.query({
+        database_id: databaseId,
+        start_cursor: startCursor,
+        filter: {
+          property: "Request re-evaluation",
+          checkbox: { equals: true }
+        }
+      } as any);
+
+      for (const page of response.results.filter((r) => r.object === "page")) {
+        rows.push({
+          notionPageId: getPageId(page),
+          fingerprint: getRichTextPropertyText(page, "Opportunity fingerprint"),
+          title: getTitlePropertyText(page, "Title"),
+          angle: getRichTextPropertyText(page, "Angle"),
+          whyNow: getRichTextPropertyText(page, "Why now"),
+          whatItIsAbout: getRichTextPropertyText(page, "What it is about"),
+          whatItIsNotAbout: getRichTextPropertyText(page, "What it is not about"),
+          sourceUrl: getRichTextPropertyText(page, "Source URL"),
+          editorialNotes: getRichTextPropertyText(page, "Editorial notes")
+        });
+      }
+
+      startCursor = response.has_more ? response.next_cursor ?? undefined : undefined;
+    } while (startCursor);
+
+    return rows;
+  }
+
+  async clearReEvaluationCheckbox(notionPageId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.pages.update({
+      page_id: notionPageId,
+      properties: {
+        "Request re-evaluation": checkboxProperty(false)
+      } as any
+    });
+  }
+
   private async upsertDatabasePage(params: {
     databaseName: RequiredDatabase;
     notionPageId?: string;
@@ -983,7 +1040,7 @@ export function manualReviewViewSpecs() {
   ];
 }
 
-function getDatabaseProperties(name: RequiredDatabase) {
+export function getDatabaseProperties(name: RequiredDatabase) {
   switch (name) {
     case "Content Opportunities":
       return {
@@ -1016,7 +1073,8 @@ function getDatabaseProperties(name: RequiredDatabase) {
         "Editorial owner": { rich_text: {} },
         "Selected at": { date: {} },
         "Last digest at": { date: {} },
-        "Opportunity fingerprint": { rich_text: {} }
+        "Opportunity fingerprint": { rich_text: {} },
+        "Request re-evaluation": { checkbox: {} }
       };
     case "Claap Review":
       return {
@@ -1304,6 +1362,10 @@ function emptySelectProperty() {
 
 function numberProperty(value: number) {
   return { number: value };
+}
+
+function checkboxProperty(value: boolean) {
+  return { checkbox: value };
 }
 
 function urlProperty(value: string) {

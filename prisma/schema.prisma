@@ -118,6 +118,8 @@ model Opportunity {
   evidenceFreshness       Float
   primaryEvidenceId       String?
   editorialOwner          String?
+  editorialNotes          String?  @default("")
+  notionEditsPending      Boolean  @default(false)
   selectedAt              DateTime?
   lastDigestAt            DateTime?
   enrichmentLogJson       Json     @default("[]")

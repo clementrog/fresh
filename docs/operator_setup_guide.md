@@ -71,6 +71,7 @@ Ce guide documente la configuration Notion, les variables d'environnement, les c
 | `pnpm intelligence:run` | Screening → création/enrichissement d'opportunités → sync Notion |
 | `pnpm draft:generate --opportunity-id <ID>` | Génère un draft V1 pour une opportunité |
 | `pnpm selection:scan` | Détecte les opportunités sélectionnées dans Notion |
+| `pnpm opportunity:pull-notion-edits` | Lit les modifications Notion et réévalue les opportunités |
 | `pnpm cleanup:retention` | Supprime les données brutes au-delà de la rétention |
 | `pnpm server:start` | Démarre le serveur HTTP |
 
@@ -142,6 +143,7 @@ Le système ne crée pas de vues filtrées. L'opérateur doit créer ces vues :
 | Selected at | date | Date de sélection |
 | Last digest at | date | Dernier digest envoyé |
 | Opportunity fingerprint | rich_text | Hash de dédup |
+| Request re-evaluation | checkbox | Cocher pour demander une réévaluation |
 
 ### 5.2 Profiles
 
@@ -341,7 +343,49 @@ Utilisées pour la classification de sécurité du contenu :
 
 ---
 
-## 11. Linear Review Queue
+## 11. Workflow d'édition Notion (re-evaluation)
+
+### Principe
+
+Les opérateurs peuvent modifier certaines propriétés d'une opportunité directement dans Notion, puis demander une réévaluation par Fresh.
+
+### Champs éditables par l'utilisateur
+
+| Propriété Notion | Champ DB | Impact |
+|---|---|---|
+| Title | `Opportunity.title` | Titre de l'opportunité |
+| Angle | `Opportunity.angle` | Affecte le score readiness (angle trop vague = bloquant) |
+| Why now | `Opportunity.whyNow` | Contexte temporel |
+| What it is about | `Opportunity.whatItIsAbout` | Périmètre du sujet |
+| What it is not about | `Opportunity.whatItIsNotAbout` | Exclusions |
+| Source URL | `EvidenceReference.sourceUrl` | Affecte directement le readiness (source manquante = bloquant) |
+| Editorial notes | `Opportunity.editorialNotes` | Notes libres, utilisées pour la génération de draft |
+
+### Champs système (non éditables par ce workflow)
+
+How close is this to a draft?, What's missing, Evidence count, Evidence excerpts, Enrichment log, V1 draft, Status, Evidence freshness, Primary evidence, Supporting evidence count.
+
+### Workflow
+
+1. L'utilisateur modifie les propriétés éditables dans Notion
+2. L'utilisateur coche **Request re-evaluation**
+3. L'opérateur exécute `pnpm opportunity:pull-notion-edits`
+4. Fresh lit les modifications, persiste en base, recalcule le readiness, sync vers Notion
+5. La checkbox est automatiquement décochée après succès
+6. En cas d'échec sur un item, la checkbox reste cochée pour retry au prochain run
+
+### Scheduling
+
+Exécuter `pnpm opportunity:pull-notion-edits` **avant** `pnpm intelligence:run` dans le planning quotidien. Tant qu'une demande de réévaluation est en attente, les champs éditables sont protégés : les sync sortants ne les écrasent pas.
+
+### Flags
+
+- `--dry-run` — Découvre les demandes sans rien persister
+- `--company <slug>` — Override du company slug
+
+---
+
+## 12. Linear Review Queue
 
 ### Fonctionnement
 

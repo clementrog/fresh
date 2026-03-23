@@ -114,6 +114,8 @@ export class EditorialSignalEngineApp {
         return this.cleanupClaapPublishability(context);
       case "tone:inspect":
         return this.inspectToneProfiles();
+      case "opportunity:pull-notion-edits":
+        return this.pullNotionEdits(context);
       case "sales:sync":
       case "sales:extract":
       case "sales:detect":
@@ -660,17 +662,13 @@ export class EditorialSignalEngineApp {
         throw new UnprocessableError(`No matching user found for opportunity ${opportunity.id}`);
       }
 
-      const editorialNotes = opportunity.notionPageId
-        ? await this.notion.getEditorialNotes(opportunity.notionPageId)
-        : "";
-
       const result = await generateDraft({
         opportunity,
         user: authorUser,
         llmClient: this.llmClient,
         sensitivityRulesMarkdown: inputs.sensitivityMarkdown,
         doctrineMarkdown: inputs.doctrineMarkdown,
-        editorialNotes,
+        editorialNotes: opportunity.editorialNotes ?? "",
         layer3Defaults: inputs.layer3Defaults
       });
 
@@ -760,17 +758,13 @@ export class EditorialSignalEngineApp {
             continue;
           }
 
-          const editorialNotes = opportunity.notionPageId
-            ? await this.notion.getEditorialNotes(opportunity.notionPageId)
-            : "";
-
           const result = await generateDraft({
             opportunity,
             user: authorUser,
             llmClient: this.llmClient,
             sensitivityRulesMarkdown: inputs.sensitivityMarkdown,
             doctrineMarkdown: inputs.doctrineMarkdown,
-            editorialNotes,
+            editorialNotes: opportunity.editorialNotes ?? "",
             layer3Defaults: inputs.layer3Defaults
           });
 
@@ -846,6 +840,127 @@ export class EditorialSignalEngineApp {
       await this.finishRun(finished, [], context);
     } catch (error) {
       const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown selection scan error");
+      await this.finishRun(failed, [], context);
+      throw error;
+    }
+  }
+
+  private async pullNotionEdits(context: RunContext) {
+    const company = await this.getActiveCompany(context);
+    const run = createRun("opportunity:pull-notion-edits");
+
+    try {
+      // Phase A — Discovery (read-only)
+      const editRequests = await this.notion.listReEvaluationRequests();
+      this.logger.info({ count: editRequests.length }, "Found re-evaluation requests in Notion");
+
+      // Resolve all matching opportunities from DB (company-scoped)
+      type OpportunityRow = NonNullable<Awaited<ReturnType<RepositoryBundle["findOpportunityByNotionPageId"]>>>;
+      const resolved: Array<{ request: typeof editRequests[number]; oppRow: OpportunityRow }> = [];
+      for (const request of editRequests) {
+        let oppRow: OpportunityRow | null = await this.repositories.findOpportunityByNotionPageId(request.notionPageId, company.id);
+        if (!oppRow && request.fingerprint) {
+          oppRow = await this.repositories.findOpportunityByNotionPageFingerprint(request.fingerprint, company.id);
+        }
+        if (!oppRow) {
+          this.logger.warn?.({ notionPageId: request.notionPageId, fingerprint: request.fingerprint }, "No matching opportunity found for re-evaluation request, skipping");
+          continue;
+        }
+        resolved.push({ request, oppRow });
+      }
+
+      // Phase B — Dry-run exit
+      if (context.dryRun) {
+        this.logger.info({ discovered: editRequests.length, resolved: resolved.length }, "[dry-run] Would process re-evaluation requests");
+        for (const { request, oppRow } of resolved) {
+          this.logger.info({ opportunityId: oppRow.id, title: request.title }, "[dry-run] Would apply Notion edits");
+        }
+        return;
+      }
+
+      await this.repositories.createSyncRun(run);
+
+      // Phase C — Guard activation
+      const users = await this.repositories.listUsers(company.id);
+      const resolvedIds = resolved.map(r => r.oppRow.id);
+      if (resolvedIds.length > 0) {
+        await this.repositories.markEditsPending(resolvedIds, company.id);
+      }
+
+      // Phase D — Per-item processing
+      let processed = 0;
+      let failed = 0;
+
+      for (const { request, oppRow } of resolved) {
+        try {
+          await this.repositories.updateOpportunityEditableFields({
+            opportunityId: oppRow.id,
+            title: request.title,
+            angle: request.angle,
+            whyNow: request.whyNow,
+            whatItIsAbout: request.whatItIsAbout,
+            whatItIsNotAbout: request.whatItIsNotAbout,
+            editorialNotes: request.editorialNotes
+          });
+
+          if (oppRow.primaryEvidenceId && request.sourceUrl !== oppRow.primaryEvidence?.sourceUrl) {
+            await this.repositories.updateEvidenceSourceUrl(oppRow.primaryEvidenceId, request.sourceUrl);
+          }
+
+          const freshRow = await this.repositories.findOpportunityById(oppRow.id);
+          if (!freshRow) {
+            this.logger.error({ opportunityId: oppRow.id }, "Opportunity disappeared after update");
+            failed += 1;
+            continue;
+          }
+          const opportunity = this.mapOpportunityRow(freshRow);
+
+          const sourceItemIds = [...new Set(opportunity.evidence.map(e => e.sourceItemId))];
+          const sourceItemRows = await this.repositories.listSourceItemsByIds(sourceItemIds);
+          const sourceItems = sourceItemRows.map(row => this.mapStoredSourceItem(row));
+          const readiness = assessDraftReadiness(opportunity, opportunity.evidence, { sourceItems });
+
+          const ownerDisplayName = opportunity.ownerUserId
+            ? users.find(u => u.id === opportunity.ownerUserId)?.displayName
+            : undefined;
+
+          const syncResult = await this.notion.syncOpportunity(opportunity, null, {
+            ownerDisplayName,
+            draftReadiness: { tier: readiness.readinessTier, guidance: readiness.operatorGuidance },
+            writeEditableFields: true
+          });
+
+          if (syncResult) {
+            await this.repositories.updateOpportunityNotionSync(opportunity.id, syncResult.notionPageId, opportunity.notionPageFingerprint);
+          }
+
+          // Clear internal guard FIRST, then external trigger
+          await this.repositories.clearEditsPending(oppRow.id);
+          await this.notion.clearReEvaluationCheckbox(request.notionPageId);
+
+          processed += 1;
+          this.logger.info({ opportunityId: oppRow.id, readiness: readiness.readinessTier }, "Re-evaluation complete");
+        } catch (itemError) {
+          this.logger.error({ notionPageId: request.notionPageId, error: itemError }, "Failed to process re-evaluation request");
+          failed += 1;
+        }
+      }
+
+      // Phase E — Orphan reconciliation
+      const requestedPageIds = new Set(editRequests.map(r => r.notionPageId));
+      const requestedFingerprints = new Set(editRequests.map(r => r.fingerprint).filter(Boolean));
+      const pendingOpps = await this.repositories.findEditsPendingOpportunities(company.id);
+      for (const pending of pendingOpps) {
+        if (pending.notionPageId && requestedPageIds.has(pending.notionPageId)) continue;
+        if (pending.notionPageFingerprint && requestedFingerprints.has(pending.notionPageFingerprint)) continue;
+        await this.repositories.clearEditsPending(pending.id);
+        this.logger.info({ opportunityId: pending.id }, "Cleared orphaned notionEditsPending flag");
+      }
+
+      const finished = finalizeRun(run, "completed", `Pull-edits processed ${processed}, skipped ${editRequests.length - resolved.length}, failed ${failed}`);
+      await this.finishRun(finished, [], context);
+    } catch (error) {
+      const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown pull-edits error");
       await this.finishRun(failed, [], context);
       throw error;
     }
@@ -1552,6 +1667,8 @@ Provide a rationale explaining your assessment.`,
     supportingEvidenceCount: number;
     evidenceFreshness: number;
     editorialOwner: string | null;
+    editorialNotes?: string | null;
+    notionEditsPending?: boolean;
     selectedAt: Date | null;
     lastDigestAt?: Date | null;
     updatedAt: Date;
@@ -1652,6 +1769,8 @@ Provide a rationale explaining your assessment.`,
       suggestedFormat: row.suggestedFormat,
       enrichmentLog,
       editorialOwner: row.editorialOwner ?? undefined,
+      editorialNotes: row.editorialNotes ?? "",
+      notionEditsPending: row.notionEditsPending ?? false,
       selectedAt: row.selectedAt?.toISOString(),
       v1History: expectStringArray(row.v1HistoryJson ?? []),
       notionPageId: row.notionPageId ?? undefined,

@@ -1,0 +1,392 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { EditorialSignalEngineApp } from "../src/app.js";
+import type { ContentOpportunity, EvidenceReference, NotionEditRequest, SourceKind } from "../src/domain/types.js";
+
+vi.mock("../src/services/convergence.js", () => ({
+  ensureConvergenceFoundation: vi.fn(async () => ({
+    id: "company-1",
+    slug: "default",
+    name: "Default Company"
+  }))
+}));
+
+const COMPANY_ID = "company-1";
+
+function buildEnv() {
+  return {
+    DATABASE_URL: "",
+    NOTION_TOKEN: "",
+    NOTION_PARENT_PAGE_ID: "parent-page",
+    OPENAI_API_KEY: "",
+    ANTHROPIC_API_KEY: "",
+    TAVILY_API_KEY: "",
+    CLAAP_API_KEY: "",
+    LINEAR_API_KEY: "",
+    DEFAULT_TIMEZONE: "Europe/Paris",
+    DEFAULT_COMPANY_SLUG: "default",
+    DEFAULT_COMPANY_NAME: "Default Company",
+    INTELLIGENCE_LLM_PROVIDER: "openai" as const,
+    INTELLIGENCE_LLM_MODEL: "gpt-4.1-mini",
+    DRAFT_LLM_PROVIDER: "openai" as const,
+    DRAFT_LLM_MODEL: "gpt-5",
+    LLM_MODEL: "gpt-4.1-mini",
+    LLM_TIMEOUT_MS: 100,
+    HTTP_PORT: 3000,
+    LOG_LEVEL: "info"
+  };
+}
+
+function makeEvidence(overrides: Partial<{
+  id: string;
+  source: SourceKind;
+  sourceItemId: string;
+  sourceUrl: string;
+  timestamp: string;
+  excerpt: string;
+  excerptHash: string;
+  freshnessScore: number;
+}> = {}): EvidenceReference {
+  return {
+    id: overrides.id ?? "ev-1",
+    source: overrides.source ?? "notion",
+    sourceItemId: overrides.sourceItemId ?? "si-1",
+    sourceUrl: overrides.sourceUrl ?? "https://example.com/source",
+    timestamp: overrides.timestamp ?? "2026-03-14T09:00:00.000Z",
+    excerpt: overrides.excerpt ?? "Evidence excerpt text for testing readiness.",
+    excerptHash: overrides.excerptHash ?? "hash-1",
+    freshnessScore: overrides.freshnessScore ?? 0.9
+  };
+}
+
+function makeOpportunityRow(overrides: Partial<{
+  id: string;
+  companyId: string;
+  notionPageId: string | null;
+  notionPageFingerprint: string;
+  notionEditsPending: boolean;
+  editorialNotes: string;
+  primaryEvidenceId: string | null;
+  sourceUrl: string;
+  title: string;
+  angle: string;
+}> = {}) {
+  const evidence = makeEvidence({ sourceUrl: overrides.sourceUrl });
+  return {
+    id: overrides.id ?? "opp-1",
+    companyId: overrides.companyId ?? COMPANY_ID,
+    sourceFingerprint: "sf-1",
+    title: overrides.title ?? "Original Title",
+    ownerProfile: null,
+    ownerUserId: null,
+    narrativePillar: "",
+    angle: overrides.angle ?? "Original angle on compliance automation",
+    whyNow: "Regulation Q2",
+    whatItIsAbout: "Compliance",
+    whatItIsNotAbout: "Manual work",
+    routingStatus: "Routed",
+    readiness: "Opportunity only",
+    status: "To review",
+    suggestedFormat: "article",
+    supportingEvidenceCount: 0,
+    evidenceFreshness: 0.9,
+    editorialOwner: null,
+    editorialNotes: overrides.editorialNotes ?? "",
+    notionEditsPending: overrides.notionEditsPending ?? false,
+    selectedAt: null,
+    lastDigestAt: null,
+    updatedAt: new Date("2026-03-14T09:00:00.000Z"),
+    primaryEvidenceId: overrides.primaryEvidenceId ?? "ev-1",
+    enrichmentLogJson: [],
+    v1HistoryJson: [],
+    notionPageId: overrides.notionPageId ?? "np-1",
+    notionPageFingerprint: overrides.notionPageFingerprint ?? "npf-1",
+    primaryEvidence: {
+      ...evidence,
+      timestamp: new Date(evidence.timestamp),
+      speakerOrAuthor: null
+    },
+    evidence: [{
+      ...evidence,
+      timestamp: new Date(evidence.timestamp),
+      speakerOrAuthor: null
+    }],
+    linkedEvidence: []
+  };
+}
+
+function buildRepositories() {
+  return {
+    getCompanyBySlug: vi.fn(async () => ({
+      id: COMPANY_ID,
+      slug: "default",
+      name: "Default Company",
+      defaultTimezone: "Europe/Paris",
+      createdAt: "2026-03-14T09:00:00.000Z",
+      updatedAt: "2026-03-14T09:00:00.000Z"
+    })),
+    createSyncRun: vi.fn(async () => ({})),
+    updateSyncRun: vi.fn(async () => ({})),
+    updateSyncRunNotionSync: vi.fn(async () => ({})),
+    addCostEntries: vi.fn(async () => ({})),
+    listUsers: vi.fn(async () => []),
+    findOpportunityByNotionPageId: vi.fn(async () => null),
+    findOpportunityByNotionPageFingerprint: vi.fn(async () => null),
+    findOpportunityById: vi.fn(async () => null),
+    updateOpportunityEditableFields: vi.fn(async () => ({})),
+    updateEvidenceSourceUrl: vi.fn(async () => ({})),
+    updateOpportunityNotionSync: vi.fn(async () => ({})),
+    markEditsPending: vi.fn(async () => ({})),
+    clearEditsPending: vi.fn(async () => ({})),
+    findEditsPendingOpportunities: vi.fn(async () => [] as Array<{ id: string; notionPageId: string | null; notionPageFingerprint: string }>),
+    listSourceItemsByIds: vi.fn(async () => [])
+  };
+}
+
+function buildNotion() {
+  return {
+    listReEvaluationRequests: vi.fn(async () => [] as NotionEditRequest[]),
+    clearReEvaluationCheckbox: vi.fn(async () => {}),
+    syncOpportunity: vi.fn(async () => ({ notionPageId: "np-1", action: "updated" as const })),
+    syncRun: vi.fn(async () => null)
+  };
+}
+
+function buildApp(overrides: {
+  repositories?: ReturnType<typeof buildRepositories>;
+  notion?: ReturnType<typeof buildNotion>;
+} = {}) {
+  const repositories = overrides.repositories ?? buildRepositories();
+  const notion = overrides.notion ?? buildNotion();
+  const prisma = { $transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})) };
+  const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+  const app = new EditorialSignalEngineApp(
+    buildEnv(),
+    logger,
+    {
+      prisma: prisma as any,
+      repositories: repositories as any,
+      llmClient: {} as any,
+      notion: notion as any
+    }
+  );
+  return { app, repositories, notion, logger };
+}
+
+function makeEditRequest(overrides: Partial<{
+  notionPageId: string;
+  fingerprint: string;
+  title: string;
+  angle: string;
+  sourceUrl: string;
+  editorialNotes: string;
+}> = {}) {
+  return {
+    notionPageId: overrides.notionPageId ?? "np-1",
+    fingerprint: overrides.fingerprint ?? "npf-1",
+    title: overrides.title ?? "Edited Title",
+    angle: overrides.angle ?? "Edited Angle",
+    whyNow: "Edited Why now",
+    whatItIsAbout: "Edited About",
+    whatItIsNotAbout: "Edited Not about",
+    sourceUrl: overrides.sourceUrl ?? "https://edited.com/source",
+    editorialNotes: overrides.editorialNotes ?? "User notes"
+  };
+}
+
+describe("opportunity:pull-notion-edits command", () => {
+  it("successful re-evaluation: persists edits, recomputes readiness, syncs, clears flags", async () => {
+    const { app, repositories, notion } = buildApp();
+    const row = makeOpportunityRow();
+
+    notion.listReEvaluationRequests.mockResolvedValue([makeEditRequest()]);
+    repositories.findOpportunityByNotionPageId.mockResolvedValue(row as any);
+    repositories.findOpportunityById.mockResolvedValue(row as any);
+
+    await app.run("opportunity:pull-notion-edits");
+
+    expect(repositories.updateOpportunityEditableFields).toHaveBeenCalledWith({
+      opportunityId: "opp-1",
+      title: "Edited Title",
+      angle: "Edited Angle",
+      whyNow: "Edited Why now",
+      whatItIsAbout: "Edited About",
+      whatItIsNotAbout: "Edited Not about",
+      editorialNotes: "User notes"
+    });
+    expect(repositories.markEditsPending).toHaveBeenCalledWith(["opp-1"], COMPANY_ID);
+    expect(notion.syncOpportunity).toHaveBeenCalledTimes(1);
+    const syncCall = (notion.syncOpportunity as any).mock.calls[0];
+    expect(syncCall[2]).toMatchObject({ writeEditableFields: true });
+    // Internal guard cleared FIRST
+    expect(repositories.clearEditsPending).toHaveBeenCalledWith("opp-1");
+    // Then external trigger
+    expect(notion.clearReEvaluationCheckbox).toHaveBeenCalledWith("np-1");
+  });
+
+  it("per-item failure leaves checkbox and flag set, continues to next item", async () => {
+    const { app, repositories, notion } = buildApp();
+    const rowA = makeOpportunityRow({ id: "opp-a", notionPageId: "np-a", notionPageFingerprint: "npf-a" });
+    const rowB = makeOpportunityRow({ id: "opp-b", notionPageId: "np-b", notionPageFingerprint: "npf-b" });
+
+    notion.listReEvaluationRequests.mockResolvedValue([
+      makeEditRequest({ notionPageId: "np-a", fingerprint: "npf-a" }),
+      makeEditRequest({ notionPageId: "np-b", fingerprint: "npf-b" })
+    ]);
+    (repositories.findOpportunityByNotionPageId as any).mockImplementation(async (pageId: string) => {
+      if (pageId === "np-a") return rowA as any;
+      if (pageId === "np-b") return rowB as any;
+      return null;
+    });
+    // Item A fails on DB update
+    (repositories.updateOpportunityEditableFields as any).mockImplementation(async (params: any) => {
+      if (params.opportunityId === "opp-a") throw new Error("DB error for A");
+      return {} as any;
+    });
+    repositories.findOpportunityById.mockResolvedValue(rowB as any);
+
+    await app.run("opportunity:pull-notion-edits");
+
+    // A's checkbox and flag NOT cleared
+    expect(repositories.clearEditsPending).not.toHaveBeenCalledWith("opp-a");
+    expect(notion.clearReEvaluationCheckbox).not.toHaveBeenCalledWith("np-a");
+    // B succeeded
+    expect(repositories.clearEditsPending).toHaveBeenCalledWith("opp-b");
+    expect(notion.clearReEvaluationCheckbox).toHaveBeenCalledWith("np-b");
+  });
+
+  it("unresolved requests are skipped, not processed", async () => {
+    const { app, repositories, notion, logger } = buildApp();
+
+    notion.listReEvaluationRequests.mockResolvedValue([
+      makeEditRequest({ notionPageId: "np-unknown", fingerprint: "fp-unknown" })
+    ]);
+    // Both lookups return null
+    repositories.findOpportunityByNotionPageId.mockResolvedValue(null);
+    repositories.findOpportunityByNotionPageFingerprint.mockResolvedValue(null);
+
+    await app.run("opportunity:pull-notion-edits");
+
+    expect(repositories.updateOpportunityEditableFields).not.toHaveBeenCalled();
+    expect(repositories.markEditsPending).not.toHaveBeenCalled();
+    expect(notion.syncOpportunity).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("orphan reconciliation clears truly orphaned flags, preserves externally requested", async () => {
+    const { app, repositories, notion } = buildApp();
+    const row = makeOpportunityRow({ id: "opp-live", notionPageId: "np-live", notionPageFingerprint: "npf-live" });
+
+    // One checked row in Notion
+    notion.listReEvaluationRequests.mockResolvedValue([
+      makeEditRequest({ notionPageId: "np-live", fingerprint: "npf-live" })
+    ]);
+    repositories.findOpportunityByNotionPageId.mockResolvedValue(row as any);
+    repositories.findOpportunityById.mockResolvedValue(row as any);
+
+    // DB has two pending opps: one matches Notion (np-live), one is orphaned (np-orphan)
+    repositories.findEditsPendingOpportunities.mockResolvedValue([
+      { id: "opp-live", notionPageId: "np-live", notionPageFingerprint: "npf-live" },
+      { id: "opp-orphan", notionPageId: "np-orphan", notionPageFingerprint: "npf-orphan" }
+    ]);
+
+    await app.run("opportunity:pull-notion-edits");
+
+    // opp-orphan should be cleared (not in Notion results)
+    const clearCalls = (repositories.clearEditsPending as any).mock.calls.map((c: any[]) => c[0]);
+    expect(clearCalls).toContain("opp-orphan");
+    // opp-live was cleared by normal per-item processing, not by reconciliation
+    expect(clearCalls).toContain("opp-live");
+  });
+
+  it("Source URL clear from Notion (empty string) persists to evidence", async () => {
+    const { app, repositories, notion } = buildApp();
+    const row = makeOpportunityRow({ sourceUrl: "https://old.com" });
+
+    notion.listReEvaluationRequests.mockResolvedValue([
+      makeEditRequest({ sourceUrl: "" })
+    ]);
+    repositories.findOpportunityByNotionPageId.mockResolvedValue(row as any);
+    repositories.findOpportunityById.mockResolvedValue(row as any);
+
+    await app.run("opportunity:pull-notion-edits");
+
+    expect(repositories.updateEvidenceSourceUrl).toHaveBeenCalledWith("ev-1", "");
+  });
+
+  it("Source URL unchanged in Notion skips evidence update", async () => {
+    const { app, repositories, notion } = buildApp();
+    const row = makeOpportunityRow({ sourceUrl: "https://same.com" });
+
+    notion.listReEvaluationRequests.mockResolvedValue([
+      makeEditRequest({ sourceUrl: "https://same.com" })
+    ]);
+    repositories.findOpportunityByNotionPageId.mockResolvedValue(row as any);
+    repositories.findOpportunityById.mockResolvedValue(row as any);
+
+    await app.run("opportunity:pull-notion-edits");
+
+    expect(repositories.updateEvidenceSourceUrl).not.toHaveBeenCalled();
+  });
+
+  it("company isolation: only resolves opportunities for the active company", async () => {
+    const { app, repositories, notion } = buildApp();
+
+    notion.listReEvaluationRequests.mockResolvedValue([makeEditRequest()]);
+    repositories.findOpportunityByNotionPageId.mockResolvedValue(null);
+    repositories.findOpportunityByNotionPageFingerprint.mockResolvedValue(null);
+
+    await app.run("opportunity:pull-notion-edits");
+
+    // Both lookups must pass company.id
+    expect(repositories.findOpportunityByNotionPageId).toHaveBeenCalledWith("np-1", COMPANY_ID);
+    expect(repositories.findOpportunityByNotionPageFingerprint).toHaveBeenCalledWith("npf-1", COMPANY_ID);
+  });
+
+  it("company isolation: markEditsPending and findEditsPending pass companyId", async () => {
+    const { app, repositories, notion } = buildApp();
+    const row = makeOpportunityRow();
+
+    notion.listReEvaluationRequests.mockResolvedValue([makeEditRequest()]);
+    repositories.findOpportunityByNotionPageId.mockResolvedValue(row as any);
+    repositories.findOpportunityById.mockResolvedValue(row as any);
+
+    await app.run("opportunity:pull-notion-edits");
+
+    expect(repositories.markEditsPending).toHaveBeenCalledWith(["opp-1"], COMPANY_ID);
+    expect(repositories.findEditsPendingOpportunities).toHaveBeenCalledWith(COMPANY_ID);
+  });
+
+  it("dry-run performs zero mutations", async () => {
+    const { app, repositories, notion } = buildApp();
+    const row = makeOpportunityRow();
+
+    notion.listReEvaluationRequests.mockResolvedValue([makeEditRequest()]);
+    repositories.findOpportunityByNotionPageId.mockResolvedValue(row as any);
+
+    await app.run("opportunity:pull-notion-edits", { dryRun: true });
+
+    expect(repositories.createSyncRun).not.toHaveBeenCalled();
+    expect(repositories.markEditsPending).not.toHaveBeenCalled();
+    expect(repositories.updateOpportunityEditableFields).not.toHaveBeenCalled();
+    expect(repositories.updateEvidenceSourceUrl).not.toHaveBeenCalled();
+    expect(notion.syncOpportunity).not.toHaveBeenCalled();
+    expect(notion.clearReEvaluationCheckbox).not.toHaveBeenCalled();
+    expect(repositories.clearEditsPending).not.toHaveBeenCalled();
+  });
+
+  it("fallback to fingerprint when notionPageId lookup fails", async () => {
+    const { app, repositories, notion } = buildApp();
+    const row = makeOpportunityRow();
+
+    notion.listReEvaluationRequests.mockResolvedValue([makeEditRequest()]);
+    repositories.findOpportunityByNotionPageId.mockResolvedValue(null);
+    repositories.findOpportunityByNotionPageFingerprint.mockResolvedValue(row as any);
+    repositories.findOpportunityById.mockResolvedValue(row as any);
+
+    await app.run("opportunity:pull-notion-edits");
+
+    expect(repositories.findOpportunityByNotionPageFingerprint).toHaveBeenCalledWith("npf-1", COMPANY_ID);
+    expect(repositories.updateOpportunityEditableFields).toHaveBeenCalled();
+  });
+});

@@ -27,6 +27,7 @@
     "backfill:evidence": "tsx src/cli.ts backfill:evidence",
     "cleanup:claap-publishability": "tsx src/cli.ts cleanup:claap-publishability",
     "tone:inspect": "tsx src/cli.ts tone:inspect",
+    "opportunity:pull-notion-edits": "tsx src/cli.ts opportunity:pull-notion-edits",
     "sales:sync": "tsx src/sales/cli.ts sales:sync",
     "sales:extract": "tsx src/sales/cli.ts sales:extract",
     "sales:detect": "tsx src/sales/cli.ts sales:detect",
