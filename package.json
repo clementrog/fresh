@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run",
+    "test": "vitest run --exclude='**/*.integration.test.ts'",
     "test:watch": "vitest",
     "test:integration": "bash -c 'set -o pipefail && prisma migrate deploy && INTEGRATION=1 NO_COLOR=1 vitest run --reporter=verbose tests/*.integration.test.ts 2>&1 | tee tests/integration-proof.txt'",
     "prisma:generate": "prisma generate",

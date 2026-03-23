@@ -405,4 +405,69 @@ describe("opportunity:pull-notion-edits command", () => {
     expect(syncRun.companyId).toBe(COMPANY_ID);
     expect(syncRun.runType).toBe("opportunity:pull-notion-edits");
   });
+
+  it("unresolved request produces a durable warning in the sync run", async () => {
+    const { app, repositories, notion } = buildApp();
+
+    notion.listReEvaluationRequests.mockResolvedValue([
+      makeEditRequest({ notionPageId: "np-ghost", fingerprint: "fp-ghost" })
+    ]);
+    // Both lookups return null — unresolvable
+    repositories.findOpportunityByNotionPageId.mockResolvedValue(null);
+    repositories.findOpportunityByNotionPageFingerprint.mockResolvedValue(null);
+
+    await app.run("opportunity:pull-notion-edits");
+
+    // The warning must be persisted via updateSyncRun, not just logged
+    expect(repositories.updateSyncRun).toHaveBeenCalled();
+    const persistedRun = (repositories.updateSyncRun as any).mock.calls[0][0];
+    expect(persistedRun.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Unresolved re-evaluation request")
+      ])
+    );
+    expect(persistedRun.warnings[0]).toContain("np-ghost");
+    expect(persistedRun.warnings[0]).toContain("fp-ghost");
+    expect(persistedRun.warnings[0]).toContain("unprotected");
+
+    // Checkbox NOT cleared (user can investigate)
+    expect(notion.clearReEvaluationCheckbox).not.toHaveBeenCalled();
+    // notionEditsPending never set (nothing was resolved)
+    expect(repositories.markEditsPending).not.toHaveBeenCalled();
+  });
+
+  it("identifier drift: unresolved row has no pending guard, warning surfaces the risk", async () => {
+    const { app, repositories, notion } = buildApp();
+
+    // Notion has a checked row whose fingerprint no longer matches any DB record.
+    // This simulates identifier drift — the Notion page exists, user edited it,
+    // but the opportunity in DB has a different fingerprint (e.g. after re-creation).
+    const driftedRequest = makeEditRequest({
+      notionPageId: "np-drifted",
+      fingerprint: "fp-drifted-no-match"
+    });
+    notion.listReEvaluationRequests.mockResolvedValue([driftedRequest]);
+    repositories.findOpportunityByNotionPageId.mockResolvedValue(null);
+    repositories.findOpportunityByNotionPageFingerprint.mockResolvedValue(null);
+
+    await app.run("opportunity:pull-notion-edits");
+
+    // The pending guard was never set for this row, so outbound sync will NOT
+    // suppress editable-field writes. The warning makes this visible.
+    expect(repositories.markEditsPending).not.toHaveBeenCalled();
+
+    // Warning persisted to run
+    const persistedRun = (repositories.updateSyncRun as any).mock.calls[0][0];
+    expect(persistedRun.warnings).toHaveLength(1);
+    expect(persistedRun.warnings[0]).toContain("np-drifted");
+    expect(persistedRun.warnings[0]).toContain("unprotected");
+
+    // Checkbox stays checked so user can investigate
+    expect(notion.clearReEvaluationCheckbox).not.toHaveBeenCalled();
+
+    // No edits persisted, no sync-back, no guard cleared
+    expect(repositories.updateOpportunityEditableFields).not.toHaveBeenCalled();
+    expect(notion.syncOpportunity).not.toHaveBeenCalled();
+    expect(repositories.clearEditsPending).not.toHaveBeenCalled();
+  });
 });

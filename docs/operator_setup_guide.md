@@ -383,6 +383,38 @@ Exécuter `pnpm opportunity:pull-notion-edits` **avant** `pnpm intelligence:run`
 - `--dry-run` — Découvre les demandes sans rien persister
 - `--company <slug>` — Override du company slug
 
+### Vérification du round-trip live
+
+Pour vérifier que le workflow fonctionne de bout en bout contre Notion :
+
+```bash
+# 1. Vérifier la connectivité Notion (dry-run, aucune écriture)
+pnpm opportunity:pull-notion-edits -- --dry-run
+
+# 2. Vérifier le schema (la checkbox doit apparaître)
+pnpm setup:notion
+
+# 3. Test complet : éditer une opportunité dans Notion, cocher la checkbox, puis :
+pnpm opportunity:pull-notion-edits
+
+# 4. Vérifier dans Notion : readiness recalculé, checkbox décochée,
+#    champs édités préservés
+
+# 5. Vérifier le Sync Run : la ligne dans "Sync Runs" doit montrer
+#    le run type "opportunity:pull-notion-edits", status "completed",
+#    et aucun warning (ou des warnings explicites pour les rows non résolues)
+```
+
+Le script `tests/verify-merge-readiness.sh` inclut un smoke test dry-run automatique (étape 7).
+
+### Demandes non résolues
+
+Si une checkbox est cochée mais aucune opportunité ne correspond dans la base (identifiant Notion ou fingerprint inconnu), la demande est :
+- Comptée comme "skipped" dans les notes du Sync Run
+- Enregistrée comme warning dans le Sync Run (visible dans Notion et en base)
+- La checkbox reste cochée pour investigation manuelle
+- **Attention** : tant que la demande n'est pas résolue, les champs éditables de l'opportunité ne sont pas protégés contre les sync sortants
+
 ---
 
 ## 12. Linear Review Queue

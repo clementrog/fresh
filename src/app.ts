@@ -865,6 +865,7 @@ export class EditorialSignalEngineApp {
         }
         if (!oppRow) {
           this.logger.warn?.({ notionPageId: request.notionPageId, fingerprint: request.fingerprint }, "No matching opportunity found for re-evaluation request, skipping");
+          run.warnings.push(`Unresolved re-evaluation request: notionPageId=${request.notionPageId} fingerprint=${request.fingerprint} — checkbox left checked, user edits unprotected until resolved`);
           continue;
         }
         resolved.push({ request, oppRow });

@@ -94,6 +94,22 @@ check_focused_integration "getDraft returns draft with included opportunity and 
 check_focused_integration "listSourceConfigs returns both enabled and disabled"
 check_focused_integration "getRun returns run with costEntries ordered by createdAt"
 
+# ── 7. Notion pull-edits round-trip smoke test ──────────────────────────────
+# Runs the pull-edits command in dry-run mode against the configured Notion
+# workspace. Verifies the command can reach Notion, query the database, and
+# report discovered re-evaluation requests without writing anything.
+# Requires NOTION_TOKEN and NOTION_PARENT_PAGE_ID in .env.
+
+step "Notion pull-edits dry-run smoke test"
+if [[ -n "${NOTION_TOKEN:-}" && -n "${NOTION_PARENT_PAGE_ID:-}" ]]; then
+  output=$(pnpm opportunity:pull-notion-edits -- --dry-run 2>&1) || fail "pull-notion-edits dry-run"
+  echo "$output" | tail -5
+  pass "pull-notion-edits dry-run completed — Notion connectivity verified"
+else
+  echo "  NOTION_TOKEN or NOTION_PARENT_PAGE_ID not set, skipping Notion smoke test"
+  pass "skipped (no Notion credentials)"
+fi
+
 # ── Done ───────────────────────────────────────────────────────────────────
 
 step "All checks passed"

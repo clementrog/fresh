@@ -2,8 +2,8 @@
 
 ## Commands
 
-- `pnpm test` — run all unit tests; integration tests auto-skip without a database but **will run if `DATABASE_URL` points at a reachable Postgres**
-- `pnpm test:integration` — run all `*.integration.test.ts` against real Postgres; requires `DATABASE_URL`; auto-captures proof to `tests/integration-proof.txt`
+- `pnpm test` — run unit tests only (integration tests are excluded); safe to run without a database
+- `pnpm test:integration` — apply pending migrations then run all `*.integration.test.ts` against real Postgres; requires `DATABASE_URL`; auto-captures proof to `tests/integration-proof.txt`
 - `pnpm run typecheck` — TypeScript type checking
 - `pnpm run build` — production build
 
