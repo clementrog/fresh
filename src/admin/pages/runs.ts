@@ -2,8 +2,22 @@ import type { FastifyInstance } from "fastify";
 
 import type { AdminQueries } from "../queries.js";
 import type { ResolvedCompany } from "../plugin.js";
-import { layout } from "../layout.js";
-import { table, pagination, filterForm, badge, formatDate, sourceBadge, withCompany } from "../components.js";
+import { layout, escapeHtml } from "../layout.js";
+import {
+  table,
+  pagination,
+  filterForm,
+  badge,
+  formatDate,
+  sourceBadge,
+  withCompany,
+  linkTo,
+  detailSection,
+  collapsible,
+  jsonViewer,
+  backLink,
+  buildDetailUrl
+} from "../components.js";
 
 export function registerRunPages(
   server: FastifyInstance,
@@ -29,6 +43,7 @@ export function registerRunPages(
     const totalPages = Math.ceil(total / 50);
 
     const hiddenFields = companySlug ? { company: companySlug } : undefined;
+    const returnTo = request.url;
 
     const filtersHtml = filterForm(
       [
@@ -63,7 +78,7 @@ export function registerRunPages(
       const statusColor = run.status === "completed" ? "green" : run.status === "failed" ? "red" : "blue";
 
       return [
-        run.runType,
+        linkTo(buildDetailUrl(`/admin/runs/${run.id}`, companySlug, returnTo), run.runType),
         run.source ? sourceBadge(run.source) : "—",
         badge(run.status, statusColor as "green" | "red" | "blue"),
         counterStr || "—",
@@ -86,6 +101,79 @@ export function registerRunPages(
     const html = layout(
       `Runs (${total})`,
       filtersHtml + tableHtml + paginationHtml,
+      company.name,
+      companySlug
+    );
+    return reply.type("text/html").send(html);
+  });
+
+  server.get<{ Params: { id: string } }>("/admin/runs/:id", async (request, reply) => {
+    const query = request.query as Record<string, string>;
+    const company = await resolveCompany(query);
+    if (!company) {
+      return reply.code(404).type("text/html").send(layout("Not Found", `<p>Company not found.</p>`));
+    }
+
+    const companySlug = query.company || undefined;
+    const returnTo = query.returnTo || undefined;
+
+    const run = await queries.getRun(request.params.id);
+    if (!run || run.companyId !== company.id) {
+      return reply
+        .code(404)
+        .type("text/html")
+        .send(layout("Not Found", `<p>Run not found.</p>`, company.name, companySlug));
+    }
+
+    const backHtml = backLink(returnTo);
+
+    const statusColor = run.status === "completed" ? "green" : run.status === "failed" ? "red" : "blue";
+    const headerHtml = `<p>${badge(run.runType, "blue")} · ${run.source ? sourceBadge(run.source) : "No source"} · ${badge(run.status, statusColor as "green" | "red" | "blue")} · Started: ${formatDate(run.startedAt)} · Finished: ${formatDate(run.finishedAt)}</p>`;
+
+    const countersHtml = detailSection("Counters", jsonViewer(run.countersJson));
+
+    const warningsHtml = run.warningsJson
+      ? detailSection("Warnings", collapsible("Show warnings", jsonViewer(run.warningsJson)))
+      : "";
+
+    const llmStatsHtml = run.llmStatsJson
+      ? detailSection("LLM Stats", collapsible("Show LLM stats", jsonViewer(run.llmStatsJson)))
+      : "";
+
+    const tokenTotalsHtml = run.tokenTotalsJson
+      ? detailSection("Token Totals", collapsible("Show token totals", jsonViewer(run.tokenTotalsJson)))
+      : "";
+
+    const notesHtml = run.notes
+      ? detailSection("Notes", `<p>${escapeHtml(run.notes)}</p>`)
+      : "";
+
+    // Cost entries
+    let costHtml: string;
+    if (run.costEntries.length === 0) {
+      costHtml = detailSection("Cost Breakdown", `<p class="empty">No cost entries.</p>`);
+    } else {
+      const costRows = run.costEntries.map((ce) => [
+        escapeHtml(ce.step),
+        escapeHtml(ce.model),
+        badge(ce.mode, ce.mode === "provider" ? "green" : "orange"),
+        String(ce.promptTokens),
+        String(ce.completionTokens),
+        `$${ce.estimatedCostUsd.toFixed(4)}`
+      ]);
+
+      const totalCost = run.costEntries.reduce((sum, ce) => sum + ce.estimatedCostUsd, 0);
+      costRows.push(["", "", "", "", "<strong>Total</strong>", `<strong>$${totalCost.toFixed(2)}</strong>`]);
+
+      costHtml = detailSection(
+        "Cost Breakdown",
+        table(["Step", "Model", "Mode", "Prompt Tokens", "Completion Tokens", "Cost (USD)"], costRows)
+      );
+    }
+
+    const html = layout(
+      `Run: ${escapeHtml(run.runType)}`,
+      backHtml + headerHtml + countersHtml + warningsHtml + llmStatsHtml + tokenTotalsHtml + notesHtml + costHtml,
       company.name,
       companySlug
     );

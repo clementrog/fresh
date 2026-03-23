@@ -25,6 +25,15 @@ interface AdminRunFilters {
   runType?: string;
 }
 
+export interface AdminMarketQueryFilters {
+  enabled?: "yes" | "no";
+}
+
+export interface AdminDraftFilters {
+  profileId?: string;
+  q?: string;
+}
+
 // NOT with a JSON path that evaluates to NULL in PostgreSQL produces NOT(NULL)=NULL,
 // which silently excludes the row.  Guard each NOT element with a DbNull existence
 // check so the condition is FALSE (not NULL) when the path is absent.
@@ -359,6 +368,137 @@ export class AdminQueries {
         type: true,
         language: true,
         createdAt: true
+      }
+    });
+  }
+
+  async listEditorialConfigs(companyId: string) {
+    return this.prisma.editorialConfig.findMany({
+      where: { companyId },
+      orderBy: { version: "desc" },
+      select: { id: true, version: true, createdAt: true }
+    });
+  }
+
+  async getEditorialConfig(id: string) {
+    return this.prisma.editorialConfig.findUnique({
+      where: { id }
+    });
+  }
+
+  async getUser(id: string) {
+    return this.prisma.user.findUnique({
+      where: { id },
+      include: { _count: { select: { ownedOpportunities: true } } }
+    });
+  }
+
+  async listSourceConfigs(companyId: string) {
+    return this.prisma.sourceConfig.findMany({
+      where: { companyId },
+      orderBy: { source: "asc" }
+    });
+  }
+
+  async listMarketQueries(
+    companyId: string,
+    filters: AdminMarketQueryFilters = {},
+    { page, pageSize }: AdminPagination = { page: 1, pageSize: 50 }
+  ) {
+    const where: Prisma.MarketQueryWhereInput = { companyId };
+    if (filters.enabled === "yes") where.enabled = true;
+    else if (filters.enabled === "no") where.enabled = false;
+
+    return this.prisma.marketQuery.findMany({
+      where,
+      orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
+      skip: (page - 1) * pageSize,
+      take: pageSize
+    });
+  }
+
+  async countMarketQueries(
+    companyId: string,
+    filters: AdminMarketQueryFilters = {}
+  ): Promise<number> {
+    const where: Prisma.MarketQueryWhereInput = { companyId };
+    if (filters.enabled === "yes") where.enabled = true;
+    else if (filters.enabled === "no") where.enabled = false;
+
+    return this.prisma.marketQuery.count({ where });
+  }
+
+  async listDraftProfileIds(companyId: string): Promise<string[]> {
+    const rows = await this.prisma.draft.findMany({
+      where: { companyId },
+      select: { profileId: true },
+      distinct: ["profileId"],
+      orderBy: { profileId: "asc" }
+    });
+    return rows.map((r) => r.profileId);
+  }
+
+  async listDrafts(
+    companyId: string,
+    filters: AdminDraftFilters = {},
+    { page, pageSize }: AdminPagination = { page: 1, pageSize: 50 }
+  ) {
+    const where: Prisma.DraftWhereInput = { companyId };
+    if (filters.profileId) where.profileId = filters.profileId;
+    if (filters.q) where.proposedTitle = { contains: filters.q, mode: "insensitive" };
+
+    return this.prisma.draft.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id: true,
+        proposedTitle: true,
+        profileId: true,
+        confidenceScore: true,
+        language: true,
+        createdAt: true,
+        opportunity: { select: { id: true, title: true } }
+      }
+    });
+  }
+
+  async countDrafts(
+    companyId: string,
+    filters: AdminDraftFilters = {}
+  ): Promise<number> {
+    const where: Prisma.DraftWhereInput = { companyId };
+    if (filters.profileId) where.profileId = filters.profileId;
+    if (filters.q) where.proposedTitle = { contains: filters.q, mode: "insensitive" };
+
+    return this.prisma.draft.count({ where });
+  }
+
+  async getDraft(id: string) {
+    return this.prisma.draft.findUnique({
+      where: { id },
+      include: {
+        opportunity: { select: { id: true, title: true, status: true } },
+        evidence: {
+          select: {
+            id: true,
+            source: true,
+            excerpt: true,
+            timestamp: true,
+            speakerOrAuthor: true,
+            sourceUrl: true
+          }
+        }
+      }
+    });
+  }
+
+  async getRun(id: string) {
+    return this.prisma.syncRun.findUnique({
+      where: { id },
+      include: {
+        costEntries: { orderBy: { createdAt: "asc" } }
       }
     });
   }

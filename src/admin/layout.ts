@@ -66,10 +66,14 @@ export function layout(
     <a href="/admin${qs}">Dashboard</a>
     <a href="/admin/source-items${qs}">Source Items</a>
     <a href="/admin/opportunities${qs}">Opportunities</a>
+    <a href="/admin/drafts${qs}">Drafts</a>
     <a href="/admin/reviews/claap${qs}">Claap Review</a>
     <a href="/admin/reviews/linear${qs}">Linear Review</a>
     <a href="/admin/runs${qs}">Runs</a>
     <a href="/admin/users${qs}">Users</a>
+    <a href="/admin/editorial-configs${qs}">Doctrine</a>
+    <a href="/admin/source-configs${qs}">Sources</a>
+    <a href="/admin/market-queries${qs}">Market Queries</a>
     <span class="company">${companyLabel}</span>
   </nav>
   <main>

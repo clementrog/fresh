@@ -156,6 +156,17 @@ export function statusBadge(status: string): string {
   return badge(status, colors[status] ?? "gray");
 }
 
+export function bulletList(items: unknown): string {
+  const arr = Array.isArray(items) ? items : [];
+  if (arr.length === 0) return "<p>—</p>";
+  const lis = arr.map((item) => `<li>${escapeHtml(String(item))}</li>`).join("");
+  return `<ul>${lis}</ul>`;
+}
+
+export function enabledBadge(enabled: boolean): string {
+  return enabled ? badge("on", "green") : badge("off", "red");
+}
+
 export function formatDate(date: Date | string | null | undefined): string {
   if (!date) return "—";
   const d = typeof date === "string" ? new Date(date) : date;

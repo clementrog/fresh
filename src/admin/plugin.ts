@@ -8,6 +8,10 @@ import { registerOpportunityPages } from "./pages/opportunities.js";
 import { registerReviewPages } from "./pages/reviews.js";
 import { registerRunPages } from "./pages/runs.js";
 import { registerUserPages } from "./pages/users.js";
+import { registerEditorialConfigPages } from "./pages/editorial-configs.js";
+import { registerSourceConfigPages } from "./pages/source-configs.js";
+import { registerMarketQueryPages } from "./pages/market-queries.js";
+import { registerDraftPages } from "./pages/drafts.js";
 
 export interface AdminOptions {
   user: string;
@@ -85,4 +89,8 @@ export function registerAdminPlugin(
   registerReviewPages(server, queries, resolveCompany);
   registerRunPages(server, queries, resolveCompany);
   registerUserPages(server, queries, resolveCompany);
+  registerEditorialConfigPages(server, queries, resolveCompany);
+  registerSourceConfigPages(server, queries, resolveCompany);
+  registerMarketQueryPages(server, queries, resolveCompany);
+  registerDraftPages(server, queries, resolveCompany);
 }

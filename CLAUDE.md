@@ -53,6 +53,21 @@ New `*.integration.test.ts` files MUST:
 4. Clean up all seeded data in `afterAll` (FK deletion order, wrapped in try/catch)
 5. Call `prisma.$disconnect()` in `afterAll`
 
+## Pre-merge verification (no-CI workflow)
+
+Run the checked-in verification script from the repo root:
+
+```bash
+bash tests/verify-merge-readiness.sh
+```
+
+This runs, in order: `pnpm test`, `pnpm run typecheck`, shuffled execution (`pnpm exec vitest run --sequence.shuffle`), focused single-case unit isolation spot-checks, `pnpm test:integration` (refreshes proof artifact), and focused single-case integration isolation spot-checks.
+
+**Key command gotchas:**
+- `pnpm test -- --testNamePattern` does NOT forward the flag to vitest. Always use `pnpm exec vitest run --testNamePattern "..."` for focused runs.
+- `pnpm test:integration` is a `bash -c` wrapper that does NOT forward CLI args. Focused integration runs must use `INTEGRATION=1 pnpm exec vitest run --testNamePattern "..." tests/<file>.integration.test.ts`.
+- For shuffled execution, use `pnpm exec vitest run --sequence.shuffle` (not `pnpm test -- --shuffle`).
+
 ## Future Improvements
 
 - **CI enforcement**: add a pre-merge job that runs `pnpm run test:integration` in a DB-backed environment so proof capture is automatic rather than operator-driven

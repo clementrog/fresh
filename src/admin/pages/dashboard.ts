@@ -28,7 +28,7 @@ export function registerDashboard(
     const statsHtml = `<div class="stat-grid">
       ${statCard("Source Items", counts.sourceItems)}
       ${statCard("Opportunities", counts.opportunities)}
-      ${statCard("Drafts", counts.drafts)}
+      <a href="${c("/admin/drafts")}" style="text-decoration:none;color:inherit">${statCard("Drafts", counts.drafts)}</a>
       ${statCard("Runs", counts.runs)}
       ${statCard("Users", counts.users)}
     </div>`;

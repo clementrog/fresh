@@ -1,12 +1,22 @@
 
  RUN  v3.2.4 /Users/clement/projects/fresh
 
- ✓ tests/repositories.integration.test.ts > repository DB integrity > rejects duplicate fingerprints within the same company 50ms
- ✓ tests/repositories.integration.test.ts > repository DB integrity > cascades evidence deletion when a source item is removed 25ms
- ✓ tests/admin-dispositions.integration.test.ts > disposition filter integration > seeds fixtures and validates disposition filters against real DB 209ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listEditorialConfigs returns only configs for seeded company ordered by version DESC 160ms
+ ✓ tests/repositories.integration.test.ts > repository DB integrity > rejects duplicate fingerprints within the same company 149ms
+ ✓ tests/repositories.integration.test.ts > repository DB integrity > cascades evidence deletion when a source item is removed 80ms
+ ✓ tests/admin-dispositions.integration.test.ts > disposition filter integration > seeds fixtures and validates disposition filters against real DB 277ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getEditorialConfig returns full layer JSON and returns null for wrong-company ID 44ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getUser returns full baseProfile JSON and _count.ownedOpportunities 48ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listSourceConfigs returns both enabled and disabled configs for seeded company 37ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listMarketQueries with enabled yes returns only enabled 35ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > countMarketQueries matches list count 26ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDraftProfileIds returns distinct profileIds for seeded company 21ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDrafts returns drafts with opportunity relation and respects filters 39ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getRun returns run with costEntries ordered by createdAt 42ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getDraft returns draft with included opportunity and evidence relations 65ms
 
- Test Files  2 passed (2)
-      Tests  3 passed (3)
-   Start at  22:01:23
-   Duration  1.16s (transform 62ms, setup 0ms, collect 188ms, tests 302ms, environment 0ms, prepare 228ms)
+ Test Files  3 passed (3)
+      Tests  13 passed (13)
+   Start at  08:02:33
+   Duration  1.30s (transform 117ms, setup 0ms, collect 390ms, tests 1.05s, environment 0ms, prepare 240ms)
 
