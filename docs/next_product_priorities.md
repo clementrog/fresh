@@ -97,7 +97,7 @@ Turn draft-readiness into an operator action guide.
 
 ### Why this matters
 
-`Needs more proof` is helpful, but incomplete.
+`Too early` is clearer, but still incomplete on its own.
 Operators should understand what is missing without interpreting raw evidence themselves.
 
 ### Scope

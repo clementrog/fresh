@@ -131,7 +131,7 @@ Le système ne crée pas de vues filtrées. L'opérateur doit créer ces vues :
 | Status | select | Statut workflow |
 | Editorial notes | rich_text | Notes de l'opérateur |
 | Editorial owner | rich_text | Responsable éditorial |
-| Draft readiness | select | Tier de maturité |
+| How close is this to a draft? | select | Indique si l'opportunité est prête, proche, ou trop tôt |
 | What's missing | rich_text | Guidance opérateur (ce qui manque) |
 | Evidence count | number | Nombre total d'évidences |
 | Primary evidence | rich_text | Extrait de la source principale |
@@ -209,13 +209,13 @@ Le système ne crée pas de vues filtrées. L'opérateur doit créer ces vues :
 
 `To review` · `Needs routing` · `To enrich` · `Ready for V1` · `V1 generated` · `Selected` · `V2 in progress` · `Waiting approval` · `Rejected` · `Archived`
 
-### 6.2 Draft readiness (Content Opportunities)
+### 6.2 How close is this to a draft? (Content Opportunities)
 
 | Valeur Notion | Tier interne | Critères |
 |---|---|---|
-| Ready to draft | `ready` | Source + support + angle concret + matériel draftable + pas de claim produit non-backé |
-| Promising — needs help | `promising` | Source + matériel mais angle vague ou support manquant, ou claim produit en cours |
-| Needs more proof | `needs-more-proof` | Source, angle, matériel ou evidence insuffisants |
+| Draft now | `ready` | Source + support + angle concret + matériel draftable + pas de claim produit non-backé |
+| Good idea — one more input | `promising` | Source + matériel mais angle vague ou support manquant, ou claim produit en cours |
+| Too early | `needs-more-proof` | Source, angle, matériel ou evidence insuffisants |
 
 ### 6.3 Claim posture
 
