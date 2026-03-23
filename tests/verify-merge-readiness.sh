@@ -53,7 +53,7 @@ check_focused() {
   local output
   output=$(pnpm exec vitest run --testNamePattern "$pattern" 2>&1)
   local passed
-  passed=$(echo "$output" | grep -oP '\d+(?= passed)' | head -1)
+  passed=$(echo "$output" | grep -Eo '[0-9]+ passed' | head -1 | cut -d' ' -f1)
   if [[ "$passed" != "1" ]]; then
     echo "$output"
     fail "Expected 1 passed for pattern '$pattern', got '${passed:-0}'"
@@ -82,7 +82,7 @@ check_focused_integration() {
   local output
   output=$(INTEGRATION=1 pnpm exec vitest run --testNamePattern "$pattern" tests/admin-expansion.integration.test.ts 2>&1)
   local passed
-  passed=$(echo "$output" | grep -oP '\d+(?= passed)' | head -1)
+  passed=$(echo "$output" | grep -Eo '[0-9]+ passed' | head -1 | cut -d' ' -f1)
   if [[ "$passed" != "1" ]]; then
     echo "$output"
     fail "Expected 1 passed for integration pattern '$pattern', got '${passed:-0}'"

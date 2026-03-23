@@ -1,22 +1,22 @@
 
  RUN  v3.2.4 /Users/clement/projects/fresh
 
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listEditorialConfigs returns only configs for seeded company ordered by version DESC 160ms
- ✓ tests/repositories.integration.test.ts > repository DB integrity > rejects duplicate fingerprints within the same company 149ms
- ✓ tests/repositories.integration.test.ts > repository DB integrity > cascades evidence deletion when a source item is removed 80ms
- ✓ tests/admin-dispositions.integration.test.ts > disposition filter integration > seeds fixtures and validates disposition filters against real DB 277ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getEditorialConfig returns full layer JSON and returns null for wrong-company ID 44ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getUser returns full baseProfile JSON and _count.ownedOpportunities 48ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listSourceConfigs returns both enabled and disabled configs for seeded company 37ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listMarketQueries with enabled yes returns only enabled 35ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > countMarketQueries matches list count 26ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDraftProfileIds returns distinct profileIds for seeded company 21ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDrafts returns drafts with opportunity relation and respects filters 39ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getRun returns run with costEntries ordered by createdAt 42ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getDraft returns draft with included opportunity and evidence relations 65ms
+ ✓ tests/repositories.integration.test.ts > repository DB integrity > rejects duplicate fingerprints within the same company 57ms
+ ✓ tests/repositories.integration.test.ts > repository DB integrity > cascades evidence deletion when a source item is removed 6ms
+ ✓ tests/admin-dispositions.integration.test.ts > disposition filter integration > seeds fixtures and validates disposition filters against real DB 66ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listEditorialConfigs returns only configs for seeded company ordered by version DESC 22ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getEditorialConfig returns full layer JSON and returns null for wrong-company ID 24ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getUser returns full baseProfile JSON and _count.ownedOpportunities 7ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listSourceConfigs returns both enabled and disabled configs for seeded company 5ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listMarketQueries with enabled yes returns only enabled 6ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > countMarketQueries matches list count 4ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDraftProfileIds returns distinct profileIds for seeded company 8ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDrafts returns drafts with opportunity relation and respects filters 8ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getRun returns run with costEntries ordered by createdAt 8ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getDraft returns draft with included opportunity and evidence relations 9ms
 
  Test Files  3 passed (3)
       Tests  13 passed (13)
-   Start at  08:02:33
-   Duration  1.30s (transform 117ms, setup 0ms, collect 390ms, tests 1.05s, environment 0ms, prepare 240ms)
+   Start at  09:27:20
+   Duration  333ms (transform 69ms, setup 0ms, collect 166ms, tests 238ms, environment 0ms, prepare 95ms)
 
