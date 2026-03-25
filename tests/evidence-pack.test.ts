@@ -379,7 +379,7 @@ describe("assessDraftReadiness", () => {
   });
 
   it("reports no supporting evidence when only primary evidence exists", () => {
-    const evidence = [makeEvidence()];
+    const evidence = [makeEvidence({ source: "linear" })];
     const opp = makeOpportunity({ evidence, primaryEvidence: evidence[0] });
 
     const result = assessDraftReadiness(opp, evidence);
@@ -517,12 +517,10 @@ describe("evidence-pack integration", () => {
     expect(readinessWithSupport.status).toBe("ready");
     expect(readinessWithSupport.missingElements).toHaveLength(0);
 
-    // 7. Readiness without support = needs-more-proof
+    // 7. Readiness without support = still ready for curated sources (market-research gets boost)
     const readinessWithoutSupport = assessDraftReadiness(opp, originEvidence);
-    expect(readinessWithoutSupport.status).toBe("needs-more-proof");
-    expect(readinessWithoutSupport.missingElements).toContain(
-      "No supporting evidence beyond the originating source"
-    );
+    expect(readinessWithoutSupport.status).toBe("ready");
+    expect(readinessWithoutSupport.missingElements).toHaveLength(0);
   });
 
   it("full product path: internal proof attaches to matching opportunity", () => {

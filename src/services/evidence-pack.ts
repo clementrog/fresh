@@ -456,8 +456,25 @@ export function assessDraftReadiness(
     missingElements.push("No clear originating source URL");
   }
 
+  // Curated source boost: market insights and claap signals are already human-qualified takes.
+  // A single substantive curated source counts as sufficient for evidence and material gates.
+  const sourceItems = opts?.sourceItems ?? [];
+  const primarySourceItem = opportunity.primaryEvidence
+    ? sourceItems.find((si) => si.externalId === opportunity.primaryEvidence.sourceItemId
+        || si.sourceItemId === opportunity.primaryEvidence.sourceItemId)
+    : undefined;
+  const primaryNotionKind = typeof primarySourceItem?.metadata?.notionKind === "string"
+    ? primarySourceItem.metadata.notionKind : undefined;
+  const isCuratedOrigin = primaryNotionKind === "market-insight" || primaryNotionKind === "claap-signal"
+    || opportunity.primaryEvidence?.source === "market-research"
+    || opportunity.primaryEvidence?.source === "market-findings";
+  const curatedContentLength = isCuratedOrigin
+    ? allEvidence.reduce((total, e) => total + (e.excerpt?.trim().length ?? 0), 0)
+    : 0;
+  const curatedBoost = isCuratedOrigin && curatedContentLength > 100;
+
   // 2. Has supporting evidence beyond primary
-  const hasSupportingEvidence = allEvidence.length > 1;
+  const hasSupportingEvidence = allEvidence.length > 1 || curatedBoost;
   if (!hasSupportingEvidence) {
     missingElements.push("No supporting evidence beyond the originating source");
   }
@@ -476,7 +493,8 @@ export function assessDraftReadiness(
   const substantiveExcerpts = allEvidence.filter(
     (e) => e.excerpt && e.excerpt.trim().length > 30
   );
-  const hasDraftableMaterial = substantiveExcerpts.length >= 2;
+  const hasDraftableMaterial = substantiveExcerpts.length >= 2
+    || (curatedBoost && substantiveExcerpts.length >= 1);
   if (!hasDraftableMaterial) {
     missingElements.push("Not enough concrete material to draft from");
   }
