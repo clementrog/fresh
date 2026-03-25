@@ -94,8 +94,6 @@ describe("market insights notion ingestion", () => {
     expect(pageContentCalls).toBe(1);
     expect(normalized.chunks).toEqual([
       "Buyers want proof of adoption",
-      "Theme: Strategic synthesis 2026",
-      "Source type: Synthesis",
       "What happened\nBuyers now ask for visible proof of field adoption before trusting the promise.\nWhy it matters\nThis changes the standard for credible product storytelling."
     ]);
     expect(normalized.text).toContain("What happened");
@@ -166,8 +164,6 @@ describe("market insights notion ingestion", () => {
     expect(normalized.metadata.theme).toBe("General");
     expect(normalized.chunks).toEqual([
       "A labor update without an explicit theme",
-      "Theme: General",
-      "Source type: Secondary",
       "What happened\nA labor update with enough body content to remain structured."
     ]);
   });

@@ -105,10 +105,9 @@ describe("internal proof notion ingestion", () => {
     expect(normalized.summary).toContain("Proof category: security");
     expect(normalized.summary).toContain("Completed SOC 2 Type II audit with zero critical findings.");
     expect(normalized.chunks).toBeDefined();
-    expect(normalized.chunks!.length).toBeGreaterThanOrEqual(3);
+    expect(normalized.chunks!.length).toBeGreaterThanOrEqual(2);
     expect(normalized.chunks![0]).toBe("SOC 2 Type II certification achieved");
-    expect(normalized.chunks![1]).toBe("Proof category: security");
-    expect(normalized.chunks).toContain("Completed SOC 2 Type II audit with zero critical findings. Report available for enterprise prospects.");
+    expect(normalized.chunks![1]).toBe("Completed SOC 2 Type II audit with zero critical findings. Report available for enterprise prospects.");
   });
 
   it("handles all four proof categories with correct profileHint", async () => {

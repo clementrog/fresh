@@ -5,6 +5,7 @@ import type {
   ContentOpportunity,
   DraftV1,
   EnrichmentLogEntry,
+  EvidenceReference,
   NotionEditRequest,
   NotionSelectionRow,
   NotionSyncResult,
@@ -107,7 +108,7 @@ export class NotionService {
       "Primary evidence": richTextProperty(opportunity.primaryEvidence.excerpt),
       "Supporting evidence count": numberProperty(Math.max(0, opportunity.evidence.length - 1)),
       "Evidence freshness": numberProperty(opportunity.evidenceFreshness),
-      "Evidence excerpts": richTextProperty(opportunity.evidenceExcerpts.join("\n\n")),
+      "Evidence excerpts": richTextProperty(formatEvidenceExcerpts(opportunity.evidence)),
       "Enrichment log": richTextProperty(enrichmentLogText),
       "V1 draft": richTextProperty(draft ? `V1 generated on ${new Date().toISOString().slice(0, 10)}` : ""),
       "Selected at": opportunity.selectedAt ? dateProperty(opportunity.selectedAt) : emptyDateProperty(),
@@ -695,7 +696,7 @@ export class NotionService {
               action: "updated"
             };
           } catch (error) {
-            if (!isNotionObjectNotFoundError(error)) {
+            if (!isNotionObjectNotFoundError(error) && !isNotionArchivedError(error)) {
               throw error;
             }
 
@@ -1207,6 +1208,17 @@ export function parseToneBodySections(sections: Map<string, string>): {
   };
 }
 
+function formatEvidenceExcerpts(evidence: EvidenceReference[]): string {
+  if (evidence.length === 0) return "";
+  return evidence.map((e) => {
+    const date = e.timestamp.slice(0, 10);
+    const sourceLabel = e.source === "claap" ? "Claap" : e.source === "notion" ? "Notion" : e.source === "linear" ? "Linear" : e.source;
+    const attribution = e.speakerOrAuthor ? ` — ${e.speakerOrAuthor}` : "";
+    const link = e.sourceUrl ? ` (${e.sourceUrl})` : "";
+    return `[${sourceLabel}, ${date}${attribution}]${link}\n${e.excerpt}`;
+  }).join("\n\n");
+}
+
 function formatOperatorGuidance(guidance: string[]): string {
   if (guidance.length === 0) return "";
   return guidance.map((g) => `• ${g}`).join("\n");
@@ -1344,6 +1356,14 @@ function isNotionDatabaseNotFoundError(error: unknown) {
   };
   const details = `${typedError.message ?? ""} ${typedError.body ?? ""}`.toLowerCase();
   return details.length === 0 || details.includes("database") || details.includes("object not found");
+}
+
+function isNotionArchivedError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const typedError = error as { status?: number; code?: string; message?: string; body?: string };
+  if (typedError.status !== 400 || typedError.code !== "validation_error") return false;
+  const details = `${typedError.message ?? ""} ${typedError.body ?? ""}`.toLowerCase();
+  return details.includes("archived");
 }
 
 function selectProperty(value: string) {

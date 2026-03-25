@@ -78,15 +78,30 @@ export async function generateDraft(params: {
       "- Any citation of an internal source system, database, or synthesis document",
       "",
       "## Voice rules",
-      "- First person mandatory. 'Je' or 'on' (collective we), never impersonal third person.",
-      "- Include one specific detail that proves the author lived this: a date, a place, a number, a quote from someone.",
+      ...(str("profileId") === "linc-corporate"
+        ? [
+            "- Company voice. NEVER use 'je'. Use 'nous', 'on', or impersonal constructions.",
+            "- Speak as a team that does the work, not a person sharing opinions.",
+            "- Include one specific detail that proves the company sees this: a date, a client situation (anonymized), a number, a pattern across clients.",
+          ]
+        : [
+            "- First person mandatory. 'Je' or 'on' (collective we), never impersonal third person.",
+            "- Include one specific detail that proves the author lived this: a date, a place, a number, a quote from someone.",
+          ]),
       "- Mix short punchy sentences (3-8 words) with one or two longer ones. Human rhythm is irregular.",
       "- Sound like a person who has something to say, not a consultant filling a template.",
       "",
       "## Evidence integration",
       "- Evidence informs your angle. You never cite it.",
-      "- Transform raw evidence into a personal observation: 'La semaine derniere, un cabinet m'a dit...' not 'Source: Synthese strategique 2026.'",
-      "- If the evidence is a regulatory change, explain what it means in practice, in your words, from your experience.",
+      ...(str("profileId") === "linc-corporate"
+        ? [
+            "- Transform raw evidence into a team observation: 'On a recalculé pour un site de 220 salariés...' not 'Source: Synthese strategique 2026.'",
+            "- If the evidence is a regulatory change, explain what it means in practice, from what the team sees across clients.",
+          ]
+        : [
+            "- Transform raw evidence into a personal observation: 'La semaine derniere, un cabinet m'a dit...' not 'Source: Synthese strategique 2026.'",
+            "- If the evidence is a regulatory change, explain what it means in practice, in your words, from your experience.",
+          ]),
       "",
       "## Structure variety",
       "- Never use the same structure twice. Rotate between: observation then lesson, question then answer, story then point, provocation then nuance, confession then insight.",
@@ -214,8 +229,8 @@ async function assessDraftSensitivity(
     system: [
       "You are reviewing a LinkedIn post draft for publication safety.",
       "This content is about HR/payroll topics — generic payroll, salary, compliance terms are EXPECTED and NOT sensitive.",
-      "Only block if the draft reveals: specific client/company names, specific individual salary figures, unreleased product features with dates, or verbatim confidential internal documents.",
-      "Do NOT block for: general industry observations, regulatory commentary, operational best practices, or domain expertise sharing.",
+      "Only block if the draft reveals: specific CLIENT company names (companies using the product), specific individual salary figures, unreleased product features with dates, or verbatim confidential internal documents.",
+      "Do NOT block for: the author's own company (Linc), well-known market actors and competitors (e.g. Silae, ADP, Cegid, Sage, PayFit), general industry observations, regulatory commentary, operational best practices, or domain expertise sharing.",
       "Return JSON: { \"blocked\": boolean, \"rationale\": string }"
     ].join("\n"),
     prompt: `Draft to review:\n\n${draftText.slice(0, 3000)}`,

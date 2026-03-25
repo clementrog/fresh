@@ -382,8 +382,6 @@ function extractMarketInsight(properties: Record<string, unknown>, content: stri
 
   const chunks = [
     insightTitle,
-    `Theme: ${theme}`,
-    sourceType ? `Source type: ${sourceType}` : "",
     content
   ]
     .filter((entry) => entry.trim().length > 0)
@@ -639,8 +637,6 @@ function extractInternalProof(properties: Record<string, unknown>, content: stri
 
   const chunks = [
     claimTitle,
-    `Proof category: ${proofCategory}`,
-    `Theme: ${theme}`,
     evidenceSummary,
     content
   ]
