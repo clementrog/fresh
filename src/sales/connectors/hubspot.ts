@@ -22,6 +22,93 @@ import {
 } from "./hubspot-mappers.js";
 
 // ---------------------------------------------------------------------------
+// Error classification
+// ---------------------------------------------------------------------------
+
+export type HubSpotErrorClass =
+  | "auth_invalid"
+  | "auth_insufficient"
+  | "not_found"
+  | "doctrine_missing"
+  | "doctrine_invalid"
+  | "pipeline_not_found"
+  | "pipeline_inaccessible"
+  | "association_unsupported"
+  | "rate_limited"
+  | "transient"
+  | "schema_mismatch"
+  | "unknown";
+
+/** Extract HTTP status code from HubSpot SDK errors (uses .code) or other shapes (.statusCode).
+ *  Tolerates non-Error thrown objects (e.g. plain { code: 429 }). */
+function extractHttpStatus(error: unknown): number {
+  if (typeof error === "object" && error !== null) {
+    if ("code" in error && typeof (error as { code: unknown }).code === "number") {
+      return (error as { code: number }).code;
+    }
+    if ("statusCode" in error && typeof (error as { statusCode: unknown }).statusCode === "number") {
+      return (error as { statusCode: number }).statusCode;
+    }
+  }
+  return 0;
+}
+
+export function classifyHubSpotError(error: unknown): HubSpotErrorClass {
+  const status = extractHttpStatus(error);
+  if (status === 401) return "auth_invalid";
+  if (status === 403) return "auth_insufficient";
+  if (status === 404) return "not_found";
+  if (status === 400) return "association_unsupported";
+  if (status === 429) return "rate_limited";
+  if (status >= 500 && status <= 599) return "transient";
+
+  if (error instanceof Error) {
+    const msg = error.message.toLowerCase();
+    if (
+      msg.includes("econnrefused") ||
+      msg.includes("etimedout") ||
+      msg.includes("enotfound") ||
+      msg.includes("socket hang up")
+    ) {
+      return "transient";
+    }
+  }
+  return "unknown";
+}
+
+export function translateSalesError(error: unknown): { message: string; exitCode: number } {
+  const msg = error instanceof Error ? error.message : String(error);
+
+  // Local prerequisite errors (thrown as plain Errors without HTTP status codes)
+  if (msg.includes("HUBSPOT_ACCESS_TOKEN is not configured")) {
+    return { message: "HUBSPOT_ACCESS_TOKEN is not configured. Set it in your environment before running sync.", exitCode: 1 };
+  }
+  if (msg.includes("No SalesDoctrine found")) {
+    return { message: "No SalesDoctrine configured for this company. Create one before running sync.", exitCode: 1 };
+  }
+  if (msg.includes("SalesDoctrine validation failed")) {
+    return { message: `SalesDoctrine is invalid: ${msg}. Fix the doctrine configuration.`, exitCode: 1 };
+  }
+
+  const cls = classifyHubSpotError(error);
+  const table: Record<HubSpotErrorClass, string> = {
+    auth_invalid: "HubSpot authentication failed. Check that HUBSPOT_ACCESS_TOKEN is valid and not expired.",
+    auth_insufficient: "HubSpot token lacks required permissions. Ensure your Private App has CRM scopes (deals, contacts, companies).",
+    not_found: "A requested HubSpot resource was not found. Verify that referenced object IDs exist.",
+    rate_limited: "HubSpot rate limit hit. Wait 60 seconds and retry, or reduce concurrent HubSpot processes.",
+    transient: "HubSpot is temporarily unreachable. Retry in a few minutes.",
+    pipeline_not_found: "Configured pipeline not found in HubSpot. Check hubspotPipelineId in your SalesDoctrine.",
+    pipeline_inaccessible: "HubSpot token cannot access the configured pipeline. Check Private App scopes.",
+    association_unsupported: "A required HubSpot association path is not available. Check CRM customizations.",
+    doctrine_missing: "No SalesDoctrine configured for this company. Create one before running sync.",
+    doctrine_invalid: "SalesDoctrine is invalid. Fix the doctrine configuration.",
+    schema_mismatch: "HubSpot API returned an unexpected response shape. Check SDK version compatibility.",
+    unknown: `Unexpected error: ${msg}`,
+  };
+  return { message: table[cls], exitCode: 1 };
+}
+
+// ---------------------------------------------------------------------------
 // Doctrine validation (Zod — validate only fields sync needs)
 // ---------------------------------------------------------------------------
 
@@ -240,7 +327,7 @@ export function createHubSpotApiAdapter(client: Client): HubSpotApiPort {
 // Rate limiter (token-bucket with retry)
 // ---------------------------------------------------------------------------
 
-class RateLimiter {
+export class RateLimiter {
   private lastRequestAt = 0;
 
   constructor(
@@ -263,8 +350,7 @@ class RateLimiter {
         return result;
       } catch (error: unknown) {
         this.lastRequestAt = Date.now();
-        const is429 =
-          error instanceof Error && "statusCode" in error && (error as { statusCode: number }).statusCode === 429;
+        const is429 = extractHttpStatus(error) === 429;
         if (!is429 || attempt === this.maxRetries) throw error;
         await sleep(this.initialDelayMs * (attempt + 1));
       }
@@ -293,6 +379,313 @@ export interface SyncCounters {
 export interface SyncResult {
   counters: SyncCounters;
   warnings: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Preflight
+// ---------------------------------------------------------------------------
+
+export type PreflightCheckStatus = "pass" | "fail" | "warn" | "skip";
+
+export interface PreflightCheck {
+  name: string;
+  status: PreflightCheckStatus;
+  message: string;
+  errorClass?: HubSpotErrorClass;
+  durationMs: number;
+}
+
+export interface PreflightResult {
+  ok: boolean;
+  verified: boolean;
+  checks: PreflightCheck[];
+  summary: string;
+}
+
+export interface PreflightHubSpotClient {
+  crm: {
+    pipelines: {
+      pipelinesApi: {
+        getAll(objectType: string): Promise<{ results: Array<{ id: string; label: string }> }>;
+        getById(objectType: string, pipelineId: string): Promise<{ id: string; label: string; stages: unknown[] }>;
+      };
+    };
+  };
+}
+
+const ASSOC_PROBE_PATHS: Array<{ toType: string; label: string }> = [
+  { toType: "contacts", label: "deal→contacts" },
+  { toType: "companies", label: "deal→companies" },
+  { toType: "emails", label: "deal→emails" },
+  { toType: "notes", label: "deal→notes" },
+  { toType: "calls", label: "deal→calls" },
+  { toType: "meetings", label: "deal→meetings" },
+];
+
+function buildSummary(checks: PreflightCheck[]): { ok: boolean; verified: boolean; summary: string } {
+  let passed = 0, failed = 0, skipped = 0, unverified = 0;
+  for (const c of checks) {
+    if (c.status === "pass") passed++;
+    else if (c.status === "fail") failed++;
+    else if (c.status === "skip") skipped++;
+    else if (c.status === "warn") unverified++;
+  }
+  const parts: string[] = [];
+  if (passed > 0) parts.push(`${passed} passed`);
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (skipped > 0) parts.push(`${skipped} skipped`);
+  if (unverified > 0) parts.push(`${unverified} unverified`);
+  return {
+    ok: failed === 0,
+    verified: passed === checks.length,
+    summary: parts.join(", "),
+  };
+}
+
+/** Extract a concise operator-facing message from a HubSpot SDK error.
+ *  SDK errors dump full HTTP response (headers, cookies, body). This extracts
+ *  just the HubSpot `message` field from the JSON body, or truncates. */
+function conciseHubSpotMessage(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const raw = err.message;
+  // HubSpot SDK format: "HTTP-Code: NNN\nMessage: ...\nBody: {json}\nHeaders: ..."
+  const bodyMatch = raw.match(/Body:\s*(\{[\s\S]*?\})\s*(?:Headers:|$)/);
+  if (bodyMatch) {
+    try {
+      const body = JSON.parse(bodyMatch[1]);
+      if (typeof body.message === "string" && body.message.length > 0) {
+        return body.message;
+      }
+    } catch { /* fall through */ }
+  }
+  // Truncate overly long raw messages
+  if (raw.length > 200) return raw.slice(0, 200) + "…";
+  return raw;
+}
+
+async function timedCheck(
+  name: string,
+  fn: () => Promise<Omit<PreflightCheck, "name" | "durationMs">>
+): Promise<PreflightCheck> {
+  const start = Date.now();
+  const result = await fn();
+  return { name, ...result, durationMs: Date.now() - start };
+}
+
+export async function runPreflight(opts: {
+  api: HubSpotApiPort;
+  client: PreflightHubSpotClient;
+  repos: Pick<SalesRepositoryBundle, "getLatestDoctrine">;
+  companyId: string;
+  logger: Logger;
+}): Promise<PreflightResult> {
+  const { api, client, repos, companyId, logger } = opts;
+  const checks: PreflightCheck[] = [];
+  let authOk = false;
+  let portalOk = false;
+  let doctrineOk = false;
+  let pipelineOk = false;
+  let pipelineId: string | undefined;
+  let sampleDealId: string | undefined;
+
+  // 1. auth — searchDeals with limit:1
+  const authCheck = await timedCheck("auth", async () => {
+    try {
+      await api.searchDeals({
+        filterGroups: [],
+        properties: ["hs_object_id"],
+        limit: 1,
+      });
+      return { status: "pass" as const, message: "HubSpot API reachable, token valid" };
+    } catch (err) {
+      const cls = classifyHubSpotError(err);
+      return { status: "fail" as const, message: `Authentication failed: ${conciseHubSpotMessage(err)}`, errorClass: cls };
+    }
+  });
+  checks.push(authCheck);
+  authOk = authCheck.status === "pass";
+
+  // 2. portal — pipelines API
+  if (!authOk) {
+    checks.push({ name: "portal", status: "skip", message: "skipped — auth check failed", durationMs: 0 });
+  } else {
+    const portalCheck = await timedCheck("portal", async () => {
+      try {
+        const resp = await client.crm.pipelines.pipelinesApi.getAll("deals");
+        return { status: "pass" as const, message: `Portal accessible, ${resp.results.length} deal pipeline(s) found` };
+      } catch (err) {
+        const cls = classifyHubSpotError(err);
+        return { status: "fail" as const, message: `Pipeline API unreachable: ${conciseHubSpotMessage(err)}`, errorClass: cls };
+      }
+    });
+    checks.push(portalCheck);
+    portalOk = portalCheck.status === "pass";
+  }
+
+  // 3. doctrine — local DB read, always runs
+  const doctrineCheck = await timedCheck("doctrine", async () => {
+    try {
+      const doctrine = await repos.getLatestDoctrine(companyId);
+      if (!doctrine) {
+        return { status: "fail" as const, message: "No SalesDoctrine found for this company", errorClass: "doctrine_missing" as const };
+      }
+      const validated = validateDoctrineForSync(doctrine.doctrineJson);
+      pipelineId = validated.hubspotPipelineId;
+      return { status: "pass" as const, message: `SalesDoctrine loaded, hubspotPipelineId=${pipelineId}` };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("SalesDoctrine validation failed")) {
+        return { status: "fail" as const, message: msg, errorClass: "doctrine_invalid" as const };
+      }
+      return { status: "fail" as const, message: `Failed to load doctrine: ${msg}` };
+    }
+  });
+  checks.push(doctrineCheck);
+  doctrineOk = doctrineCheck.status === "pass";
+
+  // 4. pipeline — requires portal + doctrine
+  if (!portalOk || !doctrineOk) {
+    const reason = !portalOk ? "portal" : "doctrine";
+    checks.push({ name: "pipeline", status: "skip", message: `skipped — ${reason} check failed`, durationMs: 0 });
+  } else {
+    const pipelineCheck = await timedCheck("pipeline", async () => {
+      try {
+        const resp = await client.crm.pipelines.pipelinesApi.getById("deals", pipelineId!);
+        const stageCount = Array.isArray(resp.stages) ? resp.stages.length : 0;
+        return { status: "pass" as const, message: `Pipeline "${pipelineId}" exists with ${stageCount} stage(s)` };
+      } catch (err) {
+        const cls = classifyHubSpotError(err);
+        const effectiveClass = cls === "not_found" ? "pipeline_not_found"
+          : cls === "auth_insufficient" ? "pipeline_inaccessible"
+          : cls;
+        return { status: "fail" as const, message: `Pipeline "${pipelineId}" not accessible: ${conciseHubSpotMessage(err)}`, errorClass: effectiveClass };
+      }
+    });
+    checks.push(pipelineCheck);
+    pipelineOk = pipelineCheck.status === "pass";
+  }
+
+  // Gate for probes: need auth + portal + doctrine + pipeline all passed
+  const probesGated = !authOk || !portalOk || !doctrineOk || !pipelineOk;
+  const gateReason = !authOk ? "auth" : !portalOk ? "portal" : !doctrineOk ? "doctrine" : "pipeline";
+
+  // 5. object_reads — 4 sub-checks
+  if (probesGated) {
+    for (const sub of ["object_reads:deals", "object_reads:contacts", "object_reads:companies", "object_reads:engagements"]) {
+      checks.push({ name: sub, status: "skip", message: `skipped — ${gateReason} check failed`, durationMs: 0 });
+    }
+  } else {
+    // 5a. object_reads:deals
+    const dealsCheck = await timedCheck("object_reads:deals", async () => {
+      try {
+        const resp = await api.searchDeals({
+          filterGroups: [{ filters: [{ propertyName: "pipeline", operator: "EQ", value: pipelineId! }] }],
+          properties: ["hs_object_id"],
+          limit: 1,
+        });
+        if (resp.results.length > 0) {
+          sampleDealId = resp.results[0].id;
+        }
+        return { status: "pass" as const, message: `Search succeeded, ${resp.total} deal(s) in pipeline` };
+      } catch (err) {
+        const cls = classifyHubSpotError(err);
+        return { status: "fail" as const, message: `Deal search failed: ${conciseHubSpotMessage(err)}`, errorClass: cls };
+      }
+    });
+    checks.push(dealsCheck);
+
+    // 5b. object_reads:contacts
+    if (!sampleDealId) {
+      checks.push({ name: "object_reads:contacts", status: "warn", message: "unverified — no sample deal available to probe contacts", durationMs: 0 });
+    } else {
+      const contactCheck = await timedCheck("object_reads:contacts", async () => {
+        try {
+          const assocs = await api.getAssociations("deals", sampleDealId!, "contacts");
+          if (assocs.length === 0) {
+            return { status: "warn" as const, message: "unverified — deal has no contacts" };
+          }
+          await api.getContactById(assocs[0].toObjectId, ["email"]);
+          return { status: "pass" as const, message: "Contact read succeeded" };
+        } catch (err) {
+          const cls = classifyHubSpotError(err);
+          return { status: "fail" as const, message: `Contact read failed: ${conciseHubSpotMessage(err)}`, errorClass: cls };
+        }
+      });
+      checks.push(contactCheck);
+    }
+
+    // 5c. object_reads:companies
+    if (!sampleDealId) {
+      checks.push({ name: "object_reads:companies", status: "warn", message: "unverified — no sample deal available to probe companies", durationMs: 0 });
+    } else {
+      const companyCheck = await timedCheck("object_reads:companies", async () => {
+        try {
+          const assocs = await api.getAssociations("deals", sampleDealId!, "companies");
+          if (assocs.length === 0) {
+            return { status: "warn" as const, message: "unverified — deal has no companies" };
+          }
+          await api.getCompanyById(assocs[0].toObjectId, ["name"]);
+          return { status: "pass" as const, message: "Company read succeeded" };
+        } catch (err) {
+          const cls = classifyHubSpotError(err);
+          return { status: "fail" as const, message: `Company read failed: ${conciseHubSpotMessage(err)}`, errorClass: cls };
+        }
+      });
+      checks.push(companyCheck);
+    }
+
+    // 5d. object_reads:engagements
+    if (!sampleDealId) {
+      checks.push({ name: "object_reads:engagements", status: "warn", message: "unverified — no sample deal available to probe engagements", durationMs: 0 });
+    } else {
+      const engCheck = await timedCheck("object_reads:engagements", async () => {
+        try {
+          // Try each engagement type until we find one
+          for (const engType of (["email", "note", "call", "meeting"] as const)) {
+            const assocType = { email: "emails", note: "notes", call: "calls", meeting: "meetings" }[engType];
+            const assocs = await api.getAssociations("deals", sampleDealId!, assocType);
+            if (assocs.length > 0) {
+              await api.getEngagementById(engType, assocs[0].toObjectId, ["hs_timestamp"]);
+              return { status: "pass" as const, message: `Engagement read succeeded (${engType})` };
+            }
+          }
+          return { status: "warn" as const, message: "unverified — deal has no engagements" };
+        } catch (err) {
+          const cls = classifyHubSpotError(err);
+          return { status: "fail" as const, message: `Engagement read failed: ${conciseHubSpotMessage(err)}`, errorClass: cls };
+        }
+      });
+      checks.push(engCheck);
+    }
+  }
+
+  // 6. associations — 6 sub-checks
+  if (probesGated) {
+    for (const p of ASSOC_PROBE_PATHS) {
+      checks.push({ name: `assoc:${p.label}`, status: "skip", message: `skipped — ${gateReason} check failed`, durationMs: 0 });
+    }
+  } else if (!sampleDealId) {
+    for (const p of ASSOC_PROBE_PATHS) {
+      checks.push({ name: `assoc:${p.label}`, status: "warn", message: "unverified — no deals available to probe this path", durationMs: 0 });
+    }
+  } else {
+    for (const p of ASSOC_PROBE_PATHS) {
+      const assocCheck = await timedCheck(`assoc:${p.label}`, async () => {
+        try {
+          await api.getAssociations("deals", sampleDealId!, p.toType);
+          return { status: "pass" as const, message: `Association path ${p.label} accessible` };
+        } catch (err) {
+          const cls = classifyHubSpotError(err);
+          return { status: "fail" as const, message: `Association path ${p.label} failed: ${conciseHubSpotMessage(err)}`, errorClass: cls };
+        }
+      });
+      checks.push(assocCheck);
+    }
+  }
+
+  const result = buildSummary(checks);
+  logger.info({ ok: result.ok, verified: result.verified, summary: result.summary }, "Preflight complete");
+  return { ...result, checks };
 }
 
 // ---------------------------------------------------------------------------
@@ -396,6 +789,9 @@ export class HubSpotSyncService {
       await this.repos.finalizeSyncRun(run.id, "completed", counters, warnings);
       return { counters, warnings };
     } catch (error) {
+      const errorClass = classifyHubSpotError(error);
+      // Log full error (including stack) at error level so diagnostics are not degraded
+      this.logger.error({ errorClass, err: error }, "Sync failed");
       await this.repos.finalizeSyncRun(run.id, "failed", counters, warnings, String(error));
       throw error;
     }
@@ -471,11 +867,11 @@ export class HubSpotSyncService {
             contactDbIds.push(salesContactDbId(companyId, cid));
             fetchedContactHsIds.add(cid);
           } catch (err) {
-            batchWarnings.push(`Failed to fetch contact ${cid} for deal ${rawDeal.id}: ${err}`);
+            batchWarnings.push(`[${classifyHubSpotError(err)}] Failed to fetch contact ${cid} for deal ${rawDeal.id}: ${err}`);
           }
         }
       } catch (err) {
-        batchWarnings.push(`Failed to discover contacts for deal ${rawDeal.id}: ${err}`);
+        batchWarnings.push(`[${classifyHubSpotError(err)}] Failed to discover contacts for deal ${rawDeal.id}: ${err}`);
       }
 
       // Fetch associated companies
@@ -490,11 +886,11 @@ export class HubSpotSyncService {
             companies.push(mapHubSpotCompany(raw, companyId));
             companyDbIds.push(salesHubspotCompanyDbId(companyId, coid));
           } catch (err) {
-            batchWarnings.push(`Failed to fetch company ${coid} for deal ${rawDeal.id}: ${err}`);
+            batchWarnings.push(`[${classifyHubSpotError(err)}] Failed to fetch company ${coid} for deal ${rawDeal.id}: ${err}`);
           }
         }
       } catch (err) {
-        batchWarnings.push(`Failed to discover companies for deal ${rawDeal.id}: ${err}`);
+        batchWarnings.push(`[${classifyHubSpotError(err)}] Failed to discover companies for deal ${rawDeal.id}: ${err}`);
       }
 
       // Fetch associated activities (all engagement types)
@@ -551,11 +947,11 @@ export class HubSpotSyncService {
 
               activities.push(mapHubSpotActivity(raw, companyId, engType, dealDbId, engContactId, rawTextExpiresAt));
             } catch (err) {
-              batchWarnings.push(`Failed to fetch ${engType} ${engId} for deal ${rawDeal.id}: ${err}`);
+              batchWarnings.push(`[${classifyHubSpotError(err)}] Failed to fetch ${engType} ${engId} for deal ${rawDeal.id}: ${err}`);
             }
           }
         } catch (err) {
-          batchWarnings.push(`Failed to discover ${engType}s for deal ${rawDeal.id}: ${err}`);
+          batchWarnings.push(`[${classifyHubSpotError(err)}] Failed to discover ${engType}s for deal ${rawDeal.id}: ${err}`);
         }
       }
 

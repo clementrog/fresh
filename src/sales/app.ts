@@ -3,8 +3,8 @@ import { Client } from "@hubspot/api-client";
 import type { AppEnv } from "../config/env.js";
 import { createLogger } from "../lib/logger.js";
 import { SalesRepositoryBundle } from "./db/sales-repositories.js";
-import { createHubSpotApiAdapter, HubSpotSyncService } from "./connectors/hubspot.js";
-import type { SyncResult } from "./connectors/hubspot.js";
+import { createHubSpotApiAdapter, HubSpotSyncService, runPreflight } from "./connectors/hubspot.js";
+import type { SyncResult, PreflightResult } from "./connectors/hubspot.js";
 
 export interface ConfigCheckResult {
   ok: boolean;
@@ -53,7 +53,7 @@ export class SalesApp {
       details.hubspot = "HUBSPOT_ACCESS_TOKEN not set";
       return { ok: false, details };
     }
-    details.hubspot = "token present (not validated — use sales:preflight after Slice 2)";
+    details.hubspot = "token present (not validated — use sales:preflight)";
 
     // 4. LLM API key present for configured provider
     const llmProvider = this.env.SALES_LLM_PROVIDER ?? "anthropic";
@@ -67,6 +67,30 @@ export class SalesApp {
     details.llm = `${llmProvider} key present`;
 
     return { ok: true, details };
+  }
+
+  async runPreflight(companyId: string): Promise<PreflightResult> {
+    if (!this.env.HUBSPOT_ACCESS_TOKEN) {
+      return {
+        ok: false,
+        verified: false,
+        checks: [{
+          name: "auth",
+          status: "fail",
+          message: "HUBSPOT_ACCESS_TOKEN is not configured",
+          errorClass: "auth_invalid",
+          durationMs: 0,
+        }],
+        summary: "1 failed",
+      };
+    }
+
+    const logger = createLogger(this.env);
+    const repos = new SalesRepositoryBundle(this.prisma);
+    const client = new Client({ accessToken: this.env.HUBSPOT_ACCESS_TOKEN });
+    const api = createHubSpotApiAdapter(client);
+
+    return runPreflight({ api, client, repos, companyId, logger });
   }
 
   async runSync(companyId: string): Promise<SyncResult> {
