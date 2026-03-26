@@ -330,7 +330,7 @@ export async function runDetection(params: {
         stalenessThreshold = config.stalenessThresholdDays;
       }
       stageLabels = config.stageLabels;
-      if (Array.isArray(config.intelligenceStages) && config.intelligenceStages.length > 0) {
+      if (Array.isArray(config.intelligenceStages)) {
         intelligenceStages = config.intelligenceStages;
       }
     }
@@ -426,8 +426,8 @@ export async function runDetection(params: {
       if (!postDealOk) { leaseLost = true; break; }
     }
 
-    // 5. Scope-contraction cleanup
-    if (!leaseLost && intelligenceStageIds && intelligenceStageIds.size > 0) {
+    // 5. Scope-contraction cleanup (runs even when intelligenceStageIds is empty — that means nothing is in scope)
+    if (!leaseLost && intelligenceStageIds) {
       try {
         const cleaned = await repos.deleteSignalsForOutOfScopeDeals(
           companyId,
@@ -532,7 +532,26 @@ async function detectLeadSignals(params: {
 
       // Determine signal type
       const signalType = resolveLeadSignalType(leadStatus, deals, intelligenceStageIds);
+
+      // Non-signaling status (e.g., "Nouveau", "Hot"): delete any prior signal, persist new status in cursor
       if (!signalType) {
+        if (statusChanged) {
+          await repos.transaction(async (tx) => {
+            await repos.deleteLeadSignalsForCompany(
+              company.id,
+              LEAD_MANAGED_TYPES as unknown as string[],
+              tx
+            );
+            const newTimestamp = hasNewActivity && maxTimestamp ? maxTimestamp : cursor.timestamp;
+            const cursorValue = encodeLeadCursor(newTimestamp, leadStatus);
+            const cursorId = createDeterministicId("cur", [companyId, cursorKey]);
+            await tx.sourceCursor.upsert({
+              where: { companyId_source: { companyId, source: cursorKey } },
+              create: { id: cursorId, companyId, source: cursorKey, cursor: cursorValue },
+              update: { cursor: cursorValue },
+            });
+          });
+        }
         processedCompanyIds.push(company.id);
         continue;
       }
@@ -542,7 +561,8 @@ async function detectLeadSignals(params: {
       if (hasNewActivity && cursor.timestamp) {
         newActivityCount = await repos.countActivitiesForDealsSince(dealIds, cursor.timestamp);
       } else if (hasNewActivity) {
-        newActivityCount = 1; // First run, at least one activity exists
+        // First run (no cursor): count ALL activities for true backlog count
+        newActivityCount = await repos.countActivitiesForDealsSince(dealIds, new Date(0));
       }
 
       const weekKey = isoWeekKey(maxTimestamp ?? cursor.timestamp);

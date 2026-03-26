@@ -756,7 +756,7 @@ export class SalesRepositoryBundle {
     processedCompanyIds: string[],
     managedTypes: string[]
   ) {
-    // Delete lead signals for companies NOT in processedCompanyIds
+    // 1. Find orphan company IDs from signal rows
     const allLeadSignals = await this.prisma.salesSignal.findMany({
       where: {
         companyId,
@@ -766,42 +766,58 @@ export class SalesRepositoryBundle {
       select: { id: true, metadataJson: true }
     });
 
-    const orphanIds = allLeadSignals
-      .filter((s) => {
-        const meta = s.metadataJson as Record<string, unknown> | null;
-        const hcId = meta?.hubspotCompanyId as string | undefined;
-        return hcId && !processedCompanyIds.includes(hcId);
-      })
-      .map((s) => s.id);
+    const signalOrphanCompanyIds = new Set<string>();
+    const signalOrphanIds: string[] = [];
+    for (const s of allLeadSignals) {
+      const meta = s.metadataJson as Record<string, unknown> | null;
+      const hcId = meta?.hubspotCompanyId as string | undefined;
+      if (hcId && !processedCompanyIds.includes(hcId)) {
+        signalOrphanCompanyIds.add(hcId);
+        signalOrphanIds.push(s.id);
+      }
+    }
 
-    if (orphanIds.length === 0) return { count: 0, cursorsCleaned: 0 };
-
-    const deleted = await this.prisma.salesSignal.deleteMany({
-      where: { id: { in: orphanIds } }
+    // 2. Find orphan company IDs from cursor rows (covers cursor-only orphans)
+    const allLeadCursors = await this.prisma.sourceCursor.findMany({
+      where: {
+        companyId,
+        source: { startsWith: "lead-detect:" }
+      },
+      select: { source: true }
     });
 
-    // Also clean up cursors for orphaned companies
-    const orphanCompanyIds = allLeadSignals
-      .filter((s) => orphanIds.includes(s.id))
-      .map((s) => {
-        const meta = s.metadataJson as Record<string, unknown> | null;
-        return meta?.hubspotCompanyId as string;
-      })
-      .filter(Boolean);
+    const cursorOrphanCompanyIds = new Set<string>();
+    for (const c of allLeadCursors) {
+      const hcId = c.source.replace("lead-detect:", "");
+      if (hcId && !processedCompanyIds.includes(hcId)) {
+        cursorOrphanCompanyIds.add(hcId);
+      }
+    }
 
+    // 3. Delete orphan signals
+    let signalsDeleted = 0;
+    if (signalOrphanIds.length > 0) {
+      const deleted = await this.prisma.salesSignal.deleteMany({
+        where: { id: { in: signalOrphanIds } }
+      });
+      signalsDeleted = deleted.count;
+    }
+
+    // 4. Delete orphan cursors (union of signal-derived and cursor-derived orphan IDs)
+    const allOrphanCompanyIds = new Set([...signalOrphanCompanyIds, ...cursorOrphanCompanyIds]);
     let cursorsCleaned = 0;
-    for (const hcId of orphanCompanyIds) {
+    for (const hcId of allOrphanCompanyIds) {
       try {
-        await this.prisma.sourceCursor.deleteMany({
+        const result = await this.prisma.sourceCursor.deleteMany({
           where: { companyId, source: `lead-detect:${hcId}` }
         });
-        cursorsCleaned++;
+        if (result.count > 0) cursorsCleaned++;
       } catch {
         // best effort
       }
     }
 
-    return { count: deleted.count, cursorsCleaned };
+    return { count: signalsDeleted, cursorsCleaned };
   }
 
   // ---- Lease / concurrency helpers ----

@@ -780,8 +780,8 @@ describe("sales detection service", () => {
       const { repos, spies } = buildMockRepos({
         deals: [inScopeDeal, outOfScopeDeal],
         doctrine: {
-          stageLabels: { "stage-new": "New", "stage-opp": "Opportunity validated", "stage-closed": "Closed won" },
-          intelligenceStages: ["New", "Opportunity validated"],
+          stageLabels: { "stage-new": "New", "stage-opp": "Opportunity Validated", "stage-closed": "Closed won" },
+          intelligenceStages: ["New", "Opportunity Validated"],
         },
       });
 
@@ -857,8 +857,8 @@ describe("sales detection service", () => {
         deals: [deal],
         factsPerDeal: new Map([["deal-1", facts]]),
         doctrine: {
-          stageLabels: { "stage-opp": "Opportunity validated" },
-          intelligenceStages: ["Opportunity validated"],
+          stageLabels: { "stage-opp": "Opportunity Validated" },
+          intelligenceStages: ["Opportunity Validated"],
         },
       });
 
@@ -1919,6 +1919,153 @@ describe("sales detection service", () => {
       expect(result).toHaveProperty("leadSignalsCreated");
       expect(result).toHaveProperty("leadOrphansCleaned");
       expect(result).toHaveProperty("errors");
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Merge-blocker targeted tests
+  // -----------------------------------------------------------------------
+
+  describe("merge blockers", () => {
+    it("explicit empty intelligenceStages means no deals in scope + cleanup deletes all managed signals", async () => {
+      const deals = [makeDeal({ stage: "stage-new" }), makeDeal({ id: "deal-2", stage: "stage-opp" })];
+      const { repos, spies } = buildMockRepos({
+        deals,
+        doctrine: {
+          stageLabels: { "stage-new": "New", "stage-opp": "Opportunity Validated" },
+          intelligenceStages: [], // explicitly empty
+        },
+        scopeCleanupCount: 5,
+      });
+
+      const result = await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
+
+      // No deals processed
+      expect(result.dealsScanned).toBe(0);
+      expect(result.dealsSkippedByStage).toBe(2);
+      // Cleanup was called (empty [] passed to deleteSignalsForOutOfScopeDeals means all deals out of scope)
+      expect(spies.deleteSignalsForOutOfScopeDeals).toHaveBeenCalledWith(
+        COMPANY_ID, [], expect.any(Array)
+      );
+      expect(result.staleSignalsCleaned).toBe(5);
+      // No signals created
+      expect(result.signalsCreated).toBe(0);
+    });
+
+    it("lead status change from signaling to non-signaling deletes prior signal and persists cursor", async () => {
+      const company = makeHubspotCompany({ id: "hc-ns", leadStatus: "Nouveau" }); // non-signaling
+      const deal = makeDeal();
+      const { repos, spies } = buildMockRepos({
+        hubspotCompanies: [company],
+        dealsByHubspotCompany: new Map([["hc-ns", [deal]]]),
+        maxActivityTimestamp: new Date("2026-03-10T12:00:00Z"),
+        cursorValues: new Map([
+          // Previous cursor had "Hunted" (signaling) status
+          ["lead-detect:hc-ns", "2026-03-09T10:00:00.000Z|Hunted"],
+        ]),
+        activityCount: 0,
+      });
+
+      const result = await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
+
+      // deleteLeadSignalsForCompany should be called inside the transaction
+      expect(spies.deleteLeadSignalsForCompany).toHaveBeenCalled();
+      // Cursor should be updated with new status "Nouveau"
+      expect(spies.txCursorUpsert).toHaveBeenCalled();
+      const cursorCall = spies.txCursorUpsert.mock.calls[0][0] as any;
+      expect(cursorCall.create.cursor).toContain("Nouveau");
+      // No new signal created (non-signaling status)
+      expect(spies.txUpsert).not.toHaveBeenCalled();
+      expect(result.leadSignalsCreated).toBe(0);
+    });
+
+    it("first-run backlog counting with multiple historical events reports real count", async () => {
+      const company = makeHubspotCompany({ id: "hc-backlog", leadStatus: "Hunted" });
+      const deal = makeDeal();
+      const { repos, spies } = buildMockRepos({
+        hubspotCompanies: [company],
+        dealsByHubspotCompany: new Map([["hc-backlog", [deal]]]),
+        maxActivityTimestamp: new Date("2026-03-15T12:00:00Z"),
+        // No cursor = first run
+        cursorValues: new Map(),
+        activityCount: 7, // 7 historical activities
+      });
+
+      await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
+
+      // countActivitiesForDealsSince should be called with epoch (new Date(0)) for first-run backlog
+      expect(spies.countActivitiesForDealsSince).toHaveBeenCalledWith(
+        [deal.id], new Date(0)
+      );
+      // Signal metadata should report real count
+      expect(spies.txUpsert).toHaveBeenCalled();
+      const signalCreate = (spies.txUpsert.mock.calls[0] as any)[0]?.create;
+      expect(signalCreate.metadataJson.newActivityCount).toBe(7);
+    });
+
+    it("cursor-only orphan: cursor exists but no signal row — both are cleaned", async () => {
+      // Test the real deleteOrphanedLeadSignals logic, not a mock return value.
+      // We construct a SalesRepositoryBundle with a mocked PrismaClient that
+      // returns realistic query results simulating a cursor-only orphan.
+
+      const { SalesRepositoryBundle: RealBundle } = await import("../src/sales/db/sales-repositories.js");
+
+      const mockPrisma = {
+        // salesSignal.findMany returns NO signal rows (the signal was already deleted)
+        salesSignal: {
+          findMany: vi.fn<any>().mockResolvedValue([]),
+          deleteMany: vi.fn<any>().mockResolvedValue({ count: 0 }),
+        },
+        // sourceCursor.findMany returns a cursor for company "orphan-hc" that is NOT in processedCompanyIds
+        sourceCursor: {
+          findMany: vi.fn<any>().mockResolvedValue([
+            { source: "lead-detect:orphan-hc" },
+          ]),
+          deleteMany: vi.fn<any>().mockResolvedValue({ count: 1 }),
+        },
+      } as any;
+
+      const bundle = new RealBundle(mockPrisma);
+      const result = await bundle.deleteOrphanedLeadSignals(
+        COMPANY_ID,
+        [], // no companies were processed this run
+        ["lead_engaged", "lead_ready_for_deal", "lead_re_engaged"]
+      );
+
+      // Signal query was made (found nothing)
+      expect(mockPrisma.salesSignal.findMany).toHaveBeenCalled();
+      // Cursor query was made and found the orphan
+      expect(mockPrisma.sourceCursor.findMany).toHaveBeenCalledWith({
+        where: { companyId: COMPANY_ID, source: { startsWith: "lead-detect:" } },
+        select: { source: true },
+      });
+      // Cursor was deleted for orphan-hc (discovered from cursor row, not signal row)
+      expect(mockPrisma.sourceCursor.deleteMany).toHaveBeenCalledWith({
+        where: { companyId: COMPANY_ID, source: "lead-detect:orphan-hc" },
+      });
+      // No signals deleted (none existed), but cursor was cleaned
+      expect(result.count).toBe(0);
+      expect(result.cursorsCleaned).toBe(1);
+    });
+
+    it("default intelligenceStages uses 'Opportunity Validated' with capital V", async () => {
+      const deals = [
+        makeDeal({ id: "d1", stage: "s1" }),
+        makeDeal({ id: "d2", stage: "s2" }),
+      ];
+      const { repos } = buildMockRepos({
+        deals,
+        doctrine: {
+          stageLabels: { s1: "New", s2: "Opportunity Validated" },
+          // intelligenceStages NOT set → should default to ["New", "Opportunity Validated"]
+        },
+      });
+
+      const result = await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
+
+      // Both deals should be in scope (matching the default with capital V)
+      expect(result.dealsScanned).toBe(2);
+      expect(result.dealsSkippedByStage).toBe(0);
     });
   });
 });
