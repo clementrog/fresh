@@ -82,7 +82,7 @@ function makeFact(overrides?: Partial<{
 // ---------------------------------------------------------------------------
 
 interface TxMock {
-  salesSignal: { create: ReturnType<typeof vi.fn> };
+  salesSignal: { upsert: ReturnType<typeof vi.fn> };
 }
 
 function buildMockRepos(overrides?: {
@@ -92,9 +92,9 @@ function buildMockRepos(overrides?: {
   acquireRunLeaseError?: Error;
   renewLeaseReturns?: boolean | boolean[];
 }) {
-  const txCreate = vi.fn<any>().mockResolvedValue({});
+  const txUpsert = vi.fn<any>().mockResolvedValue({});
   const txMock: TxMock = {
-    salesSignal: { create: txCreate },
+    salesSignal: { upsert: txUpsert },
   };
 
   const deleteDetectionSignalsForDeal = vi.fn<any>().mockResolvedValue({ count: 0 });
@@ -158,7 +158,7 @@ function buildMockRepos(overrides?: {
       deleteDetectionSignalsForDeal,
       listExtractionsForDeal,
       finalizeSyncRun,
-      txCreate,
+      txUpsert,
     },
   };
 }
@@ -170,9 +170,9 @@ const mockLogger = {
   debug: vi.fn(),
 } as any;
 
-/** Extract the `data` payload from a txCreate mock call */
+/** Extract the `create` payload from a txUpsert mock call */
 function callData(call: unknown[]): any {
-  return (call as any)[0]?.data;
+  return (call as any)[0]?.create;
 }
 
 // ---------------------------------------------------------------------------
@@ -207,9 +207,9 @@ describe("sales detection service", () => {
       const result = await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
       expect(result.signalsCreated).toBeGreaterThanOrEqual(1);
-      const createCalls = spies.txCreate.mock.calls;
+      const createCalls = spies.txUpsert.mock.calls;
       const competitorSignals = createCalls.filter(
-        (c: any) => c[0].data.signalType === "competitor_mentioned"
+        (c: any) => c[0].create.signalType === "competitor_mentioned"
       );
       expect(competitorSignals).toHaveLength(1);
       expect(callData(competitorSignals[0]).title).toContain("Salesforce");
@@ -232,8 +232,8 @@ describe("sales detection service", () => {
 
       const result = await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const blockerSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "blocker_identified"
+      const blockerSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "blocker_identified"
       );
       expect(blockerSignals).toHaveLength(1);
       expect(callData(blockerSignals[0]).title).toContain("Security review required");
@@ -258,8 +258,8 @@ describe("sales detection service", () => {
 
       const result = await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const nextStepSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "next_step_missing"
+      const nextStepSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "next_step_missing"
       );
       expect(nextStepSignals).toHaveLength(1);
     });
@@ -288,8 +288,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const nextStepSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "next_step_missing"
+      const nextStepSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "next_step_missing"
       );
       expect(nextStepSignals).toHaveLength(0);
     });
@@ -311,8 +311,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const urgentSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "urgent_timeline"
+      const urgentSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "urgent_timeline"
       );
       expect(urgentSignals).toHaveLength(1);
     });
@@ -334,8 +334,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const urgentSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "urgent_timeline"
+      const urgentSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "urgent_timeline"
       );
       expect(urgentSignals).toHaveLength(0);
     });
@@ -346,8 +346,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const staleSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "deal_stale"
+      const staleSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "deal_stale"
       );
       expect(staleSignals).toHaveLength(1);
       expect(callData(staleSignals[0]).title).toContain("25 days");
@@ -359,8 +359,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const staleSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "deal_stale"
+      const staleSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "deal_stale"
       );
       expect(staleSignals).toHaveLength(0);
     });
@@ -384,8 +384,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const positiveSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "positive_momentum"
+      const positiveSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "positive_momentum"
       );
       expect(positiveSignals).toHaveLength(1);
     });
@@ -409,8 +409,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const positiveSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "positive_momentum"
+      const positiveSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "positive_momentum"
       );
       expect(positiveSignals).toHaveLength(1);
     });
@@ -441,8 +441,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const positiveSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "positive_momentum"
+      const positiveSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "positive_momentum"
       );
       expect(positiveSignals).toHaveLength(0);
     });
@@ -473,8 +473,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const negativeSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "negative_momentum"
+      const negativeSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "negative_momentum"
       );
       expect(negativeSignals).toHaveLength(1);
     });
@@ -498,8 +498,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const negativeSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "negative_momentum"
+      const negativeSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "negative_momentum"
       );
       expect(negativeSignals).toHaveLength(1);
     });
@@ -523,8 +523,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const negativeSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "negative_momentum"
+      const negativeSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "negative_momentum"
       );
       expect(negativeSignals).toHaveLength(0);
     });
@@ -546,8 +546,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const champSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "champion_identified"
+      const champSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "champion_identified"
       );
       expect(champSignals).toHaveLength(1);
       expect(callData(champSignals[0]).title).toContain("Jane CTO");
@@ -570,8 +570,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const budgetSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "budget_surfaced"
+      const budgetSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "budget_surfaced"
       );
       expect(budgetSignals).toHaveLength(1);
     });
@@ -663,7 +663,7 @@ describe("sales detection service", () => {
       const result = await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
       expect(result.signalsCreated).toBe(0);
-      expect(spies.txCreate).not.toHaveBeenCalled();
+      expect(spies.txUpsert).not.toHaveBeenCalled();
     });
 
     it("produces no signals when there are no deals", async () => {
@@ -673,7 +673,7 @@ describe("sales detection service", () => {
 
       expect(result.signalsCreated).toBe(0);
       expect(result.dealsScanned).toBe(0);
-      expect(spies.txCreate).not.toHaveBeenCalled();
+      expect(spies.txUpsert).not.toHaveBeenCalled();
     });
   });
 
@@ -691,8 +691,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const staleSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "deal_stale"
+      const staleSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "deal_stale"
       );
       expect(staleSignals).toHaveLength(1);
     });
@@ -706,8 +706,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const staleSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "deal_stale"
+      const staleSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "deal_stale"
       );
       expect(staleSignals).toHaveLength(1);
     });
@@ -721,8 +721,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const staleSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "deal_stale"
+      const staleSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "deal_stale"
       );
       expect(staleSignals).toHaveLength(0); // 15 < 21
     });
@@ -742,8 +742,8 @@ describe("sales detection service", () => {
         stalenessThresholdDays: 5, // param says 5
       });
 
-      const staleSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "deal_stale"
+      const staleSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "deal_stale"
       );
       // staleDays 8 >= param 5 → signal fires
       // Note: looking at the code, param is used as default, but doctrine overrides it
@@ -807,11 +807,11 @@ describe("sales detection service", () => {
       await runDetection({ companyId: COMPANY_ID, repos: repos2, logger: mockLogger });
 
       // deal_stale uses weekKey from lastActivityDate for dedup
-      const staleSignals1 = spies1.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "deal_stale"
+      const staleSignals1 = spies1.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "deal_stale"
       );
-      const staleSignals2 = spies2.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "deal_stale"
+      const staleSignals2 = spies2.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "deal_stale"
       );
 
       expect(staleSignals1).toHaveLength(1);
@@ -843,8 +843,8 @@ describe("sales detection service", () => {
 
       // positive_momentum should fire — the window is relative to lastActivityDate (2025-06-01),
       // not current wall-clock time
-      const positiveSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "positive_momentum"
+      const positiveSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "positive_momentum"
       );
       expect(positiveSignals).toHaveLength(1);
     });
@@ -911,8 +911,8 @@ describe("sales detection service", () => {
       await runDetection({ companyId: COMPANY_ID, repos: repos1, logger: mockLogger });
       await runDetection({ companyId: COMPANY_ID, repos: repos2, logger: mockLogger });
 
-      const ids1 = spies1.txCreate.mock.calls.map((c: any) => c[0].data.id).sort();
-      const ids2 = spies2.txCreate.mock.calls.map((c: any) => c[0].data.id).sort();
+      const ids1 = spies1.txUpsert.mock.calls.map((c: any) => c[0].create.id).sort();
+      const ids2 = spies2.txUpsert.mock.calls.map((c: any) => c[0].create.id).sort();
       expect(ids1).toEqual(ids2);
     });
   });
@@ -944,12 +944,12 @@ describe("sales detection service", () => {
       const { repos: repos2, spies: spies2 } = buildMockRepos({ deals: [dealWeek12] });
       await runDetection({ companyId: COMPANY_ID, repos: repos2, logger: mockLogger });
 
-      const staleId1 = spies1.txCreate.mock.calls
-        .filter((c: any) => c[0].data.signalType === "deal_stale")
-        .map((c: any) => c[0].data.id)[0];
-      const staleId2 = spies2.txCreate.mock.calls
-        .filter((c: any) => c[0].data.signalType === "deal_stale")
-        .map((c: any) => c[0].data.id)[0];
+      const staleId1 = spies1.txUpsert.mock.calls
+        .filter((c: any) => c[0].create.signalType === "deal_stale")
+        .map((c: any) => c[0].create.id)[0];
+      const staleId2 = spies2.txUpsert.mock.calls
+        .filter((c: any) => c[0].create.signalType === "deal_stale")
+        .map((c: any) => c[0].create.id)[0];
 
       expect(staleId1).toBeDefined();
       expect(staleId2).toBeDefined();
@@ -976,12 +976,12 @@ describe("sales detection service", () => {
       const { repos: repos2, spies: spies2 } = buildMockRepos({ deals: [dealFriday] });
       await runDetection({ companyId: COMPANY_ID, repos: repos2, logger: mockLogger });
 
-      const staleId1 = spies1.txCreate.mock.calls
-        .filter((c: any) => c[0].data.signalType === "deal_stale")
-        .map((c: any) => c[0].data.id)[0];
-      const staleId2 = spies2.txCreate.mock.calls
-        .filter((c: any) => c[0].data.signalType === "deal_stale")
-        .map((c: any) => c[0].data.id)[0];
+      const staleId1 = spies1.txUpsert.mock.calls
+        .filter((c: any) => c[0].create.signalType === "deal_stale")
+        .map((c: any) => c[0].create.id)[0];
+      const staleId2 = spies2.txUpsert.mock.calls
+        .filter((c: any) => c[0].create.signalType === "deal_stale")
+        .map((c: any) => c[0].create.id)[0];
 
       expect(staleId1).toBeDefined();
       expect(staleId2).toBeDefined();
@@ -1008,8 +1008,8 @@ describe("sales detection service", () => {
       });
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const positiveSignal = spies.txCreate.mock.calls.find(
-        (c: any) => c[0].data.signalType === "positive_momentum"
+      const positiveSignal = spies.txUpsert.mock.calls.find(
+        (c: any) => c[0].create.signalType === "positive_momentum"
       );
       expect(positiveSignal).toBeDefined();
 
@@ -1176,8 +1176,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const nextStepSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "next_step_missing"
+      const nextStepSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "next_step_missing"
       );
       expect(nextStepSignals).toHaveLength(0);
     });
@@ -1188,8 +1188,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const staleSignal = spies.txCreate.mock.calls.find(
-        (c: any) => c[0].data.signalType === "deal_stale"
+      const staleSignal = spies.txUpsert.mock.calls.find(
+        (c: any) => c[0].create.signalType === "deal_stale"
       );
       expect(staleSignal).toBeDefined();
       // Signal ID should incorporate "unknown" as the week key
@@ -1220,8 +1220,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const competitorSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "competitor_mentioned"
+      const competitorSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "competitor_mentioned"
       );
       expect(competitorSignals).toHaveLength(2);
     });
@@ -1241,7 +1241,7 @@ describe("sales detection service", () => {
         if (txCallCount === 1) {
           throw new Error("DB timeout on deal-1");
         }
-        return fn({ salesSignal: { create: spies.txCreate } });
+        return fn({ salesSignal: { create: spies.txUpsert } });
       });
 
       const result = await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
@@ -1258,8 +1258,8 @@ describe("sales detection service", () => {
 
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
-      const staleSignal = spies.txCreate.mock.calls.find(
-        (c: any) => c[0].data.signalType === "deal_stale"
+      const staleSignal = spies.txUpsert.mock.calls.find(
+        (c: any) => c[0].create.signalType === "deal_stale"
       );
       expect(staleSignal).toBeDefined();
       expect(callData(staleSignal!).companyId).toBe(COMPANY_ID);
@@ -1290,8 +1290,8 @@ describe("sales detection service", () => {
       // is outside the 30-day window. However champion check uses ctx.facts (all facts),
       // not recentFacts. Since there's no champion, and positive sentiment is outside
       // window, positive_momentum should not fire.
-      const positiveSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "positive_momentum"
+      const positiveSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "positive_momentum"
       );
       expect(positiveSignals).toHaveLength(0);
     });
@@ -1318,8 +1318,8 @@ describe("sales detection service", () => {
 
       // negative_momentum should NOT fire because the fact is after lastActivityDate
       // (differenceInDays returns negative, fails daysDiff >= 0 check)
-      const negativeSignals = spies.txCreate.mock.calls.filter(
-        (c: any) => c[0].data.signalType === "negative_momentum"
+      const negativeSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "negative_momentum"
       );
       expect(negativeSignals).toHaveLength(0);
     });

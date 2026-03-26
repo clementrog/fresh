@@ -310,14 +310,18 @@ export async function runDetection(params: {
             })),
           };
 
-          // Apply rules
+          // Apply rules and deduplicate by signal ID
           const signalDrafts = applyRules(ctx, stalenessThreshold);
+          const seen = new Set<string>();
 
-          // Create signals
           for (const draft of signalDrafts) {
             const signalId = salesSignalDbId(companyId, [draft.signalType, ...draft.dedupParts]);
-            await tx.salesSignal.create({
-              data: {
+            if (seen.has(signalId)) continue;
+            seen.add(signalId);
+
+            await tx.salesSignal.upsert({
+              where: { id: signalId },
+              create: {
                 id: signalId,
                 companyId,
                 signalType: draft.signalType,
@@ -328,6 +332,7 @@ export async function runDetection(params: {
                 metadataJson: {},
                 detectedAt: new Date(),
               },
+              update: {},
             });
             result.signalsCreated++;
           }
