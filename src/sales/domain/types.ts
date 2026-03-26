@@ -7,7 +7,16 @@ export const SALES_SIGNAL_TYPES = [
   "proof_created",
   "deal_state_change",
   "content_published",
-  "market_event"
+  "market_event",
+  "competitor_mentioned",
+  "blocker_identified",
+  "next_step_missing",
+  "urgent_timeline",
+  "deal_stale",
+  "positive_momentum",
+  "negative_momentum",
+  "champion_identified",
+  "budget_surfaced"
 ] as const;
 
 export type SalesSignalType = (typeof SALES_SIGNAL_TYPES)[number];
@@ -62,7 +71,8 @@ export const EXTRACTION_CATEGORIES = [
   "urgency_timing",
   "budget_sensitivity",
   "persona_stakeholder",
-  "compliance_security"
+  "compliance_security",
+  "sentiment"
 ] as const;
 
 export type ExtractionCategory = (typeof EXTRACTION_CATEGORIES)[number];

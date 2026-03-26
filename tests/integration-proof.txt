@@ -1,43 +1,51 @@
 
  RUN  v3.2.4 /Users/clement/projects/fresh
 
- ✓ tests/repositories.integration.test.ts > repository DB integrity > rejects duplicate fingerprints within the same company 33ms
- ✓ tests/repositories.integration.test.ts > repository DB integrity > cascades evidence deletion when a source item is removed 7ms
- ✓ tests/admin-dispositions.integration.test.ts > disposition filter integration > seeds fixtures and validates disposition filters against real DB 39ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listEditorialConfigs returns only configs for seeded company ordered by version DESC 21ms
+ ✓ tests/repositories.integration.test.ts > repository DB integrity > rejects duplicate fingerprints within the same company 36ms
+ ✓ tests/repositories.integration.test.ts > repository DB integrity > cascades evidence deletion when a source item is removed 9ms
+ ✓ tests/admin-dispositions.integration.test.ts > disposition filter integration > seeds fixtures and validates disposition filters against real DB 45ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > seeds test company 6ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > acquires a lease when no running run exists 6ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > blocks a second lease while the first is live 7ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > takes over an expired lease 5ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > renewLease returns true when run is still running 3ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > renewLease returns false when run was taken over 6ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > allows concurrent leases for different runTypes 5ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > atomic lease acquisition serializes concurrent starters 6ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listEditorialConfigs returns only configs for seeded company ordered by version DESC 28ms
  ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getEditorialConfig returns full layer JSON and returns null for wrong-company ID 5ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getUser returns full baseProfile JSON and _count.ownedOpportunities 6ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listSourceConfigs returns both enabled and disabled configs for seeded company 6ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getUser returns full baseProfile JSON and _count.ownedOpportunities 10ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listSourceConfigs returns both enabled and disabled configs for seeded company 4ms
  ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listMarketQueries with enabled yes returns only enabled 5ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > countMarketQueries matches list count 6ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDraftProfileIds returns distinct profileIds for seeded company 6ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDrafts returns drafts with opportunity relation and respects filters 6ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getRun returns run with costEntries ordered by createdAt 7ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getDraft returns draft with included opportunity and evidence relations 10ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > countMarketQueries matches list count 13ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDraftProfileIds returns distinct profileIds for seeded company 14ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDrafts returns drafts with opportunity relation and respects filters 20ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getRun returns run with costEntries ordered by createdAt 16ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getDraft returns draft with included opportunity and evidence relations 20ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates companies for the tests 6ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > upserts a deal and retrieves it by company-scoped lookup 4ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > upserts a deal and retrieves it by company-scoped lookup 6ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > upsert is idempotent — same deal twice produces one row 3ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates a signal 3ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates a recommendation with deal and signal FKs 6ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > tracks recommendation actions as discrete events 7ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates a signal 4ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates a recommendation with deal and signal FKs 5ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > tracks recommendation actions as discrete events 5ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > updates recommendation status 3ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > upserts and retrieves doctrine 2ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > upserts and retrieves doctrine 3ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates and retrieves a sync run 2ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > manages cursors for incremental sync 4ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates an activity and cleans up raw text 4ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates extracted facts for a deal 2ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > two companies with the same HubSpot external IDs stay isolated 7ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > manages cursors for incremental sync 2ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates an activity and cleans up raw text 6ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates extracted facts for a deal 3ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > two companies with the same HubSpot external IDs stay isolated 9ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > links a deal to a HubSpot company using the internal row ID 5ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > linkDealCompany is idempotent 2ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig passes when DB, schema, HubSpot token, and LLM key are present 1ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig verifies Sales tables exist 1ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig verifies Sales tables exist 0ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig fails when HUBSPOT_ACCESS_TOKEN is missing 0ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig fails when LLM key is missing for configured provider 1ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig fails when LLM key is missing for configured provider 0ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig validates openai key when SALES_LLM_PROVIDER is openai 1ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig does not call any external API (token is not validated) 0ms
 
- Test Files  4 passed (4)
-      Tests  34 passed (34)
-   Start at  14:27:25
-   Duration  382ms (transform 145ms, setup 0ms, collect 353ms, tests 245ms, environment 0ms, prepare 187ms)
+ Test Files  5 passed (5)
+      Tests  42 passed (42)
+   Start at  22:14:54
+   Duration  847ms (transform 188ms, setup 0ms, collect 836ms, tests 385ms, environment 0ms, prepare 317ms)
 

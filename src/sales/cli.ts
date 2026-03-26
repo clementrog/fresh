@@ -3,6 +3,7 @@ import { loadEnv } from "../config/env.js";
 import { createLogger } from "../lib/logger.js";
 import { SalesApp } from "./app.js";
 import { translateSalesError } from "./connectors/hubspot.js";
+import { ConcurrentRunError } from "./db/sales-repositories.js";
 import type { AppEnv } from "../config/env.js";
 import type { PrismaClient } from "@prisma/client";
 import type { Logger } from "pino";
@@ -92,11 +93,78 @@ export async function runSalesCommand(opts: SalesCommandOpts): Promise<void> {
       break;
     }
 
-    case "sales:extract":
-    case "sales:detect":
+    case "sales:extract": {
+      const companySlug = env.DEFAULT_COMPANY_SLUG ?? "default";
+      const company = await prisma.company.findUnique({ where: { slug: companySlug } });
+      if (!company) {
+        logger.error(`Company "${companySlug}" not found.`);
+        exit(1);
+        return;
+      }
+      const reprocess = process.argv.includes("--reprocess");
+      logger.info(`Starting extraction for company "${company.name}" (${company.id})${reprocess ? " [reprocess]" : ""}`);
+      try {
+        const result = await app.runExtract(company.id, { reprocess });
+        logger.info({
+          processed: result.activitiesProcessed,
+          skipped: result.activitiesSkipped,
+          facts: result.factsCreated,
+          retryable: result.retryableErrors,
+          exhausted: result.exhaustedItems,
+          costUsd: result.costUsd,
+          rateLimited: result.rateLimited,
+        }, "Extraction completed");
+        for (const w of result.warnings) {
+          logger.warn(w);
+        }
+      } catch (error) {
+        if (error instanceof ConcurrentRunError) {
+          logger.error(error.message);
+          exit(1);
+          return;
+        }
+        const t = translateSalesError(error);
+        logger.error(t.message);
+        logger.error({ err: error }, "Raw error details");
+        exit(t.exitCode);
+      }
+      break;
+    }
+
+    case "sales:detect": {
+      const companySlug = env.DEFAULT_COMPANY_SLUG ?? "default";
+      const company = await prisma.company.findUnique({ where: { slug: companySlug } });
+      if (!company) {
+        logger.error(`Company "${companySlug}" not found.`);
+        exit(1);
+        return;
+      }
+      logger.info(`Starting signal detection for company "${company.name}" (${company.id})`);
+      try {
+        const result = await app.runDetect(company.id);
+        logger.info({
+          signals: result.signalsCreated,
+          removed: result.signalsRemoved,
+          deals: result.dealsScanned,
+          errors: result.errors.length,
+        }, "Detection completed");
+      } catch (error) {
+        if (error instanceof ConcurrentRunError) {
+          logger.error(error.message);
+          exit(1);
+          return;
+        }
+        const t = translateSalesError(error);
+        logger.error(t.message);
+        logger.error({ err: error }, "Raw error details");
+        exit(t.exitCode);
+      }
+      break;
+    }
+
     case "sales:match":
     case "sales:cleanup":
-      logger.warn(`Command ${command} is not yet implemented (Slice 3+)`);
+      logger.warn(`Command ${command} is not yet implemented (Slice 4+)`);
       break;
 
     default:

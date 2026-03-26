@@ -2,9 +2,14 @@ import type { PrismaClient } from "@prisma/client";
 import { Client } from "@hubspot/api-client";
 import type { AppEnv } from "../config/env.js";
 import { createLogger } from "../lib/logger.js";
+import { LlmClient } from "../services/llm.js";
 import { SalesRepositoryBundle } from "./db/sales-repositories.js";
 import { createHubSpotApiAdapter, HubSpotSyncService, runPreflight } from "./connectors/hubspot.js";
 import type { SyncResult, PreflightResult } from "./connectors/hubspot.js";
+import { runExtraction } from "./services/extraction.js";
+import type { ExtractionResult } from "./services/extraction.js";
+import { runDetection } from "./services/detection.js";
+import type { DetectionResult } from "./services/detection.js";
 
 export interface ConfigCheckResult {
   ok: boolean;
@@ -119,5 +124,27 @@ export class SalesApp {
     );
 
     return result;
+  }
+
+  async runExtract(companyId: string, opts?: { reprocess?: boolean }): Promise<ExtractionResult> {
+    const logger = createLogger(this.env);
+    const repos = new SalesRepositoryBundle(this.prisma);
+
+    if (opts?.reprocess) {
+      const reset = await repos.resetExtractions(companyId);
+      logger.info({ count: reset.count }, "Reset extractions for reprocessing");
+    }
+
+    const llmClient = new LlmClient(this.env, logger);
+    const provider = this.env.SALES_LLM_PROVIDER ?? "openai";
+    const model = this.env.SALES_LLM_MODEL ?? "gpt-4.1-mini";
+
+    return runExtraction({ companyId, repos, llmClient, logger, provider, model });
+  }
+
+  async runDetect(companyId: string): Promise<DetectionResult> {
+    const logger = createLogger(this.env);
+    const repos = new SalesRepositoryBundle(this.prisma);
+    return runDetection({ companyId, repos, logger });
   }
 }

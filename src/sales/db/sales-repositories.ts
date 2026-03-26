@@ -589,7 +589,8 @@ export class SalesRepositoryBundle {
         finishedAt: new Date(),
         countersJson: counters,
         warningsJson: warnings,
-        notes: notes ?? null
+        notes: notes ?? null,
+        leaseExpiresAt: null
       }
     });
   }
@@ -627,9 +628,134 @@ export class SalesRepositoryBundle {
     });
   }
 
+  // ---- Extraction helpers ----
+
+  async deleteFactsForActivity(activityId: string, tx: PrismaTransaction = this.prisma) {
+    return tx.salesExtractedFact.deleteMany({ where: { activityId } });
+  }
+
+  async incrementExtractionAttempts(activityId: string): Promise<number> {
+    const updated = await this.prisma.salesActivity.update({
+      where: { id: activityId },
+      data: { extractionAttempts: { increment: 1 } },
+      select: { extractionAttempts: true }
+    });
+    return updated.extractionAttempts;
+  }
+
+  async resetExtractions(companyId: string) {
+    return this.prisma.salesActivity.updateMany({
+      where: {
+        companyId,
+        rawTextCleaned: false,
+        body: { not: null }
+      },
+      data: { extractedAt: null, extractionAttempts: 0 }
+    });
+  }
+
+  // ---- Detection helpers ----
+
+  async deleteDetectionSignalsForDeal(
+    dealId: string,
+    managedTypes: string[],
+    tx: PrismaTransaction = this.prisma
+  ) {
+    return tx.salesSignal.deleteMany({
+      where: { dealId, signalType: { in: managedTypes } }
+    });
+  }
+
+  // ---- Lease / concurrency helpers ----
+
+  static readonly LEASE_DURATION_MS = 300_000; // 5 minutes
+
+  async acquireRunLease(params: {
+    companyId: string;
+    runType: string;
+    runId: string;
+    source?: string;
+  }) {
+    return this.prisma.$transaction(async (tx) => {
+      // Advisory lock serializes concurrent starters for (companyId, runType)
+      const lockKey = deterministicInt32(params.companyId + ":" + params.runType);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${lockKey})`;
+
+      // Check for existing live lease
+      const existing = await tx.syncRun.findFirst({
+        where: { companyId: params.companyId, runType: params.runType, status: "running" },
+        orderBy: { startedAt: "desc" }
+      });
+
+      if (existing && existing.leaseExpiresAt && existing.leaseExpiresAt > new Date()) {
+        throw new ConcurrentRunError(existing.id, params.runType);
+      }
+
+      // Expire abandoned run if lease has lapsed
+      if (existing) {
+        await tx.syncRun.update({
+          where: { id: existing.id },
+          data: { status: "failed", finishedAt: new Date(), notes: "Lease expired — abandoned" }
+        });
+      }
+
+      // Create new run with lease
+      return tx.syncRun.create({
+        data: {
+          id: params.runId,
+          companyId: params.companyId,
+          runType: params.runType,
+          source: params.source ?? null,
+          status: "running",
+          startedAt: new Date(),
+          leaseExpiresAt: new Date(Date.now() + SalesRepositoryBundle.LEASE_DURATION_MS),
+          countersJson: {},
+          warningsJson: [],
+          notionPageFingerprint: ""
+        }
+      });
+    });
+  }
+
+  async renewLease(runId: string): Promise<boolean> {
+    const result = await this.prisma.syncRun.updateMany({
+      where: { id: runId, status: "running" },
+      data: { leaseExpiresAt: new Date(Date.now() + SalesRepositoryBundle.LEASE_DURATION_MS) }
+    });
+    return result.count > 0;
+  }
+
   // ---- Transaction helper ----
 
   async transaction<T>(fn: (tx: PrismaTransaction) => Promise<T>): Promise<T> {
     return this.prisma.$transaction(fn);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Concurrency error
+// ---------------------------------------------------------------------------
+
+export class ConcurrentRunError extends Error {
+  readonly blockingRunId: string;
+  readonly runType: string;
+
+  constructor(blockingRunId: string, runType: string) {
+    super(`Another ${runType} run is already in progress (run ${blockingRunId})`);
+    this.name = "ConcurrentRunError";
+    this.blockingRunId = blockingRunId;
+    this.runType = runType;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Utility: deterministic 32-bit int for advisory lock key
+// ---------------------------------------------------------------------------
+
+function deterministicInt32(input: string): number {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) - hash + input.charCodeAt(i)) | 0;
+  }
+  return hash;
 }

@@ -190,6 +190,7 @@ model SyncRun {
   tokenTotalsJson  Json?
   notionPageId     String?
   notionPageFingerprint String
+  leaseExpiresAt   DateTime?
   createdAt        DateTime @default(now())
 
   company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
@@ -406,6 +407,7 @@ model SalesActivity {
   extractedAt          DateTime?
   rawTextExpiresAt     DateTime?
   rawTextCleaned       Boolean   @default(false)
+  extractionAttempts   Int       @default(0)
   createdAt            DateTime  @default(now())
 
   company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
