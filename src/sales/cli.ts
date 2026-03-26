@@ -162,6 +162,30 @@ export async function runSalesCommand(opts: SalesCommandOpts): Promise<void> {
       break;
     }
 
+    case "sales:resolve-stages": {
+      const companySlug = env.DEFAULT_COMPANY_SLUG ?? "default";
+      const company = await prisma.company.findUnique({ where: { slug: companySlug } });
+      if (!company) {
+        logger.error(`Company "${companySlug}" not found.`);
+        exit(1);
+        return;
+      }
+      logger.info(`Resolving pipeline stage labels for company "${company.name}" (${company.id})`);
+      try {
+        const stageLabels = await app.runResolveStages(company.id);
+        for (const [id, label] of Object.entries(stageLabels)) {
+          logger.info(`  ${id} → ${label}`);
+        }
+        logger.info("Stage labels saved to doctrine");
+      } catch (error) {
+        const t = translateSalesError(error);
+        logger.error(t.message);
+        logger.error({ err: error }, "Raw error details");
+        exit(t.exitCode);
+      }
+      break;
+    }
+
     case "sales:match":
     case "sales:cleanup":
       logger.warn(`Command ${command} is not yet implemented (Slice 4+)`);

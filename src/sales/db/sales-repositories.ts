@@ -666,6 +666,144 @@ export class SalesRepositoryBundle {
     });
   }
 
+  // ---- Stage-aware helpers ----
+
+  async listDealsForStageCheck(companyId: string, dealIds: string[]): Promise<Map<string, string>> {
+    if (dealIds.length === 0) return new Map();
+    const deals = await this.prisma.salesDeal.findMany({
+      where: { companyId, id: { in: dealIds } },
+      select: { id: true, stage: true }
+    });
+    return new Map(deals.map((d) => [d.id, d.stage]));
+  }
+
+  async deleteSignalsForOutOfScopeDeals(
+    companyId: string,
+    intelligenceStageIds: string[],
+    managedTypes: string[]
+  ) {
+    // Find deal IDs NOT in intelligence stages
+    const outOfScopeDeals = await this.prisma.salesDeal.findMany({
+      where: { companyId, stage: { notIn: intelligenceStageIds } },
+      select: { id: true }
+    });
+    if (outOfScopeDeals.length === 0) return { count: 0 };
+
+    const outOfScopeDealIds = outOfScopeDeals.map((d) => d.id);
+    return this.prisma.salesSignal.deleteMany({
+      where: {
+        companyId,
+        dealId: { in: outOfScopeDealIds },
+        signalType: { in: managedTypes }
+      }
+    });
+  }
+
+  // ---- Lead detection helpers ----
+
+  async listHubspotCompaniesWithLeadStatus(companyId: string) {
+    return this.prisma.salesHubspotCompany.findMany({
+      where: {
+        companyId,
+        propertiesJson: { path: ["hs_lead_status"], not: "" }
+      }
+    });
+  }
+
+  async listDealsByHubspotCompany(salesCompanyId: string) {
+    const links = await this.prisma.dealCompany.findMany({
+      where: { salesCompanyId },
+      include: { deal: true }
+    });
+    return links.map((l) => l.deal);
+  }
+
+  async maxActivityTimestampForDeals(dealIds: string[], after?: Date): Promise<Date | null> {
+    if (dealIds.length === 0) return null;
+    const result = await this.prisma.salesActivity.aggregate({
+      where: {
+        dealId: { in: dealIds },
+        ...(after ? { timestamp: { gt: after } } : {})
+      },
+      _max: { timestamp: true }
+    });
+    return result._max.timestamp;
+  }
+
+  async countActivitiesForDealsSince(dealIds: string[], after: Date): Promise<number> {
+    if (dealIds.length === 0) return 0;
+    return this.prisma.salesActivity.count({
+      where: { dealId: { in: dealIds }, timestamp: { gt: after } }
+    });
+  }
+
+  async deleteLeadSignalsForCompany(
+    salesHubspotCompanyId: string,
+    managedTypes: string[],
+    tx: PrismaTransaction = this.prisma
+  ) {
+    return tx.salesSignal.deleteMany({
+      where: {
+        dealId: null,
+        signalType: { in: managedTypes },
+        metadataJson: { path: ["hubspotCompanyId"], equals: salesHubspotCompanyId }
+      }
+    });
+  }
+
+  async deleteOrphanedLeadSignals(
+    companyId: string,
+    processedCompanyIds: string[],
+    managedTypes: string[]
+  ) {
+    // Delete lead signals for companies NOT in processedCompanyIds
+    const allLeadSignals = await this.prisma.salesSignal.findMany({
+      where: {
+        companyId,
+        dealId: null,
+        signalType: { in: managedTypes }
+      },
+      select: { id: true, metadataJson: true }
+    });
+
+    const orphanIds = allLeadSignals
+      .filter((s) => {
+        const meta = s.metadataJson as Record<string, unknown> | null;
+        const hcId = meta?.hubspotCompanyId as string | undefined;
+        return hcId && !processedCompanyIds.includes(hcId);
+      })
+      .map((s) => s.id);
+
+    if (orphanIds.length === 0) return { count: 0, cursorsCleaned: 0 };
+
+    const deleted = await this.prisma.salesSignal.deleteMany({
+      where: { id: { in: orphanIds } }
+    });
+
+    // Also clean up cursors for orphaned companies
+    const orphanCompanyIds = allLeadSignals
+      .filter((s) => orphanIds.includes(s.id))
+      .map((s) => {
+        const meta = s.metadataJson as Record<string, unknown> | null;
+        return meta?.hubspotCompanyId as string;
+      })
+      .filter(Boolean);
+
+    let cursorsCleaned = 0;
+    for (const hcId of orphanCompanyIds) {
+      try {
+        await this.prisma.sourceCursor.deleteMany({
+          where: { companyId, source: `lead-detect:${hcId}` }
+        });
+        cursorsCleaned++;
+      } catch {
+        // best effort
+      }
+    }
+
+    return { count: deleted.count, cursorsCleaned };
+  }
+
   // ---- Lease / concurrency helpers ----
 
   static readonly LEASE_DURATION_MS = 300_000; // 5 minutes

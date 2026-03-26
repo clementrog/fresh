@@ -5,6 +5,7 @@ import type { SalesRepositoryBundle } from "../db/sales-repositories.js";
 import { salesExtractedFactDbId } from "../db/sales-repositories.js";
 import { createDeterministicId } from "../../lib/ids.js";
 import type { LlmProvider } from "../../domain/types.js";
+import type { SalesDoctrineConfig } from "../domain/types.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -45,6 +46,7 @@ export type ActivityExtractionOutput = z.infer<typeof activityExtractionSchema>;
 export interface ExtractionResult {
   activitiesProcessed: number;
   activitiesSkipped: number;
+  stageSkipped: number;
   factsCreated: number;
   retryableErrors: number;
   terminalSkips: number;
@@ -213,6 +215,7 @@ export async function runExtraction(params: {
   const result: ExtractionResult = {
     activitiesProcessed: 0,
     activitiesSkipped: 0,
+    stageSkipped: 0,
     factsCreated: 0,
     retryableErrors: 0,
     terminalSkips: 0,
@@ -231,8 +234,40 @@ export async function runExtraction(params: {
   let leaseLost = false;
 
   try {
-    // 2. Get unextracted activities
+    // 2. Load doctrine for stage filtering
+    let intelligenceStageIds: Set<string> | null = null;
+    try {
+      const doctrine = await repos.getLatestDoctrine(companyId);
+      if (doctrine?.doctrineJson) {
+        const config = doctrine.doctrineJson as unknown as SalesDoctrineConfig;
+        const stageLabels = config.stageLabels;
+        const intelligenceStages = config.intelligenceStages ?? ["New", "Opportunity Validated"];
+        if (stageLabels && Object.keys(stageLabels).length > 0) {
+          intelligenceStageIds = new Set<string>();
+          for (const [id, label] of Object.entries(stageLabels)) {
+            if (intelligenceStages.includes(label)) {
+              intelligenceStageIds.add(id);
+            }
+          }
+        }
+      }
+    } catch {
+      logger.warn("Could not load doctrine for stage filtering — processing all activities");
+    }
+
+    if (!intelligenceStageIds) {
+      logger.warn("No stage labels configured — processing all activities");
+    }
+
+    // 3. Get unextracted activities
     const activities = await repos.listUnextractedActivities(companyId, batchSize);
+
+    // Build deal-stage cache for stage filtering
+    let dealStageMap: Map<string, string> | null = null;
+    if (intelligenceStageIds) {
+      const dealIds = [...new Set(activities.filter((a) => a.dealId).map((a) => a.dealId!))];
+      dealStageMap = await repos.listDealsForStageCheck(companyId, dealIds);
+    }
 
     // 3. Process each activity
     for (const activity of activities) {
@@ -256,6 +291,21 @@ export async function runExtraction(params: {
       // Defensive null-body guard (concurrent cleanup race)
       if (activity.body == null) {
         continue;
+      }
+
+      // Stage filtering: skip activities for deals outside intelligence scope
+      if (intelligenceStageIds && activity.dealId && dealStageMap) {
+        const dealStage = dealStageMap.get(activity.dealId);
+        if (dealStage && !intelligenceStageIds.has(dealStage)) {
+          await repos.transaction(async (tx) => {
+            await tx.salesActivity.update({
+              where: { id: activity.id },
+              data: { extractedAt: new Date() }
+            });
+          });
+          result.stageSkipped++;
+          continue;
+        }
       }
 
       // Structural skips
@@ -436,6 +486,7 @@ export async function runExtraction(params: {
         {
           activitiesProcessed: result.activitiesProcessed,
           activitiesSkipped: result.activitiesSkipped,
+          stageSkipped: result.stageSkipped,
           factsCreated: result.factsCreated,
           retryableErrors: result.retryableErrors,
           terminalSkips: result.terminalSkips,

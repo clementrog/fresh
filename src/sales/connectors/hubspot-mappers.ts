@@ -33,6 +33,7 @@ export const COMPANY_PROPERTIES = [
   "domain",
   "industry",
   "numberofemployees",
+  "hs_lead_status",
 ] as const;
 
 export const ENGAGEMENT_PROPERTIES_BY_TYPE: Record<EngagementType, readonly string[]> = {

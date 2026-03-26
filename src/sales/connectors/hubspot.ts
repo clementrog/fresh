@@ -413,6 +413,26 @@ export interface PreflightHubSpotClient {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Stage label resolution
+// ---------------------------------------------------------------------------
+
+export async function fetchPipelineStageMap(
+  client: PreflightHubSpotClient,
+  pipelineId: string
+): Promise<Map<string, string>> {
+  const resp = await client.crm.pipelines.pipelinesApi.getById("deals", pipelineId);
+  const stages = Array.isArray(resp.stages) ? resp.stages : [];
+  const map = new Map<string, string>();
+  for (const stage of stages) {
+    const s = stage as { id?: string; label?: string };
+    if (s.id && s.label) {
+      map.set(s.id, s.label);
+    }
+  }
+  return map;
+}
+
 const ASSOC_PROBE_PATHS: Array<{ toType: string; label: string }> = [
   { toType: "contacts", label: "deal→contacts" },
   { toType: "companies", label: "deal→companies" },

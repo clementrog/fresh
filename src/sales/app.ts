@@ -4,8 +4,9 @@ import type { AppEnv } from "../config/env.js";
 import { createLogger } from "../lib/logger.js";
 import { LlmClient } from "../services/llm.js";
 import { SalesRepositoryBundle } from "./db/sales-repositories.js";
-import { createHubSpotApiAdapter, HubSpotSyncService, runPreflight } from "./connectors/hubspot.js";
+import { createHubSpotApiAdapter, HubSpotSyncService, runPreflight, fetchPipelineStageMap } from "./connectors/hubspot.js";
 import type { SyncResult, PreflightResult } from "./connectors/hubspot.js";
+import type { SalesDoctrineConfig } from "./domain/types.js";
 import { runExtraction } from "./services/extraction.js";
 import type { ExtractionResult } from "./services/extraction.js";
 import { runDetection } from "./services/detection.js";
@@ -146,5 +147,47 @@ export class SalesApp {
     const logger = createLogger(this.env);
     const repos = new SalesRepositoryBundle(this.prisma);
     return runDetection({ companyId, repos, logger });
+  }
+
+  async runResolveStages(companyId: string): Promise<Record<string, string>> {
+    if (!this.env.HUBSPOT_ACCESS_TOKEN) {
+      throw new Error("HUBSPOT_ACCESS_TOKEN is not configured");
+    }
+
+    const logger = createLogger(this.env);
+    const repos = new SalesRepositoryBundle(this.prisma);
+    const client = new Client({ accessToken: this.env.HUBSPOT_ACCESS_TOKEN });
+
+    // Load doctrine
+    const doctrine = await repos.getLatestDoctrine(companyId);
+    if (!doctrine) {
+      throw new Error("No doctrine found — run sales:preflight first to set up doctrine");
+    }
+
+    const pipelineId = (doctrine.doctrineJson as unknown as SalesDoctrineConfig).hubspotPipelineId;
+    if (!pipelineId) {
+      throw new Error("Doctrine missing hubspotPipelineId");
+    }
+
+    // Fetch stage labels from HubSpot
+    const stageMap = await fetchPipelineStageMap(client, pipelineId);
+    const stageLabels: Record<string, string> = {};
+    for (const [id, label] of stageMap) {
+      stageLabels[id] = label;
+    }
+
+    // Merge into doctrine (in-place update, same version)
+    const existingConfig = doctrine.doctrineJson as unknown as SalesDoctrineConfig;
+    const updatedConfig: SalesDoctrineConfig = {
+      ...existingConfig,
+      stageLabels,
+      intelligenceStages: existingConfig.intelligenceStages ?? ["New", "Opportunity Validated"],
+    };
+
+    await repos.upsertDoctrine(companyId, doctrine.version, updatedConfig);
+    logger.info({ stageLabels, intelligenceStages: updatedConfig.intelligenceStages },
+      "Stage labels resolved and saved to doctrine");
+
+    return stageLabels;
   }
 }

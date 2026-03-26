@@ -16,7 +16,11 @@ export const SALES_SIGNAL_TYPES = [
   "positive_momentum",
   "negative_momentum",
   "champion_identified",
-  "budget_surfaced"
+  "budget_surfaced",
+  "deal_going_cold",
+  "lead_engaged",
+  "lead_ready_for_deal",
+  "lead_re_engaged"
 ] as const;
 
 export type SalesSignalType = (typeof SALES_SIGNAL_TYPES)[number];
@@ -271,6 +275,8 @@ export interface SalesDoctrineConfig {
   personaGuidance: string[];
   exclusionRules: ExclusionRules;
   framingRules: string[];
+  stageLabels?: Record<string, string>;
+  intelligenceStages?: string[];
 }
 
 export interface ExclusionRules {
