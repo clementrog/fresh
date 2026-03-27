@@ -310,7 +310,7 @@ describe("sales detection service", () => {
       expect(callData(competitorSignals[0]).title).toContain("HubSpot");
     });
 
-    it("blocker_identified — consolidated: one signal per deal with all blockers", async () => {
+    it("blocker_identified — consolidated: one signal per deal with all recent blockers", async () => {
       const deal = makeDeal();
       const facts = [
         makeFact({
@@ -339,6 +339,35 @@ describe("sales detection service", () => {
       // Consolidated: one signal per deal
       expect(blockerSignals).toHaveLength(1);
       expect(callData(blockerSignals[0]).title).toContain("2 blocker(s)");
+    });
+
+    it("blocker_identified — ignores historical blockers outside momentum window", async () => {
+      const deal = makeDeal({
+        id: "d1",
+        staleDays: 0,
+        lastActivityDate: new Date("2026-03-10T12:00:00Z"),
+      });
+      const facts = [
+        makeFact({
+          id: "f1",
+          dealId: "d1",
+          category: "objection_mentioned",
+          label: "blocker:old-issue",
+          extractedValue: "old resolved issue",
+          activityTimestamp: new Date("2026-01-09T10:00:00Z"),
+        }),
+      ];
+      const { repos, spies } = buildMockRepos({
+        deals: [deal],
+        factsPerDeal: new Map([["d1", facts]]),
+      });
+
+      await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
+
+      const blockerSignals = spies.txUpsert.mock.calls.filter(
+        (c: any) => c[0].create.signalType === "blocker_identified"
+      );
+      expect(blockerSignals).toHaveLength(0);
     });
 
     it("champion_identified — consolidated: one signal per deal with first champion in title", async () => {
@@ -2232,11 +2261,10 @@ describe("sales detection service", () => {
       await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
 
       const signalTypes = spies.txUpsert.mock.calls.map((c: any) => callData(c)?.signalType);
-      // blocker_identified still fires (based on all facts) but positive_momentum survives
-      // because the contradiction guard only checks recent blocker facts
-      expect(signalTypes).toContain("blocker_identified");
+      // Historical blockers should not create an active blocker signal or suppress positive momentum.
       expect(signalTypes).toContain("champion_identified");
       expect(signalTypes).toContain("positive_momentum");
+      expect(signalTypes).not.toContain("blocker_identified");
     });
 
     it("suppresses positive_momentum when blocker is recent", async () => {

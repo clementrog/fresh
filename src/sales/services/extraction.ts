@@ -344,6 +344,18 @@ export async function runExtraction(params: {
 
   let leaseLost = false;
 
+  const markActivityExtracted = async (activityId: string, clearFacts = false) => {
+    await repos.transaction(async (tx) => {
+      if (clearFacts) {
+        await repos.deleteFactsForActivity(activityId, tx);
+      }
+      await tx.salesActivity.update({
+        where: { id: activityId },
+        data: { extractedAt: new Date() }
+      });
+    });
+  };
+
   try {
     // 2. Load doctrine for stage filtering + precision guards
     let intelligenceStageIds: Set<string> | null = null;
@@ -389,12 +401,7 @@ export async function runExtraction(params: {
     for (const activity of activities) {
       // Pre-attempt guard: retry budget exhausted
       if (activity.extractionAttempts >= MAX_EXTRACTION_ATTEMPTS) {
-        await repos.transaction(async (tx) => {
-          await tx.salesActivity.update({
-            where: { id: activity.id },
-            data: { extractedAt: new Date() }
-          });
-        });
+        await markActivityExtracted(activity.id, true);
         result.exhaustedItems++;
         result.warnings.push(
           `Activity ${activity.id} reached retry limit in a prior run. Marking exhausted.`
@@ -413,12 +420,7 @@ export async function runExtraction(params: {
       if (intelligenceStageIds && activity.dealId && dealStageMap) {
         const dealStage = dealStageMap.get(activity.dealId);
         if (dealStage && !intelligenceStageIds.has(dealStage)) {
-          await repos.transaction(async (tx) => {
-            await tx.salesActivity.update({
-              where: { id: activity.id },
-              data: { extractedAt: new Date() }
-            });
-          });
+          await markActivityExtracted(activity.id, true);
           result.stageSkipped++;
           continue;
         }
@@ -426,35 +428,20 @@ export async function runExtraction(params: {
 
       // Structural skips
       if (activity.body.length < MIN_BODY_LENGTH) {
-        await repos.transaction(async (tx) => {
-          await tx.salesActivity.update({
-            where: { id: activity.id },
-            data: { extractedAt: new Date() }
-          });
-        });
+        await markActivityExtracted(activity.id, true);
         result.activitiesSkipped++;
         continue;
       }
 
       if (!activity.dealId) {
-        await repos.transaction(async (tx) => {
-          await tx.salesActivity.update({
-            where: { id: activity.id },
-            data: { extractedAt: new Date() }
-          });
-        });
+        await markActivityExtracted(activity.id, true);
         result.activitiesSkipped++;
         continue;
       }
 
       // Low-value source skip (pre-LLM — saves cost)
       if (isLowValueSource(activity.body, guards.lowValueSourcePatterns)) {
-        await repos.transaction(async (tx) => {
-          await tx.salesActivity.update({
-            where: { id: activity.id },
-            data: { extractedAt: new Date() }
-          });
-        });
+        await markActivityExtracted(activity.id, true);
         result.activitiesSkipped++;
         continue;
       }
@@ -500,12 +487,7 @@ export async function runExtraction(params: {
             const newCount = await repos.incrementExtractionAttempts(activity.id);
             if (newCount >= MAX_EXTRACTION_ATTEMPTS) {
               // Escalate immediately
-              await repos.transaction(async (tx) => {
-                await tx.salesActivity.update({
-                  where: { id: activity.id },
-                  data: { extractedAt: new Date() }
-                });
-              });
+              await markActivityExtracted(activity.id);
               result.exhaustedItems++;
               result.warnings.push(
                 `Activity ${activity.id} exhausted after ${newCount} attempts (last error: ${errMsg})`
@@ -602,12 +584,7 @@ export async function runExtraction(params: {
         try {
           const newCount = await repos.incrementExtractionAttempts(activity.id);
           if (newCount >= MAX_EXTRACTION_ATTEMPTS) {
-            await repos.transaction(async (tx) => {
-              await tx.salesActivity.update({
-                where: { id: activity.id },
-                data: { extractedAt: new Date() }
-              });
-            });
+            await markActivityExtracted(activity.id);
             result.exhaustedItems++;
             result.warnings.push(
               `Activity ${activity.id} exhausted after ${newCount} write failures (last error: ${errMsg})`

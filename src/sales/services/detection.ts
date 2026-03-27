@@ -141,7 +141,7 @@ function applyRules(ctx: DealContext, stalenessThreshold: number): SignalDraft[]
   }
 
   // --- Consolidated: blocker_identified (one per deal) ---
-  const blockers = ctx.facts
+  const blockers = recentFacts
     .filter((f) => f.label.startsWith("blocker:"))
     .map((f) => f.extractedValue);
   if (blockers.length > 0) {

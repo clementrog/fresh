@@ -1043,6 +1043,41 @@ describe("sales extraction service", () => {
       expect(llmClient.generateStructured).not.toHaveBeenCalled();
       expect(result.activitiesSkipped).toBe(1);
       expect(result.factsCreated).toBe(0);
+      expect(repos.deleteFactsForActivity).toHaveBeenCalledWith("act-1", txMock);
+    });
+
+    it("clears stale facts when activity is skipped by stage scope", async () => {
+      const txMock = makeTxMock();
+      const repos = makeRepos(txMock);
+      const llmClient = makeLlmClient();
+
+      repos.getLatestDoctrine.mockResolvedValue({
+        doctrineJson: {
+          stageLabels: {
+            "stage-new": "New",
+            "stage-training": "Training",
+          },
+          intelligenceStages: ["New"],
+          precisionGuards: {
+            internalPeople: [],
+            internalDomains: [],
+            selfBrands: [],
+            lowValueSourcePatterns: [],
+            schedulingNoisePatterns: [],
+          },
+        },
+      });
+
+      repos.listUnextractedActivities.mockResolvedValue([
+        makeActivity({ id: "act-stage", dealId: "deal-1", body: "A".repeat(200) }),
+      ]);
+      repos.listDealsForStageCheck.mockResolvedValue(new Map([["deal-1", "stage-training"]]));
+
+      const result = await runExtraction(baseParams(repos, llmClient));
+
+      expect(llmClient.generateStructured).not.toHaveBeenCalled();
+      expect(result.stageSkipped).toBe(1);
+      expect(repos.deleteFactsForActivity).toHaveBeenCalledWith("act-stage", txMock);
     });
   });
 
