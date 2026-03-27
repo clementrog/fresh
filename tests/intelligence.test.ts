@@ -136,7 +136,7 @@ function makeDecisionOutput(overrides: Partial<CreateEnrichDecision> = {}) {
   };
 }
 
-function makeLinearPolicyOutput(classification: "enrich-worthy" | "ignore" | "manual-review-needed" = "enrich-worthy") {
+function makeLinearPolicyOutput(classification: "editorial-lead" | "enrich-worthy" | "ignore" | "manual-review-needed" = "enrich-worthy") {
   return {
     output: {
       classification,
@@ -1073,5 +1073,206 @@ describe("runIntelligencePipeline", () => {
     expect(result.created).toHaveLength(0);
     expect(result.enriched).toHaveLength(1);
     expect(result.enriched[0].opportunity.id).toBe(existing.id);
+  });
+});
+
+// ── editorial-lead curated behavior ────────────────────────────────────────
+
+function makeEditorialLeadItem(overrides: Partial<NormalizedSourceItem> = {}): NormalizedSourceItem {
+  return makeItem({
+    source: "linear",
+    sourceItemId: "pu-lead-1",
+    externalId: "linear:pu-lead-1",
+    sourceFingerprint: "linear-lead-fp-1",
+    sourceUrl: "https://linear.app/linc-fr/project-update/pu-lead-1",
+    title: "Nouveauté produit: bulletin détaillé cliquable dans le studio",
+    summary: "Shipped: clickable payslip PDF — every number in the detailed payslip is now interactive for computation rule inspection in the studio.",
+    text: "Le bulletin détaillé en PDF devient cliquable dans le studio pour comprendre chaque valeur. Chaque nombre est cliquable y compris les compteurs de congés. Certains libellés le sont également. Cette fonctionnalité permet aux gestionnaires de paie de vérifier rapidement les règles de calcul appliquées à chaque ligne.",
+    metadata: {
+      itemType: "project_update",
+      projectState: "completed",
+      projectHealth: "onTrack",
+      projectName: "Payslip PDF clickable"
+    },
+    ...overrides
+  });
+}
+
+describe("editorial-lead curated behavior", () => {
+  it("editorial-lead passes the lighter curated create gate", async () => {
+    const items = [makeEditorialLeadItem()];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("linear:pu-lead-1"))
+        .mockResolvedValueOnce(makeLinearPolicyOutput("editorial-lead"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          confidence: 0.5,
+          title: "Bulletin cliquable: transparence du calcul",
+          angle: "Clickable payslip as transparency tool for accountants",
+          whyNow: "Short",
+          whatItIsAbout: "Interactive payslip PDF feature"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: []
+    });
+
+    // Curated gate: confidence 0.5 >= 0.4, title >= 6, angle >= 10, whatItIsAbout >= 10 → passes
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0].title).toBe("Bulletin cliquable: transparence du calcul");
+  });
+
+  it("editorial-lead with weak candidate match and low-confidence enrich is promoted to create", async () => {
+    const items = [makeEditorialLeadItem()];
+    const existing = makeOpportunity({
+      id: "opp-unrelated-topic",
+      title: "Completely different topic about compliance deadlines and regulatory obligations",
+      angle: "Compliance deadline management for mid-market HR teams",
+      whatItIsAbout: "How to track compliance deadlines across departments"
+    });
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("linear:pu-lead-1"))
+        .mockResolvedValueOnce(makeLinearPolicyOutput("editorial-lead"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "enrich",
+          targetOpportunityId: existing.id,
+          confidence: 0.4,
+          rationale: "Weak match to existing opportunity"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: [existing]
+    });
+
+    // Curated + create-capable + weak match + low confidence → promoted to create
+    expect(result.created).toHaveLength(1);
+    expect(result.enriched).toHaveLength(0);
+  });
+
+  it("enrich-worthy Linear item does NOT get curated behavior", async () => {
+    const items = [makeEditorialLeadItem({ externalId: "linear:pu-ew-1", sourceItemId: "pu-ew-1" })];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("linear:pu-ew-1"))
+        .mockResolvedValueOnce(makeLinearPolicyOutput("enrich-worthy"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          confidence: 0.5,
+          title: "Bulletin cliquable: transparence du calcul",
+          angle: "Clickable payslip as transparency tool for accountants",
+          whyNow: "Short",
+          whatItIsAbout: "Interactive payslip PDF feature"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: []
+    });
+
+    // enrich-worthy is enrich-only + non-curated → no candidates → skipped
+    expect(result.created).toHaveLength(0);
+    expect(result.skipped).toEqual([
+      expect.objectContaining({
+        sourceItemId: "linear:pu-ew-1",
+        reason: expect.stringContaining("evidence-shaped")
+      })
+    ]);
+  });
+
+  it("editorial-lead uses lighter create gate while enrich-worthy uses stricter one", async () => {
+    // editorial-lead with moderate confidence and short whyNow passes curated gate
+    const leadItem = makeEditorialLeadItem();
+    const leadLlm = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("linear:pu-lead-1"))
+        .mockResolvedValueOnce(makeLinearPolicyOutput("editorial-lead"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          confidence: 0.5,
+          title: "Bulletin cliquable: transparence",
+          angle: "Clickable payslip as transparency tool",
+          whyNow: "Short",  // < 24 chars: fails strict gate, passes curated gate
+          whatItIsAbout: "Interactive payslip PDF feature"
+        }))
+    } as any;
+
+    const leadResult = await runIntelligencePipeline({
+      items: [leadItem],
+      companyId: "company-1",
+      llmClient: leadLlm,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: []
+    });
+
+    // editorial-lead (curated): passes lighter gate despite short whyNow and 0.5 confidence
+    expect(leadResult.created).toHaveLength(1);
+
+    // Same item but classified as enrich-worthy with identical LLM decision
+    // enrich-worthy is enrich-only so it can't even reach the create gate without candidates.
+    // Instead, prove that if an enrich-worthy item *could* create (hypothetical),
+    // the strict gate would block it. We test this indirectly: the enrich-worthy item
+    // with no candidates is skipped as evidence-shaped (never reaches create).
+    const ewItem = makeEditorialLeadItem({ externalId: "linear:pu-ew-2", sourceItemId: "pu-ew-2" });
+    const ewLlm = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("linear:pu-ew-2"))
+        .mockResolvedValueOnce(makeLinearPolicyOutput("enrich-worthy"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          confidence: 0.5,
+          title: "Bulletin cliquable: transparence",
+          angle: "Clickable payslip as transparency tool",
+          whyNow: "Short",
+          whatItIsAbout: "Interactive payslip PDF feature"
+        }))
+    } as any;
+
+    const ewResult = await runIntelligencePipeline({
+      items: [ewItem],
+      companyId: "company-1",
+      llmClient: ewLlm,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: []
+    });
+
+    // enrich-worthy (non-curated, enrich-only): blocked before reaching create gate
+    expect(ewResult.created).toHaveLength(0);
   });
 });

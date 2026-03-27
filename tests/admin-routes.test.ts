@@ -1142,6 +1142,45 @@ describe("data-contract rendering", () => {
     // B2: "unknown" must NOT appear — proves nested-object code path is dead
     expect(res.body).not.toContain("unknown");
   });
+
+  it("B3: editorial-lead renders with purple badge, distinct from enrich-worthy and manual-review", async () => {
+    const customFindUnique = vi.fn(async ({ where }: { where: { slug?: string } }) => {
+      if (where.slug === "default") return { id: "comp_1", slug: "default", name: "Acme Corp" };
+      return null;
+    });
+
+    const server = Fastify({ logger: false });
+    const prisma = mockPrisma({ companyFindUnique: customFindUnique });
+    prisma.sourceItem.findMany = vi.fn(async () => [
+      {
+        id: "si_linear_lead",
+        source: "linear",
+        title: "HCR convention fully supported",
+        occurredAt: new Date("2026-03-23"),
+        processedAt: new Date("2026-03-23"),
+        metadataJson: {
+          linearEnrichmentClassification: "editorial-lead",
+          linearCustomerVisibility: "shipped",
+          linearSensitivityLevel: "safe",
+          linearEvidenceStrength: 0.91
+        }
+      }
+    ]);
+    prisma.sourceItem.count = vi.fn(async () => 1);
+    registerAdminPlugin(server, prisma, DEFAULT_OPTIONS);
+
+    const res = await server.inject({
+      method: "GET",
+      url: "/admin/reviews/linear",
+      headers: { authorization: basicAuth("admin", "secret") }
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain("editorial-lead");
+    expect(res.body).toContain("badge-purple");
+    expect(res.body).toContain("shipped");
+    // The classification badge in the table row must be purple, not orange
+    expect(res.body).toContain('<span class="badge badge-purple">editorial-lead</span>');
+  });
 });
 
 // ── Route tests: editorial configs ──────────────────────────────────────────

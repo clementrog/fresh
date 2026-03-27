@@ -1157,3 +1157,141 @@ describe("syncLinearReviewItem — material change detection", () => {
     expect(createProps["Item title"].title[0].text.content).toBe("Project update: Compliance Automation");
   });
 });
+
+// ── editorial-lead focused tests ────────────────────────────────────────────
+
+describe("editorial-lead — create-capable with no candidates", () => {
+  let screeningLlm: ReturnType<typeof vi.fn>;
+  let linearPolicyLlm: ReturnType<typeof vi.fn>;
+  let createEnrichLlm: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    screeningLlm = vi.fn();
+    linearPolicyLlm = vi.fn();
+    createEnrichLlm = vi.fn();
+  });
+
+  function buildMockLlm(): LlmClient {
+    return {
+      generateStructured: vi.fn().mockImplementation(async (params: { step: string; schema: unknown; fallback: () => unknown }) => {
+        if (params.step === "screening") return screeningLlm(params);
+        if (params.step === "linear-enrichment-policy") return linearPolicyLlm(params);
+        if (params.step === "create-enrich") return createEnrichLlm(params);
+        return { output: params.fallback(), usage: FALLBACK_USAGE, mode: "fallback" };
+      })
+    } as unknown as LlmClient;
+  }
+
+  it("editorial-lead item creates a new opportunity when no candidates exist", async () => {
+    const item = makeLinearItem({
+      title: "Nouveauté produit: bulletin détaillé cliquable",
+      text: "Le bulletin détaillé en PDF devient cliquable dans le studio pour comprendre chaque valeur. Chaque nombre est cliquable y compris les compteurs de congés. Certains libellés le sont également. Cette fonctionnalité permet aux gestionnaires de paie de vérifier rapidement les règles appliquées.",
+      summary: "Clickable payslip PDF shipped: every number in the detailed payslip is now interactive for computation rule inspection",
+      metadata: {
+        itemType: "project_update",
+        projectState: "completed",
+        projectHealth: "onTrack",
+        projectName: "Payslip PDF clickable"
+      }
+    });
+
+    screeningLlm.mockResolvedValue({
+      output: {
+        items: [{
+          sourceItemId: item.externalId,
+          decision: "retain",
+          rationale: "Retained",
+          createOrEnrich: "create",
+          relevanceScore: 0.95,
+          sensitivityFlag: false,
+          sensitivityCategories: []
+        }]
+      },
+      usage: FALLBACK_USAGE,
+      mode: "provider"
+    });
+
+    linearPolicyLlm.mockResolvedValue({
+      output: {
+        classification: "editorial-lead",
+        rationale: "Completed project with product announcement",
+        customerVisibility: "shipped",
+        sensitivityLevel: "safe",
+        evidenceStrength: 0.94
+      },
+      usage: FALLBACK_USAGE,
+      mode: "provider"
+    });
+
+    createEnrichLlm.mockResolvedValue({
+      output: {
+        action: "create",
+        rationale: "Standalone editorial opportunity from shipped feature",
+        title: "Bulletin cliquable : rendre chaque montant explicable",
+        territory: "general",
+        angle: "Clickable payslip as transparency tool for accountants",
+        whyNow: "Just shipped to all customers",
+        whatItIsAbout: "Interactive payslip PDF feature",
+        whatItIsNotAbout: "Not about internal tooling",
+        suggestedFormat: "Narrative lesson post",
+        confidence: 0.9
+      },
+      usage: FALLBACK_USAGE,
+      mode: "provider"
+    });
+
+    const result = await runIntelligencePipeline({
+      items: [item],
+      companyId: "co-1",
+      llmClient: buildMockLlm(),
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: [] // no existing opportunities
+    });
+
+    // editorial-lead should be create-capable — creates a new opportunity
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0].title).toContain("Bulletin cliquable");
+    // Classification is stamped
+    expect(result.linearClassifications.get(item.externalId)?.classification).toBe("editorial-lead");
+    // Not held for review
+    expect(result.linearReviewItems).toHaveLength(0);
+  });
+});
+
+describe("editorial-lead — enrich-path provenance", () => {
+  it("deriveProvenanceType returns linear:editorial-lead", () => {
+    const item = makeLinearItem({
+      metadata: {
+        itemType: "project_update",
+        linearEnrichmentClassification: "editorial-lead"
+      }
+    });
+    expect(deriveProvenanceType(item)).toBe("linear:editorial-lead");
+  });
+
+  it("editorial-lead item is allowed as supporting evidence", () => {
+    const item = makeLinearItem({
+      title: "HCR convention support shipped for all payroll clients now available",
+      text: "HCR convention support shipped for all payroll clients. Classification, primes, CP counting all live.",
+      summary: "HCR convention fully supported on Linc",
+      metadata: {
+        itemType: "project_update",
+        linearEnrichmentClassification: "editorial-lead"
+      }
+    });
+    const opp = makeOpportunity({
+      title: "HCR convention support and payroll implications for accounting firms",
+      angle: "HCR convention support shipped for payroll clients"
+    });
+
+    const { evidence } = findSupportingEvidence(opp, [item], "co-1");
+    // editorial-lead has canBeOrigin + canBeSupport with low Jaccard threshold (0.10)
+    // Text overlap is high so it should match
+    expect(evidence.length).toBeGreaterThanOrEqual(1);
+  });
+});

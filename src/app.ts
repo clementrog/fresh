@@ -528,7 +528,8 @@ export class EditorialSignalEngineApp {
             i.externalId === enriched.logEntry.rawSourceItemId
           );
           if (enrichSourceItem?.source === "linear"
-            && enrichSourceItem.metadata?.linearEnrichmentClassification === "enrich-worthy") {
+            && (enrichSourceItem.metadata?.linearEnrichmentClassification === "enrich-worthy"
+              || enrichSourceItem.metadata?.linearEnrichmentClassification === "editorial-lead")) {
             enriched.logEntry.provenanceType = "linear-enrichment-policy";
           }
 

@@ -74,10 +74,13 @@ export function registerReviewPages(
     const rows = items.map((item) => {
       const meta = item.metadataJson as Record<string, unknown>;
       const cls = String(meta.linearEnrichmentClassification ?? "unknown");
-      const clsColor = cls === "enrich-worthy" ? "green" : cls === "ignore" ? "gray" : "orange";
+      const clsColor = cls === "editorial-lead" ? "purple"
+        : cls === "enrich-worthy" ? "green"
+        : cls === "ignore" ? "gray"
+        : "orange";
       return [
         linkTo(buildDetailUrl(`/admin/source-items/${item.id}`, companySlug, returnTo), truncate(item.title, 60)),
-        badge(cls, clsColor as "green" | "gray" | "orange"),
+        badge(cls, clsColor as "purple" | "green" | "gray" | "orange"),
         meta.linearCustomerVisibility ? String(meta.linearCustomerVisibility) : "—",
         meta.linearSensitivityLevel ? String(meta.linearSensitivityLevel) : "—",
         item.processedAt ? badge("yes", "green") : badge("no", "gray"),

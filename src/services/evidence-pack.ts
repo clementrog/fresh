@@ -82,6 +82,9 @@ function getSourcePolicy(item: NormalizedSourceItem): SourcePolicyEntry {
     case "linear": {
       const linearClass = typeof item.metadata?.linearEnrichmentClassification === "string"
         ? item.metadata.linearEnrichmentClassification : undefined;
+      if (linearClass === "editorial-lead") {
+        return { canBeOrigin: true, canBeSupport: true, minJaccardForSupport: 0.10, priority: 2 };
+      }
       if (linearClass === "manual-review-needed" || linearClass === "ignore") {
         return { canBeOrigin: false, canBeSupport: false, minJaccardForSupport: 1.0, priority: 99 };
       }
@@ -118,6 +121,7 @@ export function deriveProvenanceType(item: NormalizedSourceItem): string {
     case "linear": {
       const linearEnrichClass = typeof item.metadata?.linearEnrichmentClassification === "string"
         ? item.metadata.linearEnrichmentClassification : undefined;
+      if (linearEnrichClass === "editorial-lead") return "linear:editorial-lead";
       if (linearEnrichClass === "enrich-worthy") return "linear:enrich-worthy";
       return "linear";
     }

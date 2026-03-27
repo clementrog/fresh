@@ -187,11 +187,21 @@ export async function evaluateLinearEnrichmentPolicy(params: {
     "",
     "## Classification rules",
     "",
-    "Classify each Linear item into one of three categories:",
+    "Classify each Linear item into one of four categories:",
+    "",
+    "### editorial-lead",
+    "The item has standalone editorial potential — it can anchor a new content opportunity, not just support an existing one.",
+    "This tier is for SHIPPED features, completed projects, or major product announcements that tell a compelling story for payroll experts, accountants, or HR decision-makers.",
+    "Strong signals for editorial-lead:",
+    "- Project updates marked as completed with a product announcement (often starting with '🎉 Nouveauté produit')",
+    "- Major feature launches: new convention support (e.g. HCR), new module (e.g. DSN filing), new portal or workflow",
+    "- R&D or moonshot projects that reached completion: engine performance breakthroughs, new integrations (net-entreprises, SIRH), innovative UX (clickable PDF bulletins)",
+    "- Items that combine: (1) a concrete shipped capability, (2) a clear benefit for end users, (3) enough substance to write a 500+ word article",
+    "Examples: 'Nouveauté produit: le bulletin détaillé devient cliquable', 'HCR convention fully supported on Linc', 'DSN connection with net-entreprises deployed'",
     "",
     "### enrich-worthy",
-    "The item describes a customer-visible, shipped capability or concrete outcome that can strengthen an existing content opportunity.",
-    "Examples: 'Shipped: new onboarding dashboard for mid-market clients', 'Released: automated DSN compliance check'",
+    "The item describes a customer-visible, shipped capability or concrete outcome that can strengthen an existing content opportunity, but is too narrow for a standalone article.",
+    "Examples: 'Shipped: new onboarding dashboard for mid-market clients', 'Released: automated DSN compliance check', 'CP counting in working days for HCR'",
     "",
     "### ignore",
     "The item is internal noise: refactors, tech debt, CI/CD fixes, dependency bumps, test improvements, or vague tickets with no customer-facing substance.",
@@ -213,8 +223,10 @@ export async function evaluateLinearEnrichmentPolicy(params: {
     "- pre-shipping: work in progress that might not ship as described",
     "- promise-like: reads like a commitment to customers",
     "",
-    "## Tie-breaking rule",
-    "When in doubt, choose manual-review-needed. It is always safer to hold an item for review than to auto-enrich or auto-ignore.",
+    "## Tie-breaking rules",
+    "- Between editorial-lead and enrich-worthy: choose editorial-lead only when the item has enough substance and scope for a standalone article. A single narrow fix is enrich-worthy even if shipped.",
+    "- Between enrich-worthy and manual-review-needed: choose manual-review-needed if the item is pre-shipping or roadmap-sensitive.",
+    "- When genuinely unsure, choose manual-review-needed. It is always safer to hold an item for review than to auto-enrich or auto-ignore.",
     "",
     "Return JSON matching the linearEnrichmentPolicy schema."
   ].join("\n");
@@ -227,7 +239,8 @@ export async function evaluateLinearEnrichmentPolicy(params: {
       `Summary: ${item.summary}`,
       `Text (first 1000 chars): ${item.text.slice(0, 1000)}`,
       `Item type: ${meta.itemType ?? "unknown"}`,
-      `State: ${meta.stateName ?? "unknown"}`,
+      `State: ${meta.stateName ?? meta.projectState ?? "unknown"}`,
+      `Project health: ${meta.projectHealth ?? "n/a"}`,
       `Team: ${meta.teamName ?? "unknown"}`,
       `Priority: ${meta.priority ?? "unknown"}`,
       `Labels: ${Array.isArray(meta.labels) ? (meta.labels as string[]).join(", ") : "none"}`,
@@ -333,7 +346,11 @@ function getSourceCreationMode(item: NormalizedSourceItem): SourceCreationMode {
         ? item.metadata.signalKind : undefined;
       return signalKind === "claap-signal" ? "create-capable" : "enrich-only";
     }
-    case "linear":
+    case "linear": {
+      const linearClass = typeof item.metadata?.linearEnrichmentClassification === "string"
+        ? item.metadata.linearEnrichmentClassification : undefined;
+      return linearClass === "editorial-lead" ? "create-capable" : "enrich-only";
+    }
     default:
       return "enrich-only";
   }
@@ -356,6 +373,11 @@ function isCuratedSource(item: NormalizedSourceItem): boolean {
       const signalKind = typeof item.metadata?.signalKind === "string"
         ? item.metadata.signalKind : undefined;
       return signalKind === "claap-signal";
+    }
+    case "linear": {
+      const linearClass = typeof item.metadata?.linearEnrichmentClassification === "string"
+        ? item.metadata.linearEnrichmentClassification : undefined;
+      return linearClass === "editorial-lead";
     }
     default:
       return false;
@@ -538,7 +560,8 @@ export async function decideCreateOrEnrich(params: {
       : params.candidates.length > 0
         ? "Decide: 'create' a new opportunity, 'enrich' an existing one (provide targetOpportunityId), or 'skip'."
         : "No existing opportunities match. Decide whether to 'create' a new opportunity or 'skip'.",
-    "Return JSON matching the createEnrichDecision schema."
+    "Return JSON matching the createEnrichDecision schema.",
+    "IMPORTANT: All string fields (title, territory, angle, whyNow, whatItIsAbout, whatItIsNotAbout, suggestedFormat) must be non-empty even when action is 'skip'. For skip actions, populate them with your best assessment of what the opportunity would have been."
   ].join("\n");
 
   const prompt = [
@@ -862,7 +885,7 @@ export async function runIntelligencePipeline(
           });
           result.processedSourceItemIds.push(item.externalId);
         } else {
-          // enrich-worthy — stamp classification onto in-memory item metadata
+          // editorial-lead or enrich-worthy — stamp classification onto in-memory item metadata
           item.metadata = {
             ...item.metadata,
             linearEnrichmentClassification: classification.classification,
