@@ -1,12 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   runExtraction,
   fanOutFacts,
+  filterFacts,
+  isLowValueSource,
+  coerceGuards,
   activityExtractionSchema,
   MAX_EXTRACTION_ATTEMPTS,
   type ExtractionResult,
   type ActivityExtractionOutput,
 } from "../src/sales/services/extraction.js";
+import type { PrecisionGuards } from "../src/sales/domain/types.js";
 import { ConcurrentRunError } from "../src/sales/db/sales-repositories.js";
 
 // ---------------------------------------------------------------------------
@@ -116,6 +120,9 @@ function makeRepos(txMock = makeTxMock()) {
     acquireRunLease: vi.fn().mockResolvedValue({ id: "run-1", status: "running" }),
     renewLease: vi.fn().mockResolvedValue(true),
     listUnextractedActivities: vi.fn().mockResolvedValue([]),
+    listDealsForStageCheck: vi.fn().mockResolvedValue(new Map()),
+    listCompanyNamesForDeals: vi.fn().mockResolvedValue(new Map()),
+    getLatestDoctrine: vi.fn().mockResolvedValue(null),
     transaction: vi.fn().mockImplementation(async (fn: (tx: any) => Promise<any>) => fn(txMock)),
     deleteFactsForActivity: vi.fn().mockResolvedValue({ count: 0 }),
     markActivityExtracted: vi.fn().mockResolvedValue({}),
@@ -859,6 +866,370 @@ describe("sales extraction service", () => {
         // missing everything else
       });
       expect(result.success).toBe(false);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Precision guards: isLowValueSource
+  // -----------------------------------------------------------------------
+  describe("isLowValueSource", () => {
+    it("returns true when body starts with low-value pattern", () => {
+      expect(isLowValueSource("Ordre du jour\n1. Point sur le dossier", ["Ordre du jour"])).toBe(true);
+    });
+
+    it("returns true for onboarding template pattern", () => {
+      expect(isLowValueSource("Le paramétrage du compte est terminé pour...", ["Le paramétrage du compte"])).toBe(true);
+    });
+
+    it("returns false when pattern is not in first 100 chars", () => {
+      const body = "A".repeat(120) + "Ordre du jour";
+      expect(isLowValueSource(body, ["Ordre du jour"])).toBe(false);
+    });
+
+    it("is case-insensitive", () => {
+      expect(isLowValueSource("ORDRE DU JOUR\n...", ["Ordre du jour"])).toBe(true);
+    });
+
+    it("returns false with empty patterns", () => {
+      expect(isLowValueSource("Ordre du jour", [])).toBe(false);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Precision guards: filterFacts
+  // -----------------------------------------------------------------------
+  describe("filterFacts", () => {
+    const guards: PrecisionGuards = {
+      internalPeople: ["Quentin Franck", "Guillaume Chastant", "Baptiste Le Bihan"],
+      internalDomains: ["@linc.fr"],
+      selfBrands: ["Linc"],
+      lowValueSourcePatterns: [],
+      schedulingNoisePatterns: ["appel manqué", "reschedule", "reporter", "décaler", "annulé"],
+    };
+
+    function makeFact(overrides: Partial<{ category: string; label: string; extractedValue: string }>) {
+      return {
+        id: "fact-1",
+        companyId: "comp-1",
+        activityId: "act-1",
+        dealId: "deal-1",
+        category: overrides.category ?? "objection_mentioned",
+        label: overrides.label ?? "pain:test",
+        extractedValue: overrides.extractedValue ?? "test",
+        confidence: 0.8,
+        sourceText: "some text",
+      };
+    }
+
+    it("filters out internal people from persona_stakeholder", () => {
+      const facts = [makeFact({ category: "persona_stakeholder", label: "champion", extractedValue: "Quentin Franck" })];
+      const { kept, dropped } = filterFacts(facts, guards, []);
+      expect(kept).toHaveLength(0);
+      expect(dropped).toHaveLength(1);
+    });
+
+    it("is case-insensitive for internal people", () => {
+      const facts = [makeFact({ category: "persona_stakeholder", label: "champion", extractedValue: "QUENTIN FRANCK" })];
+      const { kept, dropped } = filterFacts(facts, guards, []);
+      expect(kept).toHaveLength(0);
+      expect(dropped).toHaveLength(1);
+    });
+
+    it("filters out internal domain emails from persona_stakeholder", () => {
+      const facts = [makeFact({ category: "persona_stakeholder", label: "decision_maker", extractedValue: "someone@linc.fr" })];
+      const { kept, dropped } = filterFacts(facts, guards, []);
+      expect(kept).toHaveLength(0);
+      expect(dropped).toHaveLength(1);
+    });
+
+    it("passes through legitimate champions", () => {
+      const facts = [makeFact({ category: "persona_stakeholder", label: "champion", extractedValue: "Marie Dupont" })];
+      const { kept } = filterFacts(facts, guards, []);
+      expect(kept).toHaveLength(1);
+    });
+
+    it("filters out self-brand from competitor_reference", () => {
+      const facts = [makeFact({ category: "competitor_reference", label: "linc", extractedValue: "Linc" })];
+      const { kept, dropped } = filterFacts(facts, guards, []);
+      expect(kept).toHaveLength(0);
+      expect(dropped).toHaveLength(1);
+    });
+
+    it("filters out account-brand from competitor_reference", () => {
+      const facts = [makeFact({ category: "competitor_reference", label: "smartpaie", extractedValue: "SMARTPAIE" })];
+      const { kept, dropped } = filterFacts(facts, guards, ["SmartPaie"]);
+      expect(kept).toHaveLength(0);
+      expect(dropped).toHaveLength(1);
+    });
+
+    it("passes through real competitors", () => {
+      const facts = [makeFact({ category: "competitor_reference", label: "silae", extractedValue: "Silae" })];
+      const { kept } = filterFacts(facts, guards, ["SmartPaie"]);
+      expect(kept).toHaveLength(1);
+    });
+
+    it("drops scheduling-noise blockers", () => {
+      const facts = [makeFact({ category: "objection_mentioned", label: "blocker:appel-manque", extractedValue: "appel manqué et report" })];
+      const { kept, dropped } = filterFacts(facts, guards, []);
+      expect(kept).toHaveLength(0);
+      expect(dropped).toHaveLength(1);
+    });
+
+    it("passes through legitimate blockers", () => {
+      const facts = [makeFact({ category: "objection_mentioned", label: "blocker:infosec-review", extractedValue: "infosec review pending" })];
+      const { kept } = filterFacts(facts, guards, []);
+      expect(kept).toHaveLength(1);
+    });
+
+    it("does not filter non-stakeholder/non-competitor categories", () => {
+      const facts = [makeFact({ category: "urgency_timing", label: "next_step", extractedValue: "Quentin Franck" })];
+      const { kept } = filterFacts(facts, guards, []);
+      expect(kept).toHaveLength(1);
+    });
+
+    it("handles empty guards gracefully", () => {
+      const emptyGuards: PrecisionGuards = {
+        internalPeople: [],
+        internalDomains: [],
+        selfBrands: [],
+        lowValueSourcePatterns: [],
+        schedulingNoisePatterns: [],
+      };
+      const facts = [makeFact({ category: "persona_stakeholder", label: "champion", extractedValue: "Quentin Franck" })];
+      const { kept } = filterFacts(facts, emptyGuards, []);
+      expect(kept).toHaveLength(1);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Integration: low-value source skip in runExtraction
+  // -----------------------------------------------------------------------
+  describe("low-value source skip in runExtraction", () => {
+    it("skips extraction for low-value source body", async () => {
+      const txMock = makeTxMock();
+      const repos = makeRepos(txMock);
+      const llmClient = makeLlmClient();
+
+      // Set up doctrine with lowValueSourcePatterns
+      repos.getLatestDoctrine.mockResolvedValue({
+        doctrineJson: {
+          precisionGuards: {
+            internalPeople: [],
+            internalDomains: [],
+            selfBrands: [],
+            lowValueSourcePatterns: ["Ordre du jour"],
+            schedulingNoisePatterns: [],
+          },
+        },
+      });
+
+      repos.listUnextractedActivities.mockResolvedValue([
+        makeActivity({ body: "Ordre du jour\n1. Point dossier\n2. Formation" }),
+      ]);
+
+      const result = await runExtraction(baseParams(repos, llmClient));
+
+      // LLM should NOT be called for low-value source
+      expect(llmClient.generateStructured).not.toHaveBeenCalled();
+      expect(result.activitiesSkipped).toBe(1);
+      expect(result.factsCreated).toBe(0);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // coerceGuards — runtime safety for partial / malformed doctrine config
+  // -----------------------------------------------------------------------
+  describe("coerceGuards", () => {
+    it("returns EMPTY_GUARDS for null/undefined input", () => {
+      expect(coerceGuards(null)).toEqual({
+        internalPeople: [],
+        internalDomains: [],
+        selfBrands: [],
+        lowValueSourcePatterns: [],
+        schedulingNoisePatterns: [],
+      });
+      expect(coerceGuards(undefined)).toEqual(coerceGuards(null));
+    });
+
+    it("returns EMPTY_GUARDS for non-object input", () => {
+      expect(coerceGuards("string")).toEqual(coerceGuards(null));
+      expect(coerceGuards(42)).toEqual(coerceGuards(null));
+      expect(coerceGuards(true)).toEqual(coerceGuards(null));
+    });
+
+    it("fills missing fields with empty arrays", () => {
+      const result = coerceGuards({ internalPeople: ["Alice"] });
+      expect(result.internalPeople).toEqual(["Alice"]);
+      expect(result.internalDomains).toEqual([]);
+      expect(result.selfBrands).toEqual([]);
+      expect(result.lowValueSourcePatterns).toEqual([]);
+      expect(result.schedulingNoisePatterns).toEqual([]);
+    });
+
+    it("filters out non-string elements from arrays", () => {
+      const result = coerceGuards({
+        internalPeople: ["Alice", 123, null, "Bob", undefined],
+        selfBrands: [true, "Linc"],
+      });
+      expect(result.internalPeople).toEqual(["Alice", "Bob"]);
+      expect(result.selfBrands).toEqual(["Linc"]);
+    });
+
+    it("coerces non-array field values to empty arrays", () => {
+      const result = coerceGuards({
+        internalPeople: "not-an-array",
+        internalDomains: 42,
+        selfBrands: { nested: true },
+      });
+      expect(result.internalPeople).toEqual([]);
+      expect(result.internalDomains).toEqual([]);
+      expect(result.selfBrands).toEqual([]);
+    });
+
+    it("passes through a fully valid config unchanged", () => {
+      const valid: PrecisionGuards = {
+        internalPeople: ["Alice"],
+        internalDomains: ["@acme.com"],
+        selfBrands: ["Acme"],
+        lowValueSourcePatterns: ["Ordre du jour"],
+        schedulingNoisePatterns: ["reschedule"],
+      };
+      expect(coerceGuards(valid)).toEqual(valid);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Partial guard config in runExtraction — must not crash
+  // -----------------------------------------------------------------------
+  describe("partial guard config does not crash extraction", () => {
+    it("handles doctrine with only some guard fields", async () => {
+      const txMock = makeTxMock();
+      const repos = makeRepos(txMock);
+      const llmClient = makeLlmClient(makeEmptyLlmOutput());
+
+      // Doctrine has a partial precisionGuards — missing several fields
+      repos.getLatestDoctrine.mockResolvedValue({
+        doctrineJson: {
+          precisionGuards: { internalPeople: ["Quentin Franck"] },
+          // no selfBrands, no schedulingNoisePatterns, etc.
+        },
+      });
+
+      repos.listUnextractedActivities.mockResolvedValue([
+        makeActivity({ body: "A".repeat(200) }),
+      ]);
+
+      // Should not throw — coerceGuards fills defaults
+      const result = await runExtraction(baseParams(repos, llmClient));
+      expect(result.activitiesProcessed).toBe(1);
+    });
+
+    it("handles doctrine with precisionGuards set to a non-object value", async () => {
+      const txMock = makeTxMock();
+      const repos = makeRepos(txMock);
+      const llmClient = makeLlmClient(makeEmptyLlmOutput());
+
+      repos.getLatestDoctrine.mockResolvedValue({
+        doctrineJson: {
+          precisionGuards: "garbage",
+        },
+      });
+
+      repos.listUnextractedActivities.mockResolvedValue([
+        makeActivity({ body: "A".repeat(200) }),
+      ]);
+
+      const result = await runExtraction(baseParams(repos, llmClient));
+      expect(result.activitiesProcessed).toBe(1);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // CLI batch-size validation (via runSalesCommand)
+  // -----------------------------------------------------------------------
+  describe("CLI batch-size validation", () => {
+    // We test runSalesCommand directly to verify argument parsing
+    let originalArgv: string[];
+    beforeEach(() => { originalArgv = process.argv; });
+    afterEach(() => { process.argv = originalArgv; });
+
+    async function runCli(args: string[]) {
+      process.argv = ["node", "cli.ts", "sales:extract", ...args];
+
+      // Lazy import to avoid circular issues
+      const { runSalesCommand } = await import("../src/sales/cli.js");
+      const exitCode = { value: 0 };
+      const mockApp = {
+        runExtract: vi.fn().mockResolvedValue({
+          activitiesProcessed: 0, activitiesSkipped: 0, factsCreated: 0,
+          retryableErrors: 0, exhaustedItems: 0, stageSkipped: 0, terminalSkips: 0,
+          errors: [], warnings: [], costUsd: 0, rateLimited: false,
+        }),
+      } as any;
+      const mockPrisma = {
+        company: { findUnique: vi.fn().mockResolvedValue({ id: "c1", name: "Test", slug: "default" }) },
+      } as any;
+      const mockEnv = {} as any;
+      const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any;
+
+      await runSalesCommand({
+        command: "sales:extract",
+        app: mockApp,
+        prisma: mockPrisma,
+        env: mockEnv,
+        logger: mockLogger,
+        exit: (code: number) => { exitCode.value = code; },
+      });
+
+      return { exitCode: exitCode.value, app: mockApp, logger: mockLogger };
+    }
+
+    it("rejects --batch-size with non-numeric value", async () => {
+      const { exitCode, app } = await runCli(["--batch-size", "abc"]);
+      expect(exitCode).toBe(1);
+      expect(app.runExtract).not.toHaveBeenCalled();
+    });
+
+    it("rejects --batch-size 0", async () => {
+      const { exitCode, app } = await runCli(["--batch-size", "0"]);
+      expect(exitCode).toBe(1);
+      expect(app.runExtract).not.toHaveBeenCalled();
+    });
+
+    it("rejects --batch-size above 1000", async () => {
+      const { exitCode, app } = await runCli(["--batch-size", "1001"]);
+      expect(exitCode).toBe(1);
+      expect(app.runExtract).not.toHaveBeenCalled();
+    });
+
+    it("rejects --batch-size without a value", async () => {
+      const { exitCode, app } = await runCli(["--batch-size"]);
+      expect(exitCode).toBe(1);
+      expect(app.runExtract).not.toHaveBeenCalled();
+    });
+
+    it("rejects --batch-size with a float like 1.5", async () => {
+      const { exitCode, app } = await runCli(["--batch-size", "1.5"]);
+      expect(exitCode).toBe(1);
+      expect(app.runExtract).not.toHaveBeenCalled();
+    });
+
+    it("rejects --batch-size with trailing garbage like 100abc", async () => {
+      const { exitCode, app } = await runCli(["--batch-size", "100abc"]);
+      expect(exitCode).toBe(1);
+      expect(app.runExtract).not.toHaveBeenCalled();
+    });
+
+    it("accepts --batch-size 100", async () => {
+      const { exitCode, app } = await runCli(["--batch-size", "100"]);
+      expect(exitCode).toBe(0);
+      expect(app.runExtract).toHaveBeenCalledWith("c1", expect.objectContaining({ batchSize: 100 }));
+    });
+
+    it("--drain defaults to 200 without explicit batch-size", async () => {
+      const { exitCode, app } = await runCli(["--drain"]);
+      expect(exitCode).toBe(0);
+      expect(app.runExtract).toHaveBeenCalledWith("c1", expect.objectContaining({ batchSize: 200 }));
     });
   });
 });

@@ -106,6 +106,8 @@ interface DealContext {
     extractedValue: string;
     confidence: number;
     createdAt: Date;
+    /** Activity timestamp (when the CRM event happened). Falls back to createdAt if missing. */
+    activityTimestamp: Date | null;
   }>;
 }
 
@@ -114,10 +116,11 @@ function applyRules(ctx: DealContext, stalenessThreshold: number): SignalDraft[]
   const weekKey = isoWeekKey(ctx.lastActivityDate);
   const isNew = ctx.stageLabel === "New";
 
-  // Filter facts within momentum window
+  // Filter facts within momentum window (use activity timestamp, not fact creation time)
   const recentFacts = ctx.lastActivityDate
     ? ctx.facts.filter((f) => {
-        const daysDiff = differenceInDays(ctx.lastActivityDate!, f.createdAt);
+        const factTime = f.activityTimestamp ?? f.createdAt;
+        const daysDiff = differenceInDays(ctx.lastActivityDate!, factTime);
         return daysDiff >= 0 && daysDiff <= MOMENTUM_WINDOW_DAYS;
       })
     : ctx.facts;
@@ -154,7 +157,8 @@ function applyRules(ctx: DealContext, stalenessThreshold: number): SignalDraft[]
   // --- next_step_missing ---
   if (ctx.lastActivityDate) {
     const hasRecentFacts = ctx.facts.some((f) => {
-      const daysDiff = differenceInDays(ctx.lastActivityDate!, f.createdAt);
+      const factTime = f.activityTimestamp ?? f.createdAt;
+      const daysDiff = differenceInDays(ctx.lastActivityDate!, factTime);
       return daysDiff >= 0 && daysDiff <= RECENT_ACTIVITY_WINDOW_DAYS;
     });
     const hasNextStep = ctx.facts.some(
@@ -263,6 +267,15 @@ function applyRules(ctx: DealContext, stalenessThreshold: number): SignalDraft[]
       confidence: "medium",
       dedupParts: [ctx.dealId, weekKey],
     });
+  }
+
+  // --- Contradiction guard: suppress positive_momentum when *recent* blockers/negative coexist ---
+  // Only suppress if the negative evidence is recent (within momentum window),
+  // not for historical blockers that may have been resolved.
+  const hasRecentBlockerFacts = recentFacts.some((f) => f.label.startsWith("blocker:"));
+  const hasNegativeSignal = signals.some((s) => s.signalType === "negative_momentum");
+  if (hasRecentBlockerFacts || hasNegativeSignal) {
+    return signals.filter((s) => s.signalType !== "positive_momentum");
   }
 
   return signals;
@@ -390,6 +403,7 @@ export async function runDetection(params: {
               id: f.id, category: f.category, label: f.label,
               extractedValue: f.extractedValue, confidence: f.confidence,
               createdAt: f.createdAt,
+              activityTimestamp: f.activity?.timestamp ?? null,
             })),
           };
 

@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { SalesApp } from "../src/sales/app.js";
+import { runSalesCommand } from "../src/sales/cli.js";
 import type { AppEnv } from "../src/config/env.js";
+import type { StatusResult } from "../src/sales/app.js";
 
 function buildEnv(overrides: Partial<AppEnv> = {}): AppEnv {
   return {
@@ -177,5 +179,180 @@ describe("SalesApp.checkConfig", () => {
     const result = await app.checkConfig();
 
     expect(Object.keys(result.details)).toEqual(["database", "schema"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SalesApp.runStatus — doctrine wiring and fallback
+// ---------------------------------------------------------------------------
+
+describe("SalesApp.runStatus", () => {
+  function buildStatusPrisma(opts: {
+    doctrine?: { doctrineJson: Record<string, unknown> } | null;
+    doctrineThrows?: boolean;
+    counters?: Partial<Record<"activities" | "processedActivities" | "deals" | "facts" | "signals", number>>;
+  }) {
+    const activityCounts = [
+      opts.counters?.activities ?? 100,
+      opts.counters?.processedActivities ?? 40,
+    ];
+    let activityIdx = 0;
+
+    const getLatestDoctrine = opts.doctrineThrows
+      ? vi.fn().mockRejectedValue(new Error("DB down"))
+      : vi.fn().mockResolvedValue(opts.doctrine ?? null);
+
+    return {
+      prisma: {
+        salesActivity: {
+          count: vi.fn().mockImplementation(() => Promise.resolve(activityCounts[activityIdx++] ?? 0)),
+        },
+        salesDeal: {
+          count: vi.fn().mockResolvedValue(opts.counters?.deals ?? 10),
+        },
+        salesExtractedFact: {
+          count: vi.fn().mockResolvedValue(opts.counters?.facts ?? 50),
+        },
+        salesSignal: {
+          count: vi.fn().mockResolvedValue(opts.counters?.signals ?? 8),
+        },
+        salesDoctrine: {
+          findFirst: getLatestDoctrine,
+        },
+      } as any,
+      getLatestDoctrine,
+    };
+  }
+
+  it("scopes status to intelligence stages when doctrine has stageLabels", async () => {
+    const { prisma } = buildStatusPrisma({
+      doctrine: {
+        doctrineJson: {
+          stageLabels: { "s1": "New", "s2": "Opportunity Validated", "s3": "Trial" },
+          intelligenceStages: ["New", "Opportunity Validated"],
+        },
+      },
+    });
+    const app = new SalesApp(prisma, buildEnv());
+    const result = await app.runStatus("c1");
+
+    expect(result.totalActivities).toBe(100);
+    expect(result.processedActivities).toBe(40);
+    expect(result.processingRate).toBe(40);
+
+    // Verify fact count was called with stage-scoped filter
+    const factWhere = prisma.salesExtractedFact.count.mock.calls[0][0].where;
+    expect(factWhere.deal.stage.in).toEqual(expect.arrayContaining(["s1", "s2"]));
+    expect(factWhere.deal.stage.in).not.toContain("s3");
+
+    // Verify signal count was also scoped
+    const signalWhere = prisma.salesSignal.count.mock.calls[0][0].where;
+    expect(signalWhere.deal.stage.in).toEqual(expect.arrayContaining(["s1", "s2"]));
+  });
+
+  it("falls back to unscoped status when doctrine load fails", async () => {
+    const { prisma } = buildStatusPrisma({ doctrineThrows: true });
+    const app = new SalesApp(prisma, buildEnv());
+    const result = await app.runStatus("c1");
+
+    // Should still return results, just unscoped
+    expect(result.totalActivities).toBe(100);
+    expect(result.processingRate).toBe(40);
+
+    // Fact query should NOT have deal.stage filter
+    const factWhere = prisma.salesExtractedFact.count.mock.calls[0][0].where;
+    expect(factWhere.deal).toBeUndefined();
+  });
+
+  it("falls back to unscoped status when no doctrine exists", async () => {
+    const { prisma } = buildStatusPrisma({ doctrine: null });
+    const app = new SalesApp(prisma, buildEnv());
+    const result = await app.runStatus("c1");
+
+    const factWhere = prisma.salesExtractedFact.count.mock.calls[0][0].where;
+    expect(factWhere.deal).toBeUndefined();
+  });
+
+  it("falls back to unscoped when doctrine has no stageLabels", async () => {
+    const { prisma } = buildStatusPrisma({
+      doctrine: {
+        doctrineJson: {
+          // No stageLabels at all
+          stalenessThresholdDays: 21,
+        },
+      },
+    });
+    const app = new SalesApp(prisma, buildEnv());
+    const result = await app.runStatus("c1");
+
+    const factWhere = prisma.salesExtractedFact.count.mock.calls[0][0].where;
+    expect(factWhere.deal).toBeUndefined();
+  });
+
+  it("uses default intelligenceStages when doctrine omits them", async () => {
+    const { prisma } = buildStatusPrisma({
+      doctrine: {
+        doctrineJson: {
+          stageLabels: { "s1": "New", "s2": "Opportunity Validated", "s3": "Lost" },
+          // intelligenceStages omitted — defaults to ["New", "Opportunity Validated"]
+        },
+      },
+    });
+    const app = new SalesApp(prisma, buildEnv());
+    await app.runStatus("c1");
+
+    const dealWhere = prisma.salesDeal.count.mock.calls[0][0].where;
+    expect(dealWhere.stage.in).toEqual(expect.arrayContaining(["s1", "s2"]));
+    expect(dealWhere.stage.in).not.toContain("s3");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sales:status CLI — operator-visible output
+// ---------------------------------------------------------------------------
+
+describe("sales:status CLI output", () => {
+  it("emits all operator-visible metrics via logger.info", async () => {
+    const statusResult: StatusResult = {
+      totalActivities: 632,
+      processedActivities: 31,
+      unprocessedActivities: 601,
+      processingRate: 4.9,
+      totalDeals: 25,
+      totalFacts: 151,
+      totalSignals: 20,
+    };
+
+    const mockApp = { runStatus: vi.fn().mockResolvedValue(statusResult) } as any;
+    const mockPrisma = {
+      company: { findUnique: vi.fn().mockResolvedValue({ id: "c1", name: "Test Co", slug: "default" }) },
+    } as any;
+    const logged: Record<string, unknown>[] = [];
+    const mockLogger = {
+      info: vi.fn().mockImplementation((obj: unknown) => { if (typeof obj === "object") logged.push(obj as any); }),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as any;
+
+    await runSalesCommand({
+      command: "sales:status",
+      app: mockApp,
+      prisma: mockPrisma,
+      env: {} as any,
+      logger: mockLogger,
+      exit: () => {},
+    });
+
+    expect(mockApp.runStatus).toHaveBeenCalledWith("c1");
+
+    // Find the status log call (the one with "activities" key)
+    const statusLog = logged.find((o) => "activities" in o);
+    expect(statusLog).toBeDefined();
+    expect(statusLog!.activities).toBe("31/632 processed (4.9%)");
+    expect(statusLog!.unprocessed).toBe(601);
+    expect(statusLog!.deals).toBe(25);
+    expect(statusLog!.facts).toBe(151);
+    expect(statusLog!.signals).toBe(20);
   });
 });

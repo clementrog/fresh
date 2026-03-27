@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   salesDealDbId,
   salesContactDbId,
@@ -7,7 +7,8 @@ import {
   salesSignalDbId,
   salesExtractedFactDbId,
   salesRecommendationDbId,
-  salesDoctrineDbId
+  salesDoctrineDbId,
+  SalesRepositoryBundle,
 } from "../src/sales/db/sales-repositories.js";
 
 describe("sales deterministic ID helpers", () => {
@@ -71,5 +72,110 @@ describe("sales deterministic ID helpers", () => {
     const b = salesDoctrineDbId("c1", 1);
     expect(a).toBe(b);
     expect(a).toMatch(/^sdoc_/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getExtractionStatus — scoped vs unscoped
+// ---------------------------------------------------------------------------
+
+describe("getExtractionStatus", () => {
+  function buildPrisma(counters: {
+    activities?: number;
+    processedActivities?: number;
+    deals?: number;
+    facts?: number;
+    signals?: number;
+  }) {
+    // Each count call returns the next value from the configured counters.
+    // Call order in getExtractionStatus:
+    //   0: totalActivities, 1: processedActivities, 2: deals, 3: facts, 4: signals
+    const activityCountCalls: number[] = [
+      counters.activities ?? 0,
+      counters.processedActivities ?? 0,
+    ];
+    let activityIdx = 0;
+
+    return {
+      salesActivity: {
+        count: vi.fn().mockImplementation(() => {
+          return Promise.resolve(activityCountCalls[activityIdx++] ?? 0);
+        }),
+      },
+      salesDeal: {
+        count: vi.fn().mockResolvedValue(counters.deals ?? 0),
+      },
+      salesExtractedFact: {
+        count: vi.fn().mockResolvedValue(counters.facts ?? 0),
+      },
+      salesSignal: {
+        count: vi.fn().mockResolvedValue(counters.signals ?? 0),
+      },
+    } as any;
+  }
+
+  it("scopes all counters to intelligence stages when provided", async () => {
+    const prisma = buildPrisma({
+      activities: 100,
+      processedActivities: 30,
+      deals: 10,
+      facts: 50,
+      signals: 8,
+    });
+    const repos = new SalesRepositoryBundle(prisma);
+    const result = await repos.getExtractionStatus("c1", ["stage-new", "stage-opp"]);
+
+    expect(result.totalActivities).toBe(100);
+    expect(result.processedActivities).toBe(30);
+    expect(result.unprocessedActivities).toBe(70);
+    expect(result.totalDeals).toBe(10);
+    expect(result.totalFacts).toBe(50);
+    expect(result.totalSignals).toBe(8);
+    expect(result.processingRate).toBe(30);
+
+    // Verify facts and signals received stage-scoped where clauses
+    const factWhere = prisma.salesExtractedFact.count.mock.calls[0][0].where;
+    expect(factWhere.deal).toEqual({ stage: { in: ["stage-new", "stage-opp"] } });
+
+    const signalWhere = prisma.salesSignal.count.mock.calls[0][0].where;
+    expect(signalWhere.deal).toEqual({ stage: { in: ["stage-new", "stage-opp"] } });
+  });
+
+  it("returns unscoped counters when no stage IDs provided", async () => {
+    const prisma = buildPrisma({
+      activities: 200,
+      processedActivities: 200,
+      deals: 20,
+      facts: 100,
+      signals: 15,
+    });
+    const repos = new SalesRepositoryBundle(prisma);
+    const result = await repos.getExtractionStatus("c1");
+
+    expect(result.totalActivities).toBe(200);
+    expect(result.processingRate).toBe(100);
+
+    // Facts should NOT have a deal.stage filter
+    const factWhere = prisma.salesExtractedFact.count.mock.calls[0][0].where;
+    expect(factWhere.deal).toBeUndefined();
+  });
+
+  it("returns unscoped counters when empty stage array provided", async () => {
+    const prisma = buildPrisma({ activities: 50, processedActivities: 10 });
+    const repos = new SalesRepositoryBundle(prisma);
+    const result = await repos.getExtractionStatus("c1", []);
+
+    // Empty array = unscoped
+    const factWhere = prisma.salesExtractedFact.count.mock.calls[0][0].where;
+    expect(factWhere.deal).toBeUndefined();
+  });
+
+  it("returns 0 processing rate when no activities exist", async () => {
+    const prisma = buildPrisma({ activities: 0, processedActivities: 0 });
+    const repos = new SalesRepositoryBundle(prisma);
+    const result = await repos.getExtractionStatus("c1");
+
+    expect(result.processingRate).toBe(0);
+    expect(result.unprocessedActivities).toBe(0);
   });
 });

@@ -277,6 +277,7 @@ export interface SalesDoctrineConfig {
   framingRules: string[];
   stageLabels?: Record<string, string>;
   intelligenceStages?: string[];
+  precisionGuards?: PrecisionGuards;
 }
 
 export interface ExclusionRules {
@@ -284,6 +285,23 @@ export interface ExclusionRules {
   excludedStages: string[];
   minDealValue: number | null;
   lostDealCooldownDays: number;
+}
+
+// ---------------------------------------------------------------------------
+// Precision guards — deterministic filters for extraction quality
+// ---------------------------------------------------------------------------
+
+export interface PrecisionGuards {
+  /** Internal employee names that must never become champion/decision_maker */
+  internalPeople: string[];
+  /** Email domains (e.g. "@linc.fr") — persona facts matching these are dropped */
+  internalDomains: string[];
+  /** Own brand names that must never become competitor_reference */
+  selfBrands: string[];
+  /** Body-start patterns that mark low-value activities (skipped pre-LLM) */
+  lowValueSourcePatterns: string[];
+  /** Extracted blocker values matching these are scheduling noise, not commercial blockers */
+  schedulingNoisePatterns: string[];
 }
 
 // ---------------------------------------------------------------------------

@@ -18,6 +18,31 @@ export interface ConfigCheckResult {
 }
 
 /**
+ * Pipeline status counters returned by `sales:status`.
+ *
+ * When doctrine defines intelligence stages (stageLabels + intelligenceStages),
+ * **all counters are scoped to in-scope deals only**: activities linked to those
+ * deals, facts extracted from those activities, and signals generated for those
+ * deals.  This matches the scope that `sales:extract` and `sales:detect` operate
+ * on, so the reported processing rate reflects the actual extraction backlog.
+ *
+ * When no doctrine or stageLabels are configured, counters fall back to
+ * whole-company (unscoped) totals.
+ */
+export interface StatusResult {
+  totalActivities: number;
+  processedActivities: number;
+  unprocessedActivities: number;
+  /** Percentage (0–100) of in-scope activities that have been extracted. */
+  processingRate: number;
+  totalDeals: number;
+  /** Facts attached to in-scope deals (not whole-company). */
+  totalFacts: number;
+  /** Signals attached to in-scope deals (not whole-company). */
+  totalSignals: number;
+}
+
+/**
  * SalesApp — top-level orchestrator for Fresh Sales.
  *
  * `checkConfig()` validates that the env/config prerequisites for Sales are
@@ -127,7 +152,7 @@ export class SalesApp {
     return result;
   }
 
-  async runExtract(companyId: string, opts?: { reprocess?: boolean }): Promise<ExtractionResult> {
+  async runExtract(companyId: string, opts?: { reprocess?: boolean; batchSize?: number }): Promise<ExtractionResult> {
     const logger = createLogger(this.env);
     const repos = new SalesRepositoryBundle(this.prisma);
 
@@ -140,13 +165,37 @@ export class SalesApp {
     const provider = this.env.SALES_LLM_PROVIDER ?? "openai";
     const model = this.env.SALES_LLM_MODEL ?? "gpt-4.1-mini";
 
-    return runExtraction({ companyId, repos, llmClient, logger, provider, model });
+    return runExtraction({ companyId, repos, llmClient, logger, provider, model, batchSize: opts?.batchSize });
   }
 
   async runDetect(companyId: string): Promise<DetectionResult> {
     const logger = createLogger(this.env);
     const repos = new SalesRepositoryBundle(this.prisma);
     return runDetection({ companyId, repos, logger });
+  }
+
+  async runStatus(companyId: string): Promise<StatusResult> {
+    const repos = new SalesRepositoryBundle(this.prisma);
+
+    // Load doctrine to scope status to intelligence stages (same as extraction)
+    let intelligenceStageIds: string[] | undefined;
+    try {
+      const doctrine = await repos.getLatestDoctrine(companyId);
+      if (doctrine?.doctrineJson) {
+        const config = doctrine.doctrineJson as unknown as SalesDoctrineConfig;
+        const stageLabels = config.stageLabels;
+        const intelligenceStages = config.intelligenceStages ?? ["New", "Opportunity Validated"];
+        if (stageLabels && Object.keys(stageLabels).length > 0) {
+          intelligenceStageIds = Object.entries(stageLabels)
+            .filter(([, label]) => intelligenceStages.includes(label))
+            .map(([id]) => id);
+        }
+      }
+    } catch {
+      // Fall back to unscoped status
+    }
+
+    return repos.getExtractionStatus(companyId, intelligenceStageIds);
   }
 
   async runResolveStages(companyId: string): Promise<Record<string, string>> {

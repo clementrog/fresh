@@ -102,9 +102,24 @@ export async function runSalesCommand(opts: SalesCommandOpts): Promise<void> {
         return;
       }
       const reprocess = process.argv.includes("--reprocess");
-      logger.info(`Starting extraction for company "${company.name}" (${company.id})${reprocess ? " [reprocess]" : ""}`);
+      const drain = process.argv.includes("--drain");
+      const batchSizeIdx = process.argv.indexOf("--batch-size");
+      let batchSize: number | undefined;
+      if (batchSizeIdx !== -1) {
+        const raw = process.argv[batchSizeIdx + 1];
+        const parsed = Number(raw);
+        batchSize = parsed;
+        if (raw === undefined || !Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1 || parsed > 1000) {
+          logger.error("--batch-size must be an integer between 1 and 1000");
+          exit(1);
+          return;
+        }
+      } else if (drain) {
+        batchSize = 200;
+      }
+      logger.info(`Starting extraction for company "${company.name}" (${company.id})${reprocess ? " [reprocess]" : ""}${batchSize ? ` [batch=${batchSize}]` : ""}`);
       try {
-        const result = await app.runExtract(company.id, { reprocess });
+        const result = await app.runExtract(company.id, { reprocess, batchSize });
         logger.info({
           processed: result.activitiesProcessed,
           skipped: result.activitiesSkipped,
@@ -186,6 +201,25 @@ export async function runSalesCommand(opts: SalesCommandOpts): Promise<void> {
       break;
     }
 
+    case "sales:status": {
+      const companySlug = env.DEFAULT_COMPANY_SLUG ?? "default";
+      const company = await prisma.company.findUnique({ where: { slug: companySlug } });
+      if (!company) {
+        logger.error(`Company "${companySlug}" not found.`);
+        exit(1);
+        return;
+      }
+      const status = await app.runStatus(company.id);
+      logger.info({
+        activities: `${status.processedActivities}/${status.totalActivities} processed (${status.processingRate}%)`,
+        unprocessed: status.unprocessedActivities,
+        deals: status.totalDeals,
+        facts: status.totalFacts,
+        signals: status.totalSignals,
+      }, "Pipeline status");
+      break;
+    }
+
     case "sales:match":
     case "sales:cleanup":
       logger.warn(`Command ${command} is not yet implemented (Slice 4+)`);
@@ -204,7 +238,7 @@ async function main() {
 
   if (!command) {
     logger.error("Usage: tsx src/sales/cli.ts <command>");
-    logger.error("Commands: sales:check-config, sales:preflight, sales:sync, sales:extract, sales:detect, sales:match, sales:cleanup");
+    logger.error("Commands: sales:check-config, sales:preflight, sales:sync, sales:extract, sales:detect, sales:status, sales:match, sales:cleanup");
     process.exit(1);
   }
 

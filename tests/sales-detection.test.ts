@@ -63,7 +63,9 @@ function makeFact(overrides?: Partial<{
   confidence: number;
   sourceText: string;
   createdAt: Date;
+  activityTimestamp: Date | null;
 }>) {
+  const createdAt = overrides?.createdAt ?? new Date("2026-03-09T10:00:00Z");
   return {
     id: overrides?.id ?? "fact-1",
     companyId: overrides?.companyId ?? COMPANY_ID,
@@ -74,7 +76,12 @@ function makeFact(overrides?: Partial<{
     extractedValue: overrides?.extractedValue ?? "too expensive",
     confidence: overrides?.confidence ?? 0.9,
     sourceText: overrides?.sourceText ?? "The client said it was too expensive.",
-    createdAt: overrides?.createdAt ?? new Date("2026-03-09T10:00:00Z"),
+    createdAt,
+    // When activityTimestamp is explicitly provided, use it (or null).
+    // Otherwise default to matching createdAt so existing tests keep working.
+    activity: overrides && "activityTimestamp" in overrides
+      ? (overrides.activityTimestamp ? { timestamp: overrides.activityTimestamp } : null)
+      : { timestamp: createdAt },
   };
 }
 
@@ -2066,6 +2073,202 @@ describe("sales detection service", () => {
       // Both deals should be in scope (matching the default with capital V)
       expect(result.dealsScanned).toBe(2);
       expect(result.dealsSkippedByStage).toBe(0);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Recency: activity timestamp vs fact createdAt
+  // -----------------------------------------------------------------------
+  describe("recency uses activity timestamp", () => {
+    it("uses activity timestamp for momentum window, not fact createdAt", async () => {
+      // Deal with lastActivityDate = March 10
+      // Fact was created today (March 27) but the activity happened 60 days ago (Jan 9)
+      // → should NOT be considered "recent" for momentum
+      const deal = makeDeal({
+        id: "d1",
+        staleDays: 0,
+        lastActivityDate: new Date("2026-03-10T12:00:00Z"),
+      });
+      const facts = [
+        makeFact({
+          id: "f1",
+          dealId: "d1",
+          category: "sentiment",
+          label: "negative",
+          extractedValue: "negative",
+          createdAt: new Date("2026-03-27T10:00:00Z"), // created "now" (backfill)
+          activityTimestamp: new Date("2026-01-09T10:00:00Z"), // activity happened 60 days ago
+        }),
+      ];
+
+      const { repos, spies } = buildMockRepos({
+        deals: [deal],
+        factsPerDeal: new Map([["d1", facts]]),
+      });
+
+      await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
+
+      // Old activity should NOT trigger negative_momentum (outside 30-day window)
+      const negMomentum = spies.txUpsert.mock.calls.filter(
+        (c: any) => callData(c)?.signalType === "negative_momentum"
+      );
+      expect(negMomentum).toHaveLength(0);
+    });
+
+    it("falls back to createdAt when activityTimestamp is null", async () => {
+      const deal = makeDeal({
+        id: "d1",
+        staleDays: 0,
+        lastActivityDate: new Date("2026-03-10T12:00:00Z"),
+      });
+      // Fact with no activity link — createdAt is within window
+      const facts = [
+        makeFact({
+          id: "f1",
+          dealId: "d1",
+          category: "sentiment",
+          label: "negative",
+          extractedValue: "negative",
+          createdAt: new Date("2026-03-09T10:00:00Z"), // 1 day before lastActivity
+          activityTimestamp: null,
+        }),
+      ];
+
+      const { repos, spies } = buildMockRepos({
+        deals: [deal],
+        factsPerDeal: new Map([["d1", facts]]),
+      });
+
+      await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
+
+      // Should still use createdAt as fallback → negative_momentum fires
+      const negMomentum = spies.txUpsert.mock.calls.filter(
+        (c: any) => callData(c)?.signalType === "negative_momentum"
+      );
+      expect(negMomentum).toHaveLength(1);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Contradiction guard: positive_momentum suppressed by blockers
+  // -----------------------------------------------------------------------
+  describe("contradiction guard", () => {
+    it("suppresses positive_momentum when blocker_identified coexists", async () => {
+      const deal = makeDeal({ id: "d1", staleDays: 0 });
+      const facts = [
+        // Champion → would generate champion_identified + positive_momentum
+        makeFact({
+          id: "f1", dealId: "d1", category: "persona_stakeholder",
+          label: "champion", extractedValue: "Jane Smith",
+        }),
+        // Blocker → generates blocker_identified (which suppresses positive via contradiction guard)
+        makeFact({
+          id: "f2", dealId: "d1", category: "objection_mentioned",
+          label: "blocker:infosec", extractedValue: "infosec review pending",
+        }),
+      ];
+
+      const { repos, spies } = buildMockRepos({
+        deals: [deal],
+        factsPerDeal: new Map([["d1", facts]]),
+      });
+
+      await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
+
+      const signalTypes = spies.txUpsert.mock.calls.map((c: any) => callData(c)?.signalType);
+      expect(signalTypes).toContain("blocker_identified");
+      expect(signalTypes).toContain("champion_identified");
+      expect(signalTypes).not.toContain("positive_momentum");
+    });
+
+    it("keeps positive_momentum when no blocker or negative momentum", async () => {
+      const deal = makeDeal({ id: "d1", staleDays: 0 });
+      const facts = [
+        makeFact({
+          id: "f1", dealId: "d1", category: "persona_stakeholder",
+          label: "champion", extractedValue: "Jane Smith",
+        }),
+      ];
+
+      const { repos, spies } = buildMockRepos({
+        deals: [deal],
+        factsPerDeal: new Map([["d1", facts]]),
+      });
+
+      await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
+
+      const signalTypes = spies.txUpsert.mock.calls.map((c: any) => callData(c)?.signalType);
+      expect(signalTypes).toContain("positive_momentum");
+    });
+
+    it("keeps positive_momentum when blocker is historical (outside momentum window)", async () => {
+      // lastActivityDate = March 10. Champion is recent, blocker is from 60 days ago.
+      // Contradiction guard should NOT suppress positive_momentum because the blocker is stale.
+      const deal = makeDeal({
+        id: "d1",
+        staleDays: 0,
+        lastActivityDate: new Date("2026-03-10T12:00:00Z"),
+      });
+      const facts = [
+        // Recent champion (within 30 days of lastActivityDate)
+        makeFact({
+          id: "f1", dealId: "d1", category: "persona_stakeholder",
+          label: "champion", extractedValue: "Jane Smith",
+          activityTimestamp: new Date("2026-03-08T10:00:00Z"),
+        }),
+        // Old blocker (60 days before lastActivityDate — outside momentum window)
+        makeFact({
+          id: "f2", dealId: "d1", category: "objection_mentioned",
+          label: "blocker:old-issue", extractedValue: "old resolved issue",
+          activityTimestamp: new Date("2026-01-09T10:00:00Z"),
+        }),
+      ];
+
+      const { repos, spies } = buildMockRepos({
+        deals: [deal],
+        factsPerDeal: new Map([["d1", facts]]),
+      });
+
+      await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
+
+      const signalTypes = spies.txUpsert.mock.calls.map((c: any) => callData(c)?.signalType);
+      // blocker_identified still fires (based on all facts) but positive_momentum survives
+      // because the contradiction guard only checks recent blocker facts
+      expect(signalTypes).toContain("blocker_identified");
+      expect(signalTypes).toContain("champion_identified");
+      expect(signalTypes).toContain("positive_momentum");
+    });
+
+    it("suppresses positive_momentum when blocker is recent", async () => {
+      const deal = makeDeal({
+        id: "d1",
+        staleDays: 0,
+        lastActivityDate: new Date("2026-03-10T12:00:00Z"),
+      });
+      const facts = [
+        makeFact({
+          id: "f1", dealId: "d1", category: "persona_stakeholder",
+          label: "champion", extractedValue: "Jane Smith",
+          activityTimestamp: new Date("2026-03-08T10:00:00Z"),
+        }),
+        // Recent blocker (2 days before lastActivityDate — within momentum window)
+        makeFact({
+          id: "f2", dealId: "d1", category: "objection_mentioned",
+          label: "blocker:active-issue", extractedValue: "active infosec concern",
+          activityTimestamp: new Date("2026-03-08T10:00:00Z"),
+        }),
+      ];
+
+      const { repos, spies } = buildMockRepos({
+        deals: [deal],
+        factsPerDeal: new Map([["d1", facts]]),
+      });
+
+      await runDetection({ companyId: COMPANY_ID, repos, logger: mockLogger });
+
+      const signalTypes = spies.txUpsert.mock.calls.map((c: any) => callData(c)?.signalType);
+      expect(signalTypes).toContain("blocker_identified");
+      expect(signalTypes).not.toContain("positive_momentum");
     });
   });
 });

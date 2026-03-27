@@ -373,6 +373,7 @@ export class SalesRepositoryBundle {
   async listExtractionsForDeal(dealId: string) {
     return this.prisma.salesExtractedFact.findMany({
       where: { dealId },
+      include: { activity: { select: { timestamp: true } } },
       orderBy: { createdAt: "desc" }
     });
   }
@@ -628,6 +629,49 @@ export class SalesRepositoryBundle {
     });
   }
 
+  // ---- Status helpers ----
+
+  /**
+   * Return pipeline counters for operator-visible status reporting.
+   *
+   * When `intelligenceStageIds` is provided and non-empty, every counter
+   * (activities, deals, facts, signals) is scoped to deals whose stage is in
+   * that set.  Facts and signals are filtered via their `deal` relation, so
+   * only records attached to in-scope deals are counted — not the whole-company
+   * totals.  This ensures the reported processing rate is consistent with the
+   * actual extraction and detection scope.
+   */
+  async getExtractionStatus(companyId: string, intelligenceStageIds?: string[]) {
+    const scoped = intelligenceStageIds && intelligenceStageIds.length > 0;
+
+    // When stage IDs are provided, scope ALL counters to in-scope deals
+    const dealWhere = scoped
+      ? { companyId, stage: { in: intelligenceStageIds! } }
+      : { companyId };
+    const activityWhere = scoped
+      ? { companyId, dealId: { not: null as string | null }, deal: { stage: { in: intelligenceStageIds! } } }
+      : { companyId, dealId: { not: null as string | null } };
+    const factWhere = scoped
+      ? { companyId, deal: { stage: { in: intelligenceStageIds! } } }
+      : { companyId };
+    const signalWhere = scoped
+      ? { companyId, deal: { stage: { in: intelligenceStageIds! } } }
+      : { companyId };
+
+    const [totalActivities, processedActivities, totalDeals, totalFacts, totalSignals] = await Promise.all([
+      this.prisma.salesActivity.count({ where: activityWhere }),
+      this.prisma.salesActivity.count({ where: { ...activityWhere, extractedAt: { not: null } } }),
+      this.prisma.salesDeal.count({ where: dealWhere }),
+      this.prisma.salesExtractedFact.count({ where: factWhere }),
+      this.prisma.salesSignal.count({ where: signalWhere }),
+    ]);
+    const unprocessedActivities = totalActivities - processedActivities;
+    const processingRate = totalActivities > 0
+      ? Math.round((processedActivities / totalActivities) * 1000) / 10
+      : 0;
+    return { totalActivities, processedActivities, unprocessedActivities, processingRate, totalDeals, totalFacts, totalSignals };
+  }
+
   // ---- Extraction helpers ----
 
   async deleteFactsForActivity(activityId: string, tx: PrismaTransaction = this.prisma) {
@@ -675,6 +719,21 @@ export class SalesRepositoryBundle {
       select: { id: true, stage: true }
     });
     return new Map(deals.map((d) => [d.id, d.stage]));
+  }
+
+  async listCompanyNamesForDeals(companyId: string, dealIds: string[]): Promise<Map<string, string[]>> {
+    if (dealIds.length === 0) return new Map();
+    const links = await this.prisma.dealCompany.findMany({
+      where: { dealId: { in: dealIds } },
+      include: { company: { select: { name: true } } }
+    });
+    const result = new Map<string, string[]>();
+    for (const link of links) {
+      const names = result.get(link.dealId) ?? [];
+      names.push(link.company.name);
+      result.set(link.dealId, names);
+    }
+    return result;
   }
 
   async deleteSignalsForOutOfScopeDeals(

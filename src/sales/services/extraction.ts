@@ -5,7 +5,7 @@ import type { SalesRepositoryBundle } from "../db/sales-repositories.js";
 import { salesExtractedFactDbId } from "../db/sales-repositories.js";
 import { createDeterministicId } from "../../lib/ids.js";
 import type { LlmProvider } from "../../domain/types.js";
-import type { SalesDoctrineConfig } from "../domain/types.js";
+import type { SalesDoctrineConfig, PrecisionGuards } from "../domain/types.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -153,6 +153,100 @@ export function fanOutFacts(
 }
 
 // ---------------------------------------------------------------------------
+// Precision guards — deterministic post-extraction filtering
+// ---------------------------------------------------------------------------
+
+const LOW_VALUE_SOURCE_CHECK_LENGTH = 100;
+
+export function isLowValueSource(body: string, patterns: string[]): boolean {
+  if (patterns.length === 0) return false;
+  const head = body.slice(0, LOW_VALUE_SOURCE_CHECK_LENGTH).toLowerCase();
+  return patterns.some((p) => head.includes(p.toLowerCase()));
+}
+
+export function filterFacts(
+  facts: FactParams[],
+  guards: PrecisionGuards,
+  dealCompanyNames: string[]
+): { kept: FactParams[]; dropped: FactParams[] } {
+  const kept: FactParams[] = [];
+  const dropped: FactParams[] = [];
+
+  const internalLower = guards.internalPeople.map((n) => n.toLowerCase());
+  const domainsLower = guards.internalDomains.map((d) => d.toLowerCase());
+  const selfBrandsLower = guards.selfBrands.map((b) => b.toLowerCase());
+  const accountNamesLower = dealCompanyNames.map((n) => n.toLowerCase());
+  const noiseLower = guards.schedulingNoisePatterns.map((p) => p.toLowerCase());
+
+  for (const fact of facts) {
+    const valLower = fact.extractedValue.toLowerCase();
+
+    // 1A: Block internal people from persona_stakeholder
+    if (fact.category === "persona_stakeholder") {
+      const isInternalPerson = internalLower.some((name) => valLower.includes(name));
+      const isInternalDomain = domainsLower.some((domain) => valLower.includes(domain));
+      if (isInternalPerson || isInternalDomain) {
+        dropped.push(fact);
+        continue;
+      }
+    }
+
+    // 1B: Block self-brand and account-brand from competitor_reference
+    // TODO: Current matching uses lowercased includes() which may false-drop
+    // legitimate competitors whose names happen to be substrings of account
+    // names (or vice versa). If production false drops appear, tighten this
+    // to exact-match with optional Levenshtein/normalized-token comparison
+    // and add a canonical-competitor allowlist to PrecisionGuards.
+    if (fact.category === "competitor_reference") {
+      const isSelfBrand = selfBrandsLower.some((brand) => valLower === brand);
+      const isAccountBrand = accountNamesLower.some(
+        (name) => valLower === name || valLower.includes(name) || name.includes(valLower)
+      );
+      if (isSelfBrand || isAccountBrand) {
+        dropped.push(fact);
+        continue;
+      }
+    }
+
+    // 1D: Block scheduling noise from blockers
+    if (fact.label.startsWith("blocker:") || fact.label.startsWith("pain:")) {
+      const isNoise = noiseLower.some((pattern) => valLower.includes(pattern));
+      if (isNoise) {
+        dropped.push(fact);
+        continue;
+      }
+    }
+
+    kept.push(fact);
+  }
+
+  return { kept, dropped };
+}
+
+const EMPTY_GUARDS: PrecisionGuards = {
+  internalPeople: [],
+  internalDomains: [],
+  selfBrands: [],
+  lowValueSourcePatterns: [],
+  schedulingNoisePatterns: [],
+};
+
+/** Merge partial/untrusted doctrine guards onto safe defaults. */
+export function coerceGuards(raw: unknown): PrecisionGuards {
+  if (!raw || typeof raw !== "object") return EMPTY_GUARDS;
+  const obj = raw as Record<string, unknown>;
+  const arr = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  return {
+    internalPeople: arr(obj.internalPeople),
+    internalDomains: arr(obj.internalDomains),
+    selfBrands: arr(obj.selfBrands),
+    lowValueSourcePatterns: arr(obj.lowValueSourcePatterns),
+    schedulingNoisePatterns: arr(obj.schedulingNoisePatterns),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Error classification
 // ---------------------------------------------------------------------------
 
@@ -234,12 +328,14 @@ export async function runExtraction(params: {
   let leaseLost = false;
 
   try {
-    // 2. Load doctrine for stage filtering
+    // 2. Load doctrine for stage filtering + precision guards
     let intelligenceStageIds: Set<string> | null = null;
+    let guards: PrecisionGuards = EMPTY_GUARDS;
     try {
       const doctrine = await repos.getLatestDoctrine(companyId);
       if (doctrine?.doctrineJson) {
         const config = doctrine.doctrineJson as unknown as SalesDoctrineConfig;
+        guards = coerceGuards(config.precisionGuards);
         const stageLabels = config.stageLabels;
         const intelligenceStages = config.intelligenceStages ?? ["New", "Opportunity Validated"];
         if (stageLabels && Object.keys(stageLabels).length > 0) {
@@ -263,11 +359,14 @@ export async function runExtraction(params: {
     const activities = await repos.listUnextractedActivities(companyId, batchSize);
 
     // Build deal-stage cache for stage filtering
+    const dealIds = [...new Set(activities.filter((a) => a.dealId).map((a) => a.dealId!))];
     let dealStageMap: Map<string, string> | null = null;
     if (intelligenceStageIds) {
-      const dealIds = [...new Set(activities.filter((a) => a.dealId).map((a) => a.dealId!))];
       dealStageMap = await repos.listDealsForStageCheck(companyId, dealIds);
     }
+
+    // Build deal → company names for account-brand competitor filtering
+    const dealCompanyNames = await repos.listCompanyNamesForDeals(companyId, dealIds);
 
     // 3. Process each activity
     for (const activity of activities) {
@@ -321,6 +420,18 @@ export async function runExtraction(params: {
       }
 
       if (!activity.dealId) {
+        await repos.transaction(async (tx) => {
+          await tx.salesActivity.update({
+            where: { id: activity.id },
+            data: { extractedAt: new Date() }
+          });
+        });
+        result.activitiesSkipped++;
+        continue;
+      }
+
+      // Low-value source skip (pre-LLM — saves cost)
+      if (isLowValueSource(activity.body, guards.lowValueSourcePatterns)) {
         await repos.transaction(async (tx) => {
           await tx.salesActivity.update({
             where: { id: activity.id },
@@ -421,8 +532,16 @@ export async function runExtraction(params: {
         break;
       }
 
-      // Fan out facts and write atomically
-      const facts = fanOutFacts(companyId, activity.id, activity.dealId, llmOutput, activity.body);
+      // Fan out facts, apply precision guards, write atomically
+      const rawFacts = fanOutFacts(companyId, activity.id, activity.dealId, llmOutput, activity.body);
+      const companyNames = dealCompanyNames.get(activity.dealId) ?? [];
+      const { kept: facts, dropped } = filterFacts(rawFacts, guards, companyNames);
+
+      if (dropped.length > 0) {
+        logger.info({ activityId: activity.id, droppedCount: dropped.length,
+          droppedCategories: dropped.map((f) => `${f.category}:${f.label}`) },
+          "Precision guards filtered facts");
+      }
 
       await repos.transaction(async (tx) => {
         // Delete old facts for this activity
