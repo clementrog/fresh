@@ -42,6 +42,22 @@ export interface StatusResult {
   totalSignals: number;
 }
 
+export interface DiagnosticsResult {
+  /** In-scope buckets (scoped to intelligence-stage deals) */
+  nullBody: number;
+  cleaned: number;
+  exhaustedOrphan: number;
+  retryPending: number;
+  pendingFirstAttempt: number;
+  permanentlyUnreachable: number;
+  actionable: number;
+  /** Out-of-scope: activities with no deal (company-wide, cannot be stage-scoped) */
+  noDeal: number;
+  /** Adjusted coverage (unvalidated — requires operator spot-check of excluded items) */
+  adjustedTotal: number;
+  adjustedProcessingRate: number;
+}
+
 /**
  * SalesApp — top-level orchestrator for Fresh Sales.
  *
@@ -152,7 +168,10 @@ export class SalesApp {
     return result;
   }
 
-  async runExtract(companyId: string, opts?: { reprocess?: boolean; batchSize?: number }): Promise<ExtractionResult> {
+  async runExtract(
+    companyId: string,
+    opts?: { reprocess?: boolean; batchSize?: number; drain?: boolean },
+  ): Promise<ExtractionResult & { stopReason?: DrainStopReason; iterations?: number }> {
     const logger = createLogger(this.env);
     const repos = new SalesRepositoryBundle(this.prisma);
 
@@ -164,8 +183,76 @@ export class SalesApp {
     const llmClient = new LlmClient(this.env, logger);
     const provider = this.env.SALES_LLM_PROVIDER ?? "openai";
     const model = this.env.SALES_LLM_MODEL ?? "gpt-4.1-mini";
+    const batchSize = opts?.batchSize ?? (opts?.drain ? 200 : undefined);
 
-    return runExtraction({ companyId, repos, llmClient, logger, provider, model, batchSize: opts?.batchSize });
+    if (!opts?.drain) {
+      return runExtraction({ companyId, repos, llmClient, logger, provider, model, batchSize });
+    }
+
+    // Drain mode: loop until queue is empty or a safety cap is hit
+    const startTime = Date.now();
+    const aggregate = emptyExtractionResult();
+    let consecutiveStalls = 0;
+    let rateLimitRetried = false;
+    let stopReason: DrainStopReason = "iteration_cap"; // default if loop exhausts naturally
+    let iterations = 0;
+
+    for (let i = 0; i < MAX_DRAIN_ITERATIONS; i++) {
+      if (Date.now() - startTime > MAX_DRAIN_DURATION_MS) {
+        stopReason = "time_cap";
+        logger.warn("Drain hit time cap — stopping");
+        break;
+      }
+
+      const result = await runExtraction({ companyId, repos, llmClient, logger, provider, model, batchSize });
+      mergeExtractionResults(aggregate, result);
+      iterations++;
+
+      // Items that permanently left the unextracted queue this iteration
+      const itemsDrained = result.activitiesProcessed + result.activitiesSkipped
+        + result.stageSkipped + result.exhaustedItems;
+
+      // Empty queue: nothing handled, no retryable errors, and not rate-limited
+      if (itemsDrained === 0 && result.retryableErrors === 0 && !result.rateLimited) {
+        stopReason = "queue_empty";
+        logger.info("Drain complete — no more unextracted activities");
+        break;
+      }
+
+      // Rate-limit backoff (checked before stall counter so rate-limited
+      // iterations with zero drain are classified as rate_limited, not stalled)
+      if (result.rateLimited) {
+        if (rateLimitRetried) {
+          stopReason = "rate_limited";
+          logger.warn("Rate limited twice — stopping drain");
+          break;
+        }
+        rateLimitRetried = true;
+        logger.info(`Rate limited — backing off ${RATE_LIMIT_BACKOFF_MS / 1000}s`);
+        await sleep(RATE_LIMIT_BACKOFF_MS);
+        continue;
+      }
+      rateLimitRetried = false;
+
+      // Backlog-reduction safeguard (only reached for non-rate-limited iterations)
+      if (itemsDrained === 0) {
+        consecutiveStalls++;
+        if (consecutiveStalls >= MAX_STALL_ITERATIONS) {
+          stopReason = "stalled";
+          logger.warn({ consecutiveStalls }, "Drain stalled — no backlog reduction, stopping");
+          break;
+        }
+      } else {
+        consecutiveStalls = 0;
+      }
+    }
+
+    logger.info({ stopReason, iterations, processed: aggregate.activitiesProcessed,
+      skipped: aggregate.activitiesSkipped, facts: aggregate.factsCreated,
+      exhausted: aggregate.exhaustedItems, costUsd: aggregate.costUsd,
+    }, "Drain completed");
+
+    return { ...aggregate, stopReason, iterations };
   }
 
   async runDetect(companyId: string): Promise<DetectionResult> {
@@ -196,6 +283,39 @@ export class SalesApp {
     }
 
     return repos.getExtractionStatus(companyId, intelligenceStageIds);
+  }
+
+  async runDiagnostics(companyId: string): Promise<DiagnosticsResult> {
+    const repos = new SalesRepositoryBundle(this.prisma);
+
+    let intelligenceStageIds: string[] | undefined;
+    try {
+      const doctrine = await repos.getLatestDoctrine(companyId);
+      if (doctrine?.doctrineJson) {
+        const config = doctrine.doctrineJson as unknown as SalesDoctrineConfig;
+        const stageLabels = config.stageLabels;
+        const intelligenceStages = config.intelligenceStages ?? ["New", "Opportunity Validated"];
+        if (stageLabels && Object.keys(stageLabels).length > 0) {
+          intelligenceStageIds = Object.entries(stageLabels)
+            .filter(([, label]) => intelligenceStages.includes(label))
+            .map(([id]) => id);
+        }
+      }
+    } catch {
+      // Fall back to unscoped diagnostics
+    }
+
+    const [diag, status] = await Promise.all([
+      repos.getExtractionDiagnostics(companyId, intelligenceStageIds),
+      repos.getExtractionStatus(companyId, intelligenceStageIds),
+    ]);
+
+    const adjustedTotal = status.totalActivities - diag.permanentlyUnreachable;
+    const adjustedProcessingRate = adjustedTotal > 0
+      ? Math.round((status.processedActivities / adjustedTotal) * 1000) / 10
+      : 0;
+
+    return { ...diag, adjustedTotal, adjustedProcessingRate };
   }
 
   async runResolveStages(companyId: string): Promise<Record<string, string>> {
@@ -239,4 +359,49 @@ export class SalesApp {
 
     return stageLabels;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Drain loop helpers
+// ---------------------------------------------------------------------------
+
+const MAX_DRAIN_ITERATIONS = 20;
+const MAX_DRAIN_DURATION_MS = 30 * 60_000; // 30 minutes
+const RATE_LIMIT_BACKOFF_MS = 60_000;       // 60 seconds
+const MAX_STALL_ITERATIONS = 2;
+
+export type DrainStopReason = "queue_empty" | "stalled" | "rate_limited" | "iteration_cap" | "time_cap";
+
+function emptyExtractionResult(): ExtractionResult {
+  return {
+    activitiesProcessed: 0,
+    activitiesSkipped: 0,
+    stageSkipped: 0,
+    factsCreated: 0,
+    retryableErrors: 0,
+    terminalSkips: 0,
+    exhaustedItems: 0,
+    errors: [],
+    warnings: [],
+    costUsd: 0,
+    rateLimited: false,
+  };
+}
+
+export function mergeExtractionResults(target: ExtractionResult, source: ExtractionResult): void {
+  target.activitiesProcessed += source.activitiesProcessed;
+  target.activitiesSkipped += source.activitiesSkipped;
+  target.stageSkipped += source.stageSkipped;
+  target.factsCreated += source.factsCreated;
+  target.retryableErrors += source.retryableErrors;
+  target.terminalSkips += source.terminalSkips;
+  target.exhaustedItems += source.exhaustedItems;
+  target.errors.push(...source.errors);
+  target.warnings.push(...source.warnings);
+  target.costUsd += source.costUsd;
+  target.rateLimited = target.rateLimited || source.rateLimited;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

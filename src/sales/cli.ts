@@ -114,12 +114,10 @@ export async function runSalesCommand(opts: SalesCommandOpts): Promise<void> {
           exit(1);
           return;
         }
-      } else if (drain) {
-        batchSize = 200;
       }
-      logger.info(`Starting extraction for company "${company.name}" (${company.id})${reprocess ? " [reprocess]" : ""}${batchSize ? ` [batch=${batchSize}]` : ""}`);
+      logger.info(`Starting extraction for company "${company.name}" (${company.id})${reprocess ? " [reprocess]" : ""}${drain ? " [drain]" : ""}${batchSize ? ` [batch=${batchSize}]` : ""}`);
       try {
-        const result = await app.runExtract(company.id, { reprocess, batchSize });
+        const result = await app.runExtract(company.id, { reprocess, batchSize, drain });
         logger.info({
           processed: result.activitiesProcessed,
           skipped: result.activitiesSkipped,
@@ -128,7 +126,8 @@ export async function runSalesCommand(opts: SalesCommandOpts): Promise<void> {
           exhausted: result.exhaustedItems,
           costUsd: result.costUsd,
           rateLimited: result.rateLimited,
-        }, "Extraction completed");
+          ...(result.stopReason ? { stopReason: result.stopReason, iterations: result.iterations } : {}),
+        }, drain ? "Drain completed" : "Extraction completed");
         for (const w of result.warnings) {
           logger.warn(w);
         }
@@ -220,6 +219,34 @@ export async function runSalesCommand(opts: SalesCommandOpts): Promise<void> {
       break;
     }
 
+    case "sales:diagnostics": {
+      const companySlug = env.DEFAULT_COMPANY_SLUG ?? "default";
+      const company = await prisma.company.findUnique({ where: { slug: companySlug } });
+      if (!company) {
+        logger.error(`Company "${companySlug}" not found.`);
+        exit(1);
+        return;
+      }
+      const diag = await app.runDiagnostics(company.id);
+      logger.info({
+        nullBody: diag.nullBody,
+        cleaned: diag.cleaned,
+        exhaustedOrphan: diag.exhaustedOrphan,
+        retryPending: diag.retryPending,
+        pendingFirstAttempt: diag.pendingFirstAttempt,
+        permanentlyUnreachable: diag.permanentlyUnreachable,
+        actionable: diag.actionable,
+      }, "Unprocessed in-scope activities (extractedAt IS NULL, intelligence-stage deals)");
+      if (diag.noDeal > 0) {
+        logger.info({ noDeal: diag.noDeal }, "Unprocessed out-of-scope activities (no deal association, company-wide)");
+      }
+      logger.info({
+        adjustedTotal: diag.adjustedTotal,
+        adjustedProcessingRate: `${diag.adjustedProcessingRate}%`,
+      }, "Adjusted coverage (unvalidated — spot-check excluded items before trusting)");
+      break;
+    }
+
     case "sales:match":
     case "sales:cleanup":
       logger.warn(`Command ${command} is not yet implemented (Slice 4+)`);
@@ -238,7 +265,7 @@ async function main() {
 
   if (!command) {
     logger.error("Usage: tsx src/sales/cli.ts <command>");
-    logger.error("Commands: sales:check-config, sales:preflight, sales:sync, sales:extract, sales:detect, sales:status, sales:match, sales:cleanup");
+    logger.error("Commands: sales:check-config, sales:preflight, sales:sync, sales:extract, sales:detect, sales:status, sales:diagnostics, sales:match, sales:cleanup");
     process.exit(1);
   }
 

@@ -308,6 +308,74 @@ describe("SalesApp.runStatus", () => {
 });
 
 // ---------------------------------------------------------------------------
+// SalesApp.runDiagnostics — adjusted coverage math under scoped doctrine
+// ---------------------------------------------------------------------------
+
+describe("SalesApp.runDiagnostics", () => {
+  it("computes adjusted coverage from status + diagnostics under scoped doctrine", async () => {
+    // Build a prisma mock that serves both getExtractionDiagnostics and
+    // getExtractionStatus (called via runDiagnostics).
+    //
+    // Call sequence for salesActivity.count:
+    //   getExtractionDiagnostics: 6 calls (nullBody, cleaned, exhausted, retry, pending, noDeal)
+    //   getExtractionStatus:      2 calls (totalActivities, processedActivities)
+    // These run concurrently via Promise.all, but Prisma mock calls are sequential per model.
+    // The 6 diagnostics + 2 status = 8 total salesActivity.count calls.
+    const activityCounts = [
+      // diagnostics (6 calls)
+      10,  // nullBody
+      5,   // cleaned
+      0,   // exhaustedOrphan
+      3,   // retryPending
+      20,  // pendingFirstAttempt
+      7,   // noDeal
+      // status (2 calls)
+      632, // totalActivities
+      545, // processedActivities
+    ];
+    let actIdx = 0;
+
+    const prisma = {
+      salesActivity: {
+        count: vi.fn().mockImplementation(() => Promise.resolve(activityCounts[actIdx++] ?? 0)),
+      },
+      salesDeal: {
+        count: vi.fn().mockResolvedValue(25),
+      },
+      salesExtractedFact: {
+        count: vi.fn().mockResolvedValue(100),
+      },
+      salesSignal: {
+        count: vi.fn().mockResolvedValue(20),
+      },
+      salesDoctrine: {
+        findFirst: vi.fn().mockResolvedValue({
+          doctrineJson: {
+            stageLabels: { "s1": "New", "s2": "Opportunity Validated" },
+            intelligenceStages: ["New", "Opportunity Validated"],
+          },
+        }),
+      },
+    } as any;
+
+    const app = new SalesApp(prisma, buildEnv());
+    const result = await app.runDiagnostics("c1");
+
+    // Bucket counts from diagnostics
+    expect(result.nullBody).toBe(10);
+    expect(result.cleaned).toBe(5);
+    expect(result.permanentlyUnreachable).toBe(15); // 10 + 5
+    expect(result.actionable).toBe(23); // 3 + 20
+    expect(result.noDeal).toBe(7);
+
+    // Adjusted coverage = processedActivities / (totalActivities - permanentlyUnreachable)
+    // = 545 / (632 - 15) = 545 / 617 = 88.3%
+    expect(result.adjustedTotal).toBe(617); // 632 - 15
+    expect(result.adjustedProcessingRate).toBe(88.3);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // sales:status CLI — operator-visible output
 // ---------------------------------------------------------------------------
 
@@ -346,7 +414,6 @@ describe("sales:status CLI output", () => {
 
     expect(mockApp.runStatus).toHaveBeenCalledWith("c1");
 
-    // Find the status log call (the one with "activities" key)
     const statusLog = logged.find((o) => "activities" in o);
     expect(statusLog).toBeDefined();
     expect(statusLog!.activities).toBe("31/632 processed (4.9%)");
@@ -354,5 +421,104 @@ describe("sales:status CLI output", () => {
     expect(statusLog!.deals).toBe(25);
     expect(statusLog!.facts).toBe(151);
     expect(statusLog!.signals).toBe(20);
+    // Adjusted coverage must NOT appear in status — it lives in diagnostics only
+    expect(statusLog!).not.toHaveProperty("adjusted");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sales:diagnostics CLI — wiring and output
+// ---------------------------------------------------------------------------
+
+describe("sales:diagnostics CLI output", () => {
+  it("calls runDiagnostics and logs in-scope buckets, out-of-scope noDeal, and unvalidated adjusted coverage", async () => {
+    const diagResult = {
+      nullBody: 10,
+      cleaned: 5,
+      exhaustedOrphan: 0,
+      retryPending: 3,
+      pendingFirstAttempt: 20,
+      permanentlyUnreachable: 15,
+      actionable: 23,
+      noDeal: 7,
+      adjustedTotal: 600,
+      adjustedProcessingRate: 91.2,
+    };
+
+    const mockApp = { runDiagnostics: vi.fn().mockResolvedValue(diagResult) } as any;
+    const mockPrisma = {
+      company: { findUnique: vi.fn().mockResolvedValue({ id: "c1", name: "Test Co", slug: "default" }) },
+    } as any;
+    const logged: Array<{ obj: unknown; msg?: string }> = [];
+    const mockLogger = {
+      info: vi.fn().mockImplementation((obj: unknown, msg?: string) => {
+        logged.push({ obj, msg });
+      }),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as any;
+
+    await runSalesCommand({
+      command: "sales:diagnostics",
+      app: mockApp,
+      prisma: mockPrisma,
+      env: {} as any,
+      logger: mockLogger,
+      exit: () => {},
+    });
+
+    expect(mockApp.runDiagnostics).toHaveBeenCalledWith("c1");
+
+    // In-scope buckets log
+    const inScopeLog = logged.find((l) => typeof l.msg === "string" && l.msg.includes("in-scope"));
+    expect(inScopeLog).toBeDefined();
+    const inScopeObj = inScopeLog!.obj as any;
+    expect(inScopeObj.actionable).toBe(23);
+    expect(inScopeObj.permanentlyUnreachable).toBe(15);
+    // noDeal must NOT appear in the in-scope log
+    expect(inScopeObj).not.toHaveProperty("noDeal");
+
+    // noDeal logged separately as out-of-scope
+    const noDealLog = logged.find((l) => typeof l.msg === "string" && l.msg.includes("out-of-scope"));
+    expect(noDealLog).toBeDefined();
+    expect((noDealLog!.obj as any).noDeal).toBe(7);
+
+    // Adjusted coverage log is explicitly marked unvalidated
+    const adjustedLog = logged.find((l) => typeof l.msg === "string" && l.msg.includes("unvalidated"));
+    expect(adjustedLog).toBeDefined();
+    expect((adjustedLog!.obj as any).adjustedProcessingRate).toBe("91.2%");
+  });
+
+  it("omits out-of-scope log when noDeal is 0", async () => {
+    const diagResult = {
+      nullBody: 0, cleaned: 0, exhaustedOrphan: 0, retryPending: 0,
+      pendingFirstAttempt: 5, permanentlyUnreachable: 0, actionable: 5,
+      noDeal: 0, adjustedTotal: 100, adjustedProcessingRate: 95.0,
+    };
+
+    const mockApp = { runDiagnostics: vi.fn().mockResolvedValue(diagResult) } as any;
+    const mockPrisma = {
+      company: { findUnique: vi.fn().mockResolvedValue({ id: "c1", name: "Test Co", slug: "default" }) },
+    } as any;
+    const logged: Array<{ obj: unknown; msg?: string }> = [];
+    const mockLogger = {
+      info: vi.fn().mockImplementation((obj: unknown, msg?: string) => { logged.push({ obj, msg }); }),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as any;
+
+    await runSalesCommand({
+      command: "sales:diagnostics",
+      app: mockApp,
+      prisma: mockPrisma,
+      env: {} as any,
+      logger: mockLogger,
+      exit: () => {},
+    });
+
+    const noDealLog = logged.find((l) => typeof l.msg === "string" && l.msg.includes("out-of-scope"));
+    expect(noDealLog).toBeUndefined();
   });
 });

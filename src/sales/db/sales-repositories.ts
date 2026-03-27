@@ -265,7 +265,19 @@ export class SalesRepositoryBundle {
         body: { not: null },
         rawTextCleaned: false
       },
-      orderBy: { timestamp: "desc" },
+      // Unattempted items first so retryable failures at the head of the queue
+      // cannot starve older processable items during drain loops.
+      //
+      // TODO: Under continuous inflow this postpones retries indefinitely since
+      // new items (attempts=0) always jump the queue. If this shows up in
+      // production the next step is a fairer selection policy that interleaves
+      // fresh items and retries (e.g. reserve a fraction of the batch for
+      // retries, or cap the fresh-item priority to items newer than the oldest
+      // pending retry).
+      orderBy: [
+        { extractionAttempts: "asc" },
+        { timestamp: "desc" },
+      ],
       take
     });
   }
@@ -281,7 +293,8 @@ export class SalesRepositoryBundle {
     return this.prisma.salesActivity.findMany({
       where: {
         rawTextCleaned: false,
-        rawTextExpiresAt: { lte: now }
+        rawTextExpiresAt: { lte: now },
+        extractedAt: { not: null },
       }
     });
   }
@@ -670,6 +683,39 @@ export class SalesRepositoryBundle {
       ? Math.round((processedActivities / totalActivities) * 1000) / 10
       : 0;
     return { totalActivities, processedActivities, unprocessedActivities, processingRate, totalDeals, totalFacts, totalSignals };
+  }
+
+  /**
+   * Diagnostic breakdown of unprocessed activities (extractedAt IS NULL).
+   * Categorizes the backlog into actionable vs permanently unreachable buckets.
+   */
+  async getExtractionDiagnostics(companyId: string, intelligenceStageIds?: string[]) {
+    const scoped = intelligenceStageIds && intelligenceStageIds.length > 0;
+    const activityWhere = scoped
+      ? { companyId, dealId: { not: null as string | null }, deal: { stage: { in: intelligenceStageIds! } } }
+      : { companyId, dealId: { not: null as string | null } };
+
+    const base = { ...activityWhere, extractedAt: null as Date | null };
+
+    const [nullBody, cleaned, exhaustedOrphan, retryPending, pendingFirstAttempt, noDeal] = await Promise.all([
+      // body IS NULL and not yet cleaned — never had text
+      this.prisma.salesActivity.count({ where: { ...base, body: null, rawTextCleaned: false } }),
+      // rawTextCleaned = true — text expired before extraction
+      this.prisma.salesActivity.count({ where: { ...base, rawTextCleaned: true } }),
+      // extractionAttempts >= 3 but extractedAt still null (should be ~0, orphan state)
+      this.prisma.salesActivity.count({ where: { ...base, extractionAttempts: { gte: 3 }, body: { not: null }, rawTextCleaned: false } }),
+      // 1-2 failed attempts, still retryable
+      this.prisma.salesActivity.count({ where: { ...base, extractionAttempts: { gt: 0, lt: 3 }, body: { not: null }, rawTextCleaned: false } }),
+      // Never attempted, has body
+      this.prisma.salesActivity.count({ where: { ...base, extractionAttempts: 0, body: { not: null }, rawTextCleaned: false } }),
+      // No deal association (scoped version always has dealId not-null, so count from unscoped)
+      this.prisma.salesActivity.count({ where: { companyId, extractedAt: null, dealId: null, body: { not: null }, rawTextCleaned: false } }),
+    ]);
+
+    const permanentlyUnreachable = nullBody + cleaned;
+    const actionable = retryPending + pendingFirstAttempt;
+
+    return { nullBody, cleaned, exhaustedOrphan, retryPending, pendingFirstAttempt, noDeal, permanentlyUnreachable, actionable };
   }
 
   // ---- Extraction helpers ----

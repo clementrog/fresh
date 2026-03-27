@@ -179,3 +179,133 @@ describe("getExtractionStatus", () => {
     expect(result.unprocessedActivities).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// listUnextractedActivities — ordering
+// ---------------------------------------------------------------------------
+
+describe("listUnextractedActivities", () => {
+  it("orders unattempted items before retries (starvation prevention)", async () => {
+    const findManyArgs: unknown[] = [];
+    const prisma = {
+      salesActivity: {
+        findMany: vi.fn().mockImplementation((args: unknown) => {
+          findManyArgs.push(args);
+          return Promise.resolve([]);
+        }),
+      },
+    } as any;
+    const repos = new SalesRepositoryBundle(prisma);
+    await repos.listUnextractedActivities("c1", 50);
+
+    expect(findManyArgs).toHaveLength(1);
+    const query = findManyArgs[0] as any;
+    // Must order by extractionAttempts ASC first, then timestamp DESC
+    expect(query.orderBy).toEqual([
+      { extractionAttempts: "asc" },
+      { timestamp: "desc" },
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listCleanupCandidateActivities — extraction gate
+// ---------------------------------------------------------------------------
+
+describe("listCleanupCandidateActivities", () => {
+  it("only returns activities that have been extracted", async () => {
+    const findManyArgs: unknown[] = [];
+    const prisma = {
+      salesActivity: {
+        findMany: vi.fn().mockImplementation((args: unknown) => {
+          findManyArgs.push(args);
+          return Promise.resolve([]);
+        }),
+      },
+    } as any;
+    const repos = new SalesRepositoryBundle(prisma);
+    await repos.listCleanupCandidateActivities(new Date("2026-03-27"));
+
+    expect(findManyArgs).toHaveLength(1);
+    const where = (findManyArgs[0] as any).where;
+    expect(where.rawTextCleaned).toBe(false);
+    expect(where.extractedAt).toEqual({ not: null });
+    expect(where.rawTextExpiresAt).toEqual({ lte: expect.any(Date) });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getExtractionDiagnostics — bucket math and scoping
+// ---------------------------------------------------------------------------
+
+describe("getExtractionDiagnostics", () => {
+  it("computes bucket counts and derived fields under scoped conditions", async () => {
+    // Each of the 6 parallel count() calls returns a distinct value so we can
+    // verify the math.  Call order matches the Promise.all in the implementation:
+    // [0] nullBody, [1] cleaned, [2] exhaustedOrphan,
+    // [3] retryPending, [4] pendingFirstAttempt, [5] noDeal
+    const counts = [10, 5, 1, 3, 20, 7];
+    let idx = 0;
+    const prisma = {
+      salesActivity: {
+        count: vi.fn().mockImplementation(() => Promise.resolve(counts[idx++] ?? 0)),
+      },
+    } as any;
+    const repos = new SalesRepositoryBundle(prisma);
+    const result = await repos.getExtractionDiagnostics("c1", ["stage-new"]);
+
+    expect(result.nullBody).toBe(10);
+    expect(result.cleaned).toBe(5);
+    expect(result.exhaustedOrphan).toBe(1);
+    expect(result.retryPending).toBe(3);
+    expect(result.pendingFirstAttempt).toBe(20);
+    expect(result.noDeal).toBe(7);
+    expect(result.permanentlyUnreachable).toBe(15); // 10 + 5
+    expect(result.actionable).toBe(23); // 3 + 20
+  });
+
+  it("scopes in-scope buckets to intelligence stage deals", async () => {
+    const countArgs: unknown[] = [];
+    const prisma = {
+      salesActivity: {
+        count: vi.fn().mockImplementation((args: unknown) => {
+          countArgs.push(args);
+          return Promise.resolve(0);
+        }),
+      },
+    } as any;
+    const repos = new SalesRepositoryBundle(prisma);
+    await repos.getExtractionDiagnostics("c1", ["stage-new", "stage-opp"]);
+
+    // First 5 calls (nullBody through pendingFirstAttempt) should be scoped
+    for (let i = 0; i < 5; i++) {
+      const where = (countArgs[i] as any).where;
+      expect(where.deal?.stage?.in).toEqual(["stage-new", "stage-opp"]);
+      expect(where.extractedAt).toBeNull();
+    }
+
+    // 6th call (noDeal) should NOT have deal stage scoping — it uses companyId-only
+    const noDealWhere = (countArgs[5] as any).where;
+    expect(noDealWhere.deal).toBeUndefined();
+    expect(noDealWhere.dealId).toBeNull();
+    expect(noDealWhere.companyId).toBe("c1");
+  });
+
+  it("works without stage scoping (fallback)", async () => {
+    const countArgs: unknown[] = [];
+    const prisma = {
+      salesActivity: {
+        count: vi.fn().mockImplementation((args: unknown) => {
+          countArgs.push(args);
+          return Promise.resolve(0);
+        }),
+      },
+    } as any;
+    const repos = new SalesRepositoryBundle(prisma);
+    await repos.getExtractionDiagnostics("c1");
+
+    // In unscoped mode, in-scope buckets should not have deal.stage filter
+    const where = (countArgs[0] as any).where;
+    expect(where.deal?.stage).toBeUndefined();
+  });
+});
