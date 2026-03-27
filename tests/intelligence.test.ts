@@ -1276,3 +1276,351 @@ describe("editorial-lead curated behavior", () => {
     expect(ewResult.created).toHaveLength(0);
   });
 });
+
+// ── duplicate prevention (working candidate pool + DB-backed origin dedupe) ─
+
+describe("duplicate prevention across batch items", () => {
+  it("two related items in the same batch: first creates, second enriches via working pool", async () => {
+    // Two HCR-related Linear items in the same batch — should NOT create two opportunities
+    const itemA = makeEditorialLeadItem({
+      sourceItemId: "pu-hcr-a",
+      externalId: "linear:pu-hcr-a",
+      title: "HCR convention support fully shipped on Linc",
+      summary: "Complete HCR convention support for payroll calculation deployed to production.",
+      text: "La convention HCR (Hôtels, Cafés, Restaurants) est désormais entièrement supportée sur Linc, incluant les spécificités de calcul de paie, les congés et les primes conventionnelles.",
+    });
+    const itemB = makeEditorialLeadItem({
+      sourceItemId: "pu-hcr-b",
+      externalId: "linear:pu-hcr-b",
+      title: "HCR convention: CP counting in working days deployed",
+      summary: "HCR convention leave counting in working days is now live on Linc platform.",
+      text: "Le décompte des CP en jours ouvrables pour la convention HCR est maintenant déployé sur Linc. Cette mise à jour complète la prise en charge de la convention HCR pour les congés payés.",
+    });
+
+    const llm = {
+      generateStructured: vi.fn()
+        // Screening batch (both items)
+        .mockResolvedValueOnce({
+          output: {
+            items: [
+              { sourceItemId: "linear:pu-hcr-a", decision: "retain", rationale: "HCR", createOrEnrich: "create", relevanceScore: 0.9, sensitivityFlag: false, sensitivityCategories: [] },
+              { sourceItemId: "linear:pu-hcr-b", decision: "retain", rationale: "HCR", createOrEnrich: "create", relevanceScore: 0.9, sensitivityFlag: false, sensitivityCategories: [] }
+            ]
+          },
+          usage: { mode: "provider", promptTokens: 100, completionTokens: 50, estimatedCostUsd: 0.001 },
+          mode: "provider"
+        })
+        // Linear enrichment policy — item A
+        .mockResolvedValueOnce(makeLinearPolicyOutput("editorial-lead"))
+        // Linear enrichment policy — item B
+        .mockResolvedValueOnce(makeLinearPolicyOutput("editorial-lead"))
+        // Create/enrich decision — item A → create
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "create",
+          title: "HCR convention complète sur Linc",
+          angle: "La convention HCR est désormais entièrement supportée sur Linc",
+          whyNow: "Major convention support just shipped to production",
+          whatItIsAbout: "HCR payroll convention full support on Linc platform",
+          confidence: 0.9
+        }))
+        // Create/enrich decision — item B → LLM sees the candidate from the working pool
+        // and decides to enrich it. mockImplementationOnce dynamically extracts the
+        // candidate opportunity ID from the prompt (just like a real LLM would).
+        .mockImplementationOnce(async (args: any) => {
+          const prompt: string = args?.prompt ?? "";
+          const idMatch = prompt.match(/- ID: (\S+)/);
+          const targetId = idMatch ? idMatch[1] : undefined;
+          // The working pool should have provided at least one candidate
+          expect(targetId).toBeTruthy();
+          return makeDecisionOutput({
+            action: "enrich",
+            targetOpportunityId: targetId,
+            rationale: "Similar HCR opportunity already exists, enriching",
+            confidence: 0.8
+          });
+        })
+    } as any;
+
+    // checkOriginDedupe returns null — no prior DB state (first run)
+    const checkOriginDedupe = vi.fn().mockResolvedValue(null);
+
+    const result = await runIntelligencePipeline({
+      items: [itemA, itemB],
+      companyId: "company-1",
+      llmClient: llm,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: [],
+      checkOriginDedupe
+    });
+
+    // Only ONE opportunity created, second item enriches it
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0].title).toContain("HCR");
+    expect(result.enriched.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("same source item reprocessed (replay): in-memory dedupe when opp is in snapshot", async () => {
+    // Simulate replay: source item already created an opportunity that IS in recentOpportunities
+    const item = makeEditorialLeadItem({
+      sourceItemId: "pu-replay-1",
+      externalId: "linear:pu-replay-1",
+      title: "Nouveauté produit: DSN connection deployed",
+      summary: "DSN filing connection with net-entreprises is now live on Linc platform.",
+      text: "La connexion DSN avec net-entreprises est désormais déployée et opérationnelle sur Linc. Les gestionnaires de paie peuvent maintenant soumettre leurs DSN directement depuis la plateforme.",
+    });
+
+    // Build evidence that would exist from the first processing
+    const existingEvidence = buildIntelligenceEvidence(item, "company-1");
+    const existingOpp = makeOpportunity({
+      id: "opp-dsn-existing",
+      title: "DSN connection: filing automation on Linc",
+      angle: "Automated DSN filing eliminates manual submission",
+      whatItIsAbout: "DSN net-entreprises integration on Linc",
+      evidence: existingEvidence,
+      primaryEvidence: existingEvidence[0],
+    });
+
+    const llm = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("linear:pu-replay-1"))
+        .mockResolvedValueOnce(makeLinearPolicyOutput("editorial-lead"))
+        // LLM says "create" (doesn't know the opportunity already exists)
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "create",
+          title: "DSN net-entreprises: live integration",
+          angle: "Direct DSN submission from Linc payroll studio",
+          whyNow: "Freshly deployed DSN connection saves manual filing time",
+          whatItIsAbout: "Automated DSN filing through net-entreprises API",
+          confidence: 0.85
+        }))
+    } as any;
+
+    // DB check also returns the hit — but in-memory fires first
+    const checkOriginDedupe = vi.fn().mockResolvedValue(
+      { id: "opp-dsn-existing", title: "DSN connection: filing automation on Linc" }
+    );
+
+    const result = await runIntelligencePipeline({
+      items: [item],
+      companyId: "company-1",
+      llmClient: llm,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: [existingOpp],
+      checkOriginDedupe
+    });
+
+    // Origin dedupe: no new opportunity created, converted to enrichment
+    expect(result.created).toHaveLength(0);
+    expect(result.enriched).toHaveLength(1);
+    expect(result.enriched[0].opportunity.id).toBe("opp-dsn-existing");
+  });
+
+  it("replay deduped by DB check even when existing opp is outside the initial snapshot", async () => {
+    // KEY SCENARIO: the existing opportunity has fallen out of the top-40
+    // recentOpportunities window.  The DB-backed checkOriginDedupe catches it.
+    const item = makeEditorialLeadItem({
+      sourceItemId: "pu-old-replay",
+      externalId: "linear:pu-old-replay",
+      title: "Nouveauté produit: SIRH connector shipped",
+      summary: "SIRH bi-directional connector deployed to production for enterprise clients.",
+      text: "Le connecteur SIRH bidirectionnel est maintenant déployé en production pour les clients entreprises. Synchronisation automatique des données collaborateurs.",
+    });
+
+    const llm = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("linear:pu-old-replay"))
+        .mockResolvedValueOnce(makeLinearPolicyOutput("editorial-lead"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "create",
+          title: "SIRH connector: enterprise HR sync",
+          angle: "Bi-directional SIRH sync for enterprise payroll",
+          whyNow: "Just shipped SIRH connector to production",
+          whatItIsAbout: "Automated SIRH data synchronisation for enterprise clients",
+          confidence: 0.9
+        }))
+    } as any;
+
+    // DB-backed check returns an opportunity that is NOT in recentOpportunities
+    const checkOriginDedupe = vi.fn().mockResolvedValue(
+      { id: "opp-sirh-old", title: "SIRH connector for enterprise HR" }
+    );
+
+    const result = await runIntelligencePipeline({
+      items: [item],
+      companyId: "company-1",
+      llmClient: llm,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: [],  // <-- empty snapshot, opp is NOT loaded
+      checkOriginDedupe
+    });
+
+    // DB dedupe fires → creation blocked, item skipped with clear reason
+    expect(result.created).toHaveLength(0);
+    expect(result.enriched).toHaveLength(0);
+    expect(result.skipped.some(s =>
+      s.sourceItemId === "linear:pu-old-replay" && s.reason.includes("opp-sirh-old")
+    )).toBe(true);
+    // The callback was invoked with the correct sourceItemDbId
+    expect(checkOriginDedupe).toHaveBeenCalledWith(
+      sourceItemDbId("company-1", "linear:pu-old-replay")
+    );
+  });
+
+  it("different source items about different topics create separate opportunities", async () => {
+    const itemA = makeEditorialLeadItem({
+      sourceItemId: "pu-dsn-1",
+      externalId: "linear:pu-dsn-1",
+      title: "DSN connection with net-entreprises deployed",
+      summary: "DSN filing automation is now live on Linc platform for direct submission.",
+      text: "La connexion DSN avec net-entreprises est maintenant déployée sur Linc. Les gestionnaires peuvent soumettre directement depuis la plateforme.",
+    });
+    const itemB = makeEditorialLeadItem({
+      sourceItemId: "pu-pdf-1",
+      externalId: "linear:pu-pdf-1",
+      title: "Clickable payslip PDF in studio shipped",
+      summary: "Interactive payslip PDF where every number is clickable for computation rule inspection.",
+      text: "Le bulletin détaillé en PDF devient cliquable dans le studio pour comprendre chaque valeur calculée par le moteur de paie.",
+    });
+
+    const llm = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce({
+          output: {
+            items: [
+              { sourceItemId: "linear:pu-dsn-1", decision: "retain", rationale: "DSN", createOrEnrich: "create", relevanceScore: 0.9, sensitivityFlag: false, sensitivityCategories: [] },
+              { sourceItemId: "linear:pu-pdf-1", decision: "retain", rationale: "PDF", createOrEnrich: "create", relevanceScore: 0.9, sensitivityFlag: false, sensitivityCategories: [] }
+            ]
+          },
+          usage: { mode: "provider", promptTokens: 100, completionTokens: 50, estimatedCostUsd: 0.001 },
+          mode: "provider"
+        })
+        .mockResolvedValueOnce(makeLinearPolicyOutput("editorial-lead"))
+        .mockResolvedValueOnce(makeLinearPolicyOutput("editorial-lead"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "create",
+          title: "DSN filing automation on Linc",
+          angle: "Direct DSN submission removes manual filing friction",
+          whyNow: "Freshly deployed DSN net-entreprises connection",
+          whatItIsAbout: "Automated DSN filing through net-entreprises API from Linc",
+          confidence: 0.9
+        }))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "create",
+          title: "Bulletin cliquable: transparence de la paie",
+          angle: "Clickable payslip as transparency and verification tool",
+          whyNow: "Just shipped interactive PDF payslip feature in studio",
+          whatItIsAbout: "Interactive payslip PDF for computation rule inspection",
+          confidence: 0.9
+        }))
+    } as any;
+
+    // DB returns null for both — no prior opportunities
+    const checkOriginDedupe = vi.fn().mockResolvedValue(null);
+
+    const result = await runIntelligencePipeline({
+      items: [itemA, itemB],
+      companyId: "company-1",
+      llmClient: llm,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: [],
+      checkOriginDedupe
+    });
+
+    // Two distinct topics → two separate opportunities (no false dedup)
+    expect(result.created).toHaveLength(2);
+    const titles = result.created.map(o => o.title);
+    expect(titles).toContain("DSN filing automation on Linc");
+    expect(titles).toContain("Bulletin cliquable: transparence de la paie");
+    // DB check was called for each create decision
+    expect(checkOriginDedupe).toHaveBeenCalledTimes(2);
+  });
+
+  it("enrichment of a newly created opportunity updates the working pool for subsequent items", async () => {
+    const itemA = makeEditorialLeadItem({
+      sourceItemId: "pu-enrich-a",
+      externalId: "linear:pu-enrich-a",
+      title: "SIRH integration engine completed",
+      summary: "SIRH integration engine with bi-directional sync is now deployed on Linc platform.",
+      text: "Le moteur d'intégration SIRH avec synchronisation bidirectionnelle est maintenant déployé sur Linc. Cette intégration permet aux entreprises de synchroniser automatiquement leurs données RH.",
+    });
+    const itemB = makeLinearItem({
+      sourceItemId: "issue-sirh-detail",
+      externalId: "linear:issue-sirh-detail",
+      title: "SIRH integration: employee sync edge cases fixed",
+      summary: "Fixed edge cases in SIRH employee sync for large enterprise deployments.",
+      text: "Correction des cas limites dans la synchronisation SIRH pour les déploiements de grande entreprise. Les employés avec des contrats multiples sont maintenant correctement synchronisés.",
+      metadata: { itemType: "issue", stateName: "Done" },
+    });
+
+    const llm = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce({
+          output: {
+            items: [
+              { sourceItemId: "linear:pu-enrich-a", decision: "retain", rationale: "SIRH", createOrEnrich: "create", relevanceScore: 0.9, sensitivityFlag: false, sensitivityCategories: [] },
+              { sourceItemId: "linear:issue-sirh-detail", decision: "retain", rationale: "SIRH", createOrEnrich: "enrich", relevanceScore: 0.7, sensitivityFlag: false, sensitivityCategories: [] }
+            ]
+          },
+          usage: { mode: "provider", promptTokens: 100, completionTokens: 50, estimatedCostUsd: 0.001 },
+          mode: "provider"
+        })
+        .mockResolvedValueOnce(makeLinearPolicyOutput("editorial-lead"))
+        .mockResolvedValueOnce(makeLinearPolicyOutput("enrich-worthy"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "create",
+          title: "SIRH integration engine on Linc",
+          angle: "Bi-directional SIRH sync eliminates manual HR data management",
+          whyNow: "SIRH integration engine just deployed to production",
+          whatItIsAbout: "Automated SIRH integration with bi-directional employee data sync",
+          confidence: 0.9
+        }))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "enrich",
+          rationale: "Supports existing SIRH opportunity with edge case fix details",
+          confidence: 0.7
+        }))
+    } as any;
+
+    const checkOriginDedupe = vi.fn().mockResolvedValue(null);
+
+    const result = await runIntelligencePipeline({
+      items: [itemA, itemB],
+      companyId: "company-1",
+      llmClient: llm,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      recentOpportunities: [],
+      checkOriginDedupe
+    });
+
+    // Item A creates, item B should NOT create a second SIRH opportunity
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0].title).toContain("SIRH");
+    const createdTitles = result.created.map(o => o.title);
+    expect(createdTitles).toHaveLength(1);
+  });
+});

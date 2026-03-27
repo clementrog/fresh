@@ -563,6 +563,7 @@ export class RepositoryBundle {
   }
 
   async updateSyncRun(run: SyncRun, tx: PrismaTransaction = this.prisma) {
+    const isTerminal = run.status === "completed" || run.status === "failed";
     return tx.syncRun.update({
       where: { id: run.id },
       data: {
@@ -573,9 +574,79 @@ export class RepositoryBundle {
         warningsJson: toJson(run.warnings),
         notes: run.notes,
         notionPageId: run.notionPageId,
-        notionPageFingerprint: run.notionPageFingerprint
+        notionPageFingerprint: run.notionPageFingerprint,
+        // Release lease on terminal status (no-op when leaseExpiresAt was never set)
+        ...(isTerminal ? { leaseExpiresAt: null } : {})
       }
     });
+  }
+
+  /**
+   * Atomically acquire a per-(company, runType) lease before creating a SyncRun.
+   *
+   * Uses PostgreSQL `pg_advisory_xact_lock` to serialize concurrent starters,
+   * then checks for a live lease.  If the existing lease has expired, the
+   * abandoned run is marked failed before the new run takes over.
+   *
+   * Call `updateSyncRun` with a terminal status to release the lease.
+   */
+  static readonly LEASE_DURATION_MS = 300_000;   // 5 minutes
+  static readonly LEASE_RENEWAL_MS  = 120_000;   // 2 minutes
+
+  async acquireRunLease(run: SyncRun) {
+    if (!run.companyId) throw new Error("acquireRunLease requires companyId");
+
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = deterministicInt32(run.companyId + ":" + run.runType);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${lockKey})`;
+
+      const existing = await tx.syncRun.findFirst({
+        where: { companyId: run.companyId!, runType: run.runType, status: "running" },
+        orderBy: { startedAt: "desc" }
+      });
+
+      if (existing && existing.leaseExpiresAt && existing.leaseExpiresAt > new Date()) {
+        throw new ConcurrentRunError(existing.id, run.runType);
+      }
+
+      if (existing) {
+        await tx.syncRun.update({
+          where: { id: existing.id },
+          data: { status: "failed", finishedAt: new Date(), notes: "Lease expired — abandoned" }
+        });
+      }
+
+      return tx.syncRun.create({
+        data: {
+          id: run.id,
+          companyId: run.companyId,
+          runType: run.runType,
+          source: run.source,
+          status: run.status,
+          startedAt: new Date(run.startedAt),
+          finishedAt: run.finishedAt ? new Date(run.finishedAt) : null,
+          countersJson: toJson(run.counters),
+          llmStatsJson: toJson(run.llmStats),
+          warningsJson: toJson(run.warnings),
+          notes: run.notes,
+          notionPageId: run.notionPageId,
+          notionPageFingerprint: run.notionPageFingerprint,
+          leaseExpiresAt: new Date(Date.now() + RepositoryBundle.LEASE_DURATION_MS)
+        }
+      });
+    });
+  }
+
+  /**
+   * Extend the lease for a running SyncRun.  Returns false if the run is no
+   * longer in "running" status (e.g. it was taken over after lease expiry).
+   */
+  async renewRunLease(runId: string): Promise<boolean> {
+    const result = await this.prisma.syncRun.updateMany({
+      where: { id: runId, status: "running" },
+      data: { leaseExpiresAt: new Date(Date.now() + RepositoryBundle.LEASE_DURATION_MS) }
+    });
+    return result.count > 0;
   }
 
   async updateSyncRunNotionSync(runId: string, notionPageId: string, notionPageFingerprint: string) {
@@ -903,6 +974,50 @@ export class RepositoryBundle {
     });
   }
 
+  /**
+   * Check whether an active (non-Rejected/Archived) opportunity already has
+   * evidence originating from the given source item.  Searches both the legacy
+   * direct FK path (EvidenceReference.opportunityId) and the junction table
+   * (OpportunityEvidence).  Returns the opportunity ID if found.
+   */
+  async findActiveOpportunityByOriginSourceItem(params: {
+    sourceItemId: string;
+    companyId: string;
+  }): Promise<{ id: string; title: string } | null> {
+    // Path 1: OpportunityEvidence junction (new pipeline)
+    const junctionMatch = await this.prisma.opportunityEvidence.findFirst({
+      where: {
+        evidence: { sourceItemId: params.sourceItemId },
+        opportunity: {
+          companyId: params.companyId,
+          status: { notIn: ["Rejected", "Archived"] }
+        }
+      },
+      select: { opportunityId: true, opportunity: { select: { title: true } } }
+    });
+    if (junctionMatch) {
+      return { id: junctionMatch.opportunityId, title: junctionMatch.opportunity.title };
+    }
+
+    // Path 2: Direct FK (legacy pipeline)
+    const fkMatch = await this.prisma.evidenceReference.findFirst({
+      where: {
+        sourceItemId: params.sourceItemId,
+        opportunityId: { not: null },
+        opportunity: {
+          companyId: params.companyId,
+          status: { notIn: ["Rejected", "Archived"] }
+        }
+      },
+      select: { opportunityId: true, opportunity: { select: { title: true } } }
+    });
+    if (fkMatch?.opportunityId) {
+      return { id: fkMatch.opportunityId, title: fkMatch.opportunity?.title ?? "" };
+    }
+
+    return null;
+  }
+
   async saveScreeningResults(items: Array<{ id: string; result: ScreeningResult }>) {
     for (const item of items) {
       await this.prisma.sourceItem.update({
@@ -974,4 +1089,32 @@ export function validateOpportunityPrimaryEvidence(evidence: EvidenceReference[]
   if (!evidence.some((item) => item.id === primaryEvidenceId)) {
     throw new Error("Primary evidence id must reference an evidence row owned by the opportunity.");
   }
+}
+
+// ---------------------------------------------------------------------------
+// Concurrency error (shared with sales-repositories.ts pattern)
+// ---------------------------------------------------------------------------
+
+export class ConcurrentRunError extends Error {
+  readonly blockingRunId: string;
+  readonly runType: string;
+
+  constructor(blockingRunId: string, runType: string) {
+    super(`Another ${runType} run is already in progress (run ${blockingRunId})`);
+    this.name = "ConcurrentRunError";
+    this.blockingRunId = blockingRunId;
+    this.runType = runType;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Utility: deterministic 32-bit int for advisory lock key
+// ---------------------------------------------------------------------------
+
+function deterministicInt32(input: string): number {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) - hash + input.charCodeAt(i)) | 0;
+  }
+  return hash;
 }

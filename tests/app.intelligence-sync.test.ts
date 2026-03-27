@@ -170,6 +170,8 @@ function buildRepositories() {
       updatedAt: "2026-03-14T09:00:00.000Z"
     })),
     createSyncRun: vi.fn(async () => ({})),
+    acquireRunLease: vi.fn(async () => ({})),
+    renewRunLease: vi.fn(async () => true),
     updateSyncRun: vi.fn(async () => ({})),
     updateSyncRunNotionSync: vi.fn(async () => ({})),
     addCostEntries: vi.fn(async () => ({})),

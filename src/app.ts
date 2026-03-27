@@ -6,7 +6,7 @@ import {
 import type { AppEnv } from "./config/env.js";
 import { createConnectorRegistry } from "./connectors/index.js";
 import { getPrisma } from "./db/client.js";
-import { RepositoryBundle, sourceItemDbId } from "./db/repositories.js";
+import { RepositoryBundle, sourceItemDbId, ConcurrentRunError } from "./db/repositories.js";
 import type {
   ConnectorConfig,
   ContentOpportunity,
@@ -285,8 +285,17 @@ export class EditorialSignalEngineApp {
     const costs: Array<ReturnType<typeof createCostEntry>> = [];
     const fallbackSteps = new Set<string>();
     if (!context.dryRun) {
-      await this.repositories.createSyncRun(run);
+      await this.repositories.acquireRunLease(run);
     }
+
+    // Renew the lease periodically so long-running batches are never mistaken
+    // for abandoned runs.  The timer fires every LEASE_RENEWAL_MS (2 min) and
+    // pushes leaseExpiresAt forward by LEASE_DURATION_MS (5 min).  Cleared in
+    // the finally block regardless of outcome.
+    const leaseTimer = !context.dryRun
+      ? setInterval(() => { this.repositories.renewRunLease(run.id).catch(() => {}); },
+          RepositoryBundle.LEASE_RENEWAL_MS)
+      : undefined;
 
     try {
       // Snapshot pre-run violation count for publishability invariant
@@ -318,7 +327,12 @@ export class EditorialSignalEngineApp {
         users: inputs.users,
         layer2Defaults: inputs.layer2Defaults,
         layer3Defaults: inputs.layer3Defaults,
-        recentOpportunities
+        recentOpportunities,
+        checkOriginDedupe: async (siDbId) =>
+          this.repositories.findActiveOpportunityByOriginSourceItem({
+            sourceItemId: siDbId,
+            companyId: company.id
+          })
       });
 
       for (const event of pipelineResult.usageEvents) {
@@ -623,6 +637,8 @@ export class EditorialSignalEngineApp {
       const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown intelligence error");
       await this.finishRun(failed, costs, context);
       throw error;
+    } finally {
+      if (leaseTimer) clearInterval(leaseTimer);
     }
   }
 

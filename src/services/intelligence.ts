@@ -765,6 +765,16 @@ export function buildIntelligenceEvidence(
 
 // --- Main Orchestrator ---
 
+/**
+ * Async callback the pipeline invokes before creating a new opportunity.
+ * Returns the existing opportunity's id+title if one already exists with
+ * evidence from the same originating source item, or null if safe to create.
+ *
+ * The default (undefined) falls back to in-memory workingOpportunities only.
+ * The real caller passes a DB-backed implementation for durable dedupe.
+ */
+export type OriginDedupeCheck = (sourceItemDbId: string) => Promise<{ id: string; title: string } | null>;
+
 export interface IntelligencePipelineParams {
   items: NormalizedSourceItem[];
   companyId: string;
@@ -776,6 +786,8 @@ export interface IntelligencePipelineParams {
   layer2Defaults: string[];
   layer3Defaults: string[];
   recentOpportunities: ContentOpportunity[];
+  /** DB-backed origin dedupe. When provided, called before every create decision. */
+  checkOriginDedupe?: OriginDedupeCheck;
 }
 
 export interface IntelligencePipelineResult {
@@ -924,6 +936,11 @@ export async function runIntelligencePipeline(
   const itemsForCreateEnrich = [...nonLinearItems, ...linearEnrichWorthy];
 
   // 5. Create/enrich per retained item
+  // Mutable candidate pool: opportunities created/enriched within this run become
+  // immediately visible to subsequent items, preventing duplicate creation when
+  // multiple related source items land in the same batch.
+  const workingOpportunities = [...params.recentOpportunities];
+
   for (const { item, screening: sr } of itemsForCreateEnrich) {
     if (isBlockedByPublishability(item)) {
       result.skipped.push({ sourceItemId: item.externalId, reason: `Blocked by publishability risk: ${item.metadata?.publishabilityRisk}` });
@@ -936,7 +953,7 @@ export async function runIntelligencePipeline(
       const { candidates, topScore } = narrowCandidateOpportunities(
         item,
         sr,
-        params.recentOpportunities,
+        workingOpportunities,
         params.companyId,
         { enableOwnerBoost: creationMode === "create-capable" }
       );
@@ -979,19 +996,70 @@ export async function runIntelligencePipeline(
       }
 
       if (finalDecision.action === "create") {
-        const opp = buildNewOpportunity({
-          decision: finalDecision,
-          sourceItem: item,
-          evidence,
-          companyId: params.companyId,
-          ownerUserId,
-          users: params.users
-        });
-        if (opp) {
-          result.created.push(opp);
+        // Origin dedupe: prevent duplicate opportunity creation from the same
+        // originating source item.  Two layers:
+        //  1. DB-backed check (checkOriginDedupe) — catches replays even when the
+        //     existing opportunity has fallen outside the recentOpportunities window.
+        //  2. In-memory workingOpportunities — catches same-run duplicates created
+        //     earlier in this batch (not yet persisted to DB).
+        const itemDbId = sourceItemDbId(params.companyId, item.externalId);
+
+        // Layer 1: DB-backed check (skipped in unit tests when callback is absent)
+        let dedupeHit: { id: string; title: string } | null = null;
+        if (params.checkOriginDedupe) {
+          dedupeHit = await params.checkOriginDedupe(itemDbId);
+        }
+
+        // Layer 2: in-memory fallback (always active — covers same-run creates)
+        const inMemoryHit = !dedupeHit
+          ? workingOpportunities.find(opp =>
+              opp.evidence.some(e => e.sourceItemId === itemDbId)
+            )
+          : undefined;
+
+        const existingFromSameOrigin = dedupeHit
+          ? workingOpportunities.find(o => o.id === dedupeHit!.id)
+          : inMemoryHit;
+
+        if (dedupeHit && !existingFromSameOrigin) {
+          // Opportunity exists in DB but wasn't in the initial snapshot — skip
+          // creation with a clear reason.  We cannot enrich here because we don't
+          // have the full opportunity graph in memory.
+          result.skipped.push({
+            sourceItemId: item.externalId,
+            reason: `Origin dedupe: opportunity "${dedupeHit.title}" (${dedupeHit.id}) already has evidence from this source item`
+          });
+        } else if (existingFromSameOrigin) {
+          const enrichResult = buildEnrichmentUpdate({
+            existing: existingFromSameOrigin,
+            decision: finalDecision,
+            sourceItem: item,
+            newEvidence: evidence,
+            ownerUserId
+          });
+          result.enriched.push({
+            opportunity: enrichResult.updatedOpportunity,
+            logEntry: enrichResult.logEntry,
+            addedEvidence: enrichResult.addedEvidence
+          });
+          const idx = workingOpportunities.findIndex(o => o.id === existingFromSameOrigin.id);
+          if (idx >= 0) workingOpportunities[idx] = enrichResult.updatedOpportunity;
+        } else {
+          const opp = buildNewOpportunity({
+            decision: finalDecision,
+            sourceItem: item,
+            evidence,
+            companyId: params.companyId,
+            ownerUserId,
+            users: params.users
+          });
+          if (opp) {
+            result.created.push(opp);
+            workingOpportunities.push(opp);
+          }
         }
       } else if (finalDecision.action === "enrich" && finalDecision.targetOpportunityId) {
-        const existing = params.recentOpportunities.find((o) => o.id === finalDecision.targetOpportunityId);
+        const existing = workingOpportunities.find((o) => o.id === finalDecision.targetOpportunityId);
         if (existing) {
           const enrichResult = buildEnrichmentUpdate({
             existing,
@@ -1005,6 +1073,8 @@ export async function runIntelligencePipeline(
             logEntry: enrichResult.logEntry,
             addedEvidence: enrichResult.addedEvidence
           });
+          const idx = workingOpportunities.findIndex(o => o.id === existing.id);
+          if (idx >= 0) workingOpportunities[idx] = enrichResult.updatedOpportunity;
         }
       } else {
         result.skipped.push({ sourceItemId: item.externalId, reason: finalDecision.rationale });
