@@ -340,6 +340,17 @@ describe("sales extraction service", () => {
       expect(facts[0].sourceText).toHaveLength(500);
     });
 
+    it("truncates sourceText without leaving a broken emoji surrogate", () => {
+      const boundarySource = `${"X".repeat(499)}🌍tail`;
+      const output: ActivityExtractionOutput = {
+        ...makeEmptyLlmOutput(),
+        painPoints: ["something"],
+      };
+      const facts = fanOutFacts("comp-1", "act-1", "deal-1", output, boundarySource);
+      expect(Array.from(facts[0].sourceText)).toHaveLength(499);
+      expect(facts[0].sourceText).not.toMatch(/[\uD800-\uDFFF]/);
+    });
+
     it("uses budgetDetails value when present, falls back to 'true'", () => {
       const withDetails: ActivityExtractionOutput = {
         ...makeEmptyLlmOutput(),
@@ -720,16 +731,13 @@ describe("sales extraction service", () => {
   // 14. Atomicity / crash simulation: fact-write throws in tx
   // -----------------------------------------------------------------------
   describe("atomicity / crash simulation", () => {
-    it("fact-write throws in tx → markExtracted NOT called (tx rollback)", async () => {
+    it("fact-write throws in tx → activity is retried, not marked extracted", async () => {
       const txMock = makeTxMock();
       const repos = makeRepos(txMock);
       const llmClient = makeLlmClient();
       const activity = makeActivity();
 
       repos.listUnextractedActivities.mockResolvedValue([activity]);
-
-      // Track whether the update was called before the upsert throws
-      let updateCalledBeforeCrash = false;
 
       // Make the transaction execute the callback but have upsert throw
       txMock.salesExtractedFact.upsert.mockRejectedValue(new Error("Disk full — write failed"));
@@ -745,18 +753,20 @@ describe("sales extraction service", () => {
         }
       });
 
-      // runExtraction should throw because the tx error propagates
-      await expect(runExtraction(baseParams(repos, llmClient))).rejects.toThrow("Disk full");
+      repos.incrementExtractionAttempts.mockResolvedValue(1);
+
+      const result = await runExtraction(baseParams(repos, llmClient));
 
       // The activity.update for marking extracted is inside the same transaction,
       // so in a real DB it would be rolled back. Since our mock executes sequentially,
       // the upsert fail happens before the update (facts are inserted before marking).
       // Verify: deleteFactsForActivity was called (it's the first op in the tx)
       expect(repos.deleteFactsForActivity).toHaveBeenCalledWith(activity.id, txMock);
-
-      // The key invariant: since the transaction threw, the result is not committed.
-      // In production, Prisma's $transaction rolls back everything atomically.
-      // activitiesProcessed should NOT have been incremented (thrown before reaching it)
+      expect(repos.incrementExtractionAttempts).toHaveBeenCalledWith(activity.id);
+      expect(txMock.salesActivity.update).not.toHaveBeenCalled();
+      expect(result.activitiesProcessed).toBe(0);
+      expect(result.retryableErrors).toBe(1);
+      expect(result.errors).toContain("Retryable write error on act-1: Disk full — write failed");
     });
   });
 

@@ -97,6 +97,13 @@ function slugify(value: string): string {
     .slice(0, 80);
 }
 
+function sanitizeText(value: string, maxChars?: number): string {
+  const input = maxChars == null
+    ? value
+    : Array.from(value).slice(0, maxChars).join("");
+  return input.replace(/[\uD800-\uDFFF]/g, "");
+}
+
 export function fanOutFacts(
   companyId: string,
   activityId: string,
@@ -105,11 +112,21 @@ export function fanOutFacts(
   sourceText: string
 ): FactParams[] {
   const facts: FactParams[] = [];
-  const src = sourceText.slice(0, MAX_SOURCE_TEXT);
+  const src = sanitizeText(sourceText, MAX_SOURCE_TEXT);
 
   const addFact = (category: string, label: string, extractedValue: string, confidence: number) => {
     const id = salesExtractedFactDbId(companyId, [activityId, category, label]);
-    facts.push({ id, companyId, activityId, dealId, category, label, extractedValue, confidence, sourceText: src });
+    facts.push({
+      id,
+      companyId,
+      activityId,
+      dealId,
+      category,
+      label,
+      extractedValue: sanitizeText(extractedValue),
+      confidence,
+      sourceText: src
+    });
   };
 
   for (const pp of output.painPoints) {
@@ -543,42 +560,90 @@ export async function runExtraction(params: {
           "Precision guards filtered facts");
       }
 
-      await repos.transaction(async (tx) => {
-        // Delete old facts for this activity
-        await repos.deleteFactsForActivity(activity.id, tx);
+      try {
+        await repos.transaction(async (tx) => {
+          // Delete old facts for this activity
+          await repos.deleteFactsForActivity(activity.id, tx);
 
-        // Insert new facts
-        for (const fact of facts) {
-          await tx.salesExtractedFact.upsert({
-            where: { id: fact.id },
-            create: fact,
-            update: {}
+          // Insert new facts
+          for (const fact of facts) {
+            await tx.salesExtractedFact.upsert({
+              where: { id: fact.id },
+              create: fact,
+              update: {}
+            });
+          }
+
+          // Mark extracted
+          await tx.salesActivity.update({
+            where: { id: activity.id },
+            data: { extractedAt: new Date() }
           });
-        }
 
-        // Mark extracted
-        await tx.salesActivity.update({
-          where: { id: activity.id },
-          data: { extractedAt: new Date() }
+          // Record cost
+          if (llmUsage.promptTokens > 0 || llmUsage.completionTokens > 0) {
+            const costId = createDeterministicId("cost", [runId, activity.id, Date.now().toString()]);
+            await tx.costLedgerEntry.create({
+              data: {
+                id: costId,
+                runId,
+                step: "sales-extraction",
+                model: model ?? "unknown",
+                mode: llmUsage.mode,
+                promptTokens: llmUsage.promptTokens,
+                completionTokens: llmUsage.completionTokens,
+                estimatedCostUsd: llmUsage.estimatedCostUsd
+              }
+            });
+          }
         });
-
-        // Record cost
-        if (llmUsage.promptTokens > 0 || llmUsage.completionTokens > 0) {
-          const costId = createDeterministicId("cost", [runId, activity.id, Date.now().toString()]);
-          await tx.costLedgerEntry.create({
-            data: {
-              id: costId,
-              runId,
-              step: "sales-extraction",
-              model: model ?? "unknown",
-              mode: llmUsage.mode,
-              promptTokens: llmUsage.promptTokens,
-              completionTokens: llmUsage.completionTokens,
-              estimatedCostUsd: llmUsage.estimatedCostUsd
-            }
-          });
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        try {
+          const newCount = await repos.incrementExtractionAttempts(activity.id);
+          if (newCount >= MAX_EXTRACTION_ATTEMPTS) {
+            await repos.transaction(async (tx) => {
+              await tx.salesActivity.update({
+                where: { id: activity.id },
+                data: { extractedAt: new Date() }
+              });
+            });
+            result.exhaustedItems++;
+            result.warnings.push(
+              `Activity ${activity.id} exhausted after ${newCount} write failures (last error: ${errMsg})`
+            );
+            logger.warn({
+              activityId: activity.id,
+              attempts: newCount,
+              error: errMsg,
+              factPreview: facts.slice(0, 5).map((f) => ({
+                category: f.category,
+                label: f.label,
+                extractedValue: f.extractedValue.slice(0, 120)
+              }))
+            }, "Activity exhausted due to fact write failure");
+          } else {
+            result.retryableErrors++;
+            result.errors.push(`Retryable write error on ${activity.id}: ${errMsg}`);
+            logger.warn({
+              activityId: activity.id,
+              attempts: newCount,
+              error: errMsg,
+              factPreview: facts.slice(0, 5).map((f) => ({
+                category: f.category,
+                label: f.label,
+                extractedValue: f.extractedValue.slice(0, 120)
+              }))
+            }, "Retryable fact write error");
+          }
+        } catch (incrementError) {
+          result.retryableErrors++;
+          result.errors.push(`Retryable write error on ${activity.id} (increment failed): ${errMsg}`);
+          logger.error({ activityId: activity.id, error: errMsg, err: incrementError },
+            "Fact write failed and attempt increment also failed");
         }
-      });
+        continue;
+      }
 
       result.activitiesProcessed++;
       result.factsCreated += facts.length;
