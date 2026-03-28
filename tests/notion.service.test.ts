@@ -656,6 +656,93 @@ describe("notion service", () => {
   });
 });
 
+// --- Archive idempotency ---
+
+describe("archive idempotency", () => {
+  it("archiveLinearReviewItem is a no-op when the page is already archived", async () => {
+    const error = Object.assign(new Error("Can't edit block that is archived."), {
+      status: 400, code: "validation_error"
+    });
+    const service = new NotionService("", "parent-page", {
+      client: makeNotionClient({
+        pages: {
+          create: vi.fn(async () => ({ id: "page-created" })),
+          update: vi.fn(async () => { throw error; }),
+          retrieve: vi.fn(async () => null)
+        }
+      })
+    });
+
+    await expect(service.archiveLinearReviewItem("archived-page")).resolves.toBeUndefined();
+  });
+
+  it("archiveLinearReviewItem is a no-op when the page does not exist", async () => {
+    const error = Object.assign(new Error("Could not find page"), {
+      status: 404, code: "object_not_found"
+    });
+    const service = new NotionService("", "parent-page", {
+      client: makeNotionClient({
+        pages: {
+          create: vi.fn(async () => ({ id: "page-created" })),
+          update: vi.fn(async () => { throw error; }),
+          retrieve: vi.fn(async () => null)
+        }
+      })
+    });
+
+    await expect(service.archiveLinearReviewItem("missing-page")).resolves.toBeUndefined();
+  });
+
+  it("archiveLinearReviewItem rethrows non-archive validation_error", async () => {
+    const error = Object.assign(new Error("Title must not be empty"), {
+      status: 400, code: "validation_error"
+    });
+    const service = new NotionService("", "parent-page", {
+      client: makeNotionClient({
+        pages: {
+          create: vi.fn(async () => ({ id: "page-created" })),
+          update: vi.fn(async () => { throw error; }),
+          retrieve: vi.fn(async () => null)
+        }
+      })
+    });
+
+    await expect(service.archiveLinearReviewItem("page-1")).rejects.toThrow("Title must not be empty");
+  });
+
+  it("archiveLinearReviewItem rethrows unexpected errors", async () => {
+    const error = new Error("network timeout");
+    const service = new NotionService("", "parent-page", {
+      client: makeNotionClient({
+        pages: {
+          create: vi.fn(async () => ({ id: "page-created" })),
+          update: vi.fn(async () => { throw error; }),
+          retrieve: vi.fn(async () => null)
+        }
+      })
+    });
+
+    await expect(service.archiveLinearReviewItem("page-1")).rejects.toThrow("network timeout");
+  });
+
+  it("archiveClaapReviewItem is a no-op when the page is already archived", async () => {
+    const error = Object.assign(new Error("Can't edit block that is archived."), {
+      status: 400, code: "validation_error"
+    });
+    const service = new NotionService("", "parent-page", {
+      client: makeNotionClient({
+        pages: {
+          create: vi.fn(async () => ({ id: "page-created" })),
+          update: vi.fn(async () => { throw error; }),
+          retrieve: vi.fn(async () => null)
+        }
+      })
+    });
+
+    await expect(service.archiveClaapReviewItem("archived-page")).resolves.toBeUndefined();
+  });
+});
+
 // --- mapReadinessTierToSelect ---
 
 describe("mapReadinessTierToSelect", () => {

@@ -388,7 +388,7 @@ export class RepositoryBundle {
     });
   }
 
-  async updateSourceItemNotionSync(sourceItemId: string, notionPageId: string, notionPageFingerprint: string) {
+  async updateSourceItemNotionSync(sourceItemId: string, notionPageId: string | null, notionPageFingerprint: string | null) {
     return this.prisma.sourceItem.update({
       where: { id: sourceItemId },
       data: {
@@ -1018,15 +1018,20 @@ export class RepositoryBundle {
     return null;
   }
 
-  async saveScreeningResults(items: Array<{ id: string; result: ScreeningResult }>) {
+  async saveScreeningResults(items: Array<{ id: string; result: ScreeningResult }>): Promise<{ missingIds: string[] }> {
+    const missingIds: string[] = [];
     for (const item of items) {
-      await this.prisma.sourceItem.update({
+      const updated = await this.prisma.sourceItem.updateMany({
         where: { id: item.id },
         data: {
           screeningResultJson: toJson(item.result)
         }
       });
+      if (updated.count === 0) {
+        missingIds.push(item.id);
+      }
     }
+    return { missingIds };
   }
 
 }

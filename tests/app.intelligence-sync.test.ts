@@ -189,8 +189,9 @@ function buildRepositories() {
     listSourceItemsByIds: vi.fn(async () => [] as any[]),
     enrichOpportunity: vi.fn(async () => ({})),
     updateOpportunityNotionSync: vi.fn(async () => ({})),
+    updateSourceItemNotionSync: vi.fn(async () => ({})),
     markSourceItemsProcessed: vi.fn(async () => ({})),
-    saveScreeningResults: vi.fn(async () => ({}))
+    saveScreeningResults: vi.fn(async () => ({ missingIds: [] as string[] }))
   };
 }
 
@@ -522,5 +523,167 @@ describe("intelligence sync — claim-aware downgrade reaches Notion", () => {
     const syncOptions = (notion.syncOpportunity.mock.calls as any[][])[0][2] as { draftReadiness: { tier: string; guidance: string[] } };
     // Product-claim with no internal-proof backing → downgraded to "promising"
     expect(syncOptions.draftReadiness.tier).toBe("promising");
+  });
+});
+
+describe("intelligence sync — Linear archive path", () => {
+  it("archives stale Notion page, clears notionPageId, and does not leave item in retry loop", async () => {
+    const archiveLinearReviewItem = vi.fn(async () => {});
+    const { app, repositories } = buildApp({
+      notion: {
+        syncOpportunity: vi.fn(async () => null),
+        syncRun: vi.fn(async () => null),
+        syncUser: vi.fn(async () => null),
+        archiveLinearReviewItem
+      } as any,
+      prisma: {
+        $transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})),
+        $queryRawUnsafe: vi.fn(async () => [{ count: BigInt(0) }]),
+        sourceItem: {
+          findUnique: vi.fn(async () => ({
+            id: sourceItemDbId(COMPANY_ID, "linear:issue-1"),
+            title: "Some Linear issue",
+            sourceUrl: "https://linear.app/issue/1",
+            occurredAt: new Date("2026-03-14T09:00:00.000Z"),
+            metadataJson: { itemType: "issue" },
+            notionPageId: "stale-notion-page-id",
+            notionPageFingerprint: "stale-fp"
+          })),
+          update: vi.fn(async () => ({}))
+        }
+      } as any
+    });
+
+    const externalId = "linear:issue-1";
+    mockedPipeline.mockResolvedValue({
+      screeningResults: new Map(),
+      created: [],
+      enriched: [],
+      skipped: [],
+      usageEvents: [],
+      processedSourceItemIds: [externalId],
+      linearReviewItems: [],
+      linearClassifications: new Map([[externalId, {
+        classification: "enrich-worthy" as const,
+        rationale: "Shipped feature",
+        customerVisibility: "shipped" as const,
+        sensitivityLevel: "safe" as const,
+        evidenceStrength: 0.8,
+        reviewNote: ""
+      }]])
+    });
+
+    await app.run("intelligence:run");
+
+    // Archive was called with the stale page id
+    expect(archiveLinearReviewItem).toHaveBeenCalledWith("stale-notion-page-id");
+
+    // notionPageId cleared to prevent retry loop
+    expect(repositories.updateSourceItemNotionSync).toHaveBeenCalledWith(
+      sourceItemDbId(COMPANY_ID, externalId), null, null
+    );
+
+    // Item was NOT excluded from the processed set (not in linearPersistFailedIds)
+    expect(repositories.markSourceItemsProcessed).toHaveBeenCalledWith(
+      [sourceItemDbId(COMPANY_ID, externalId)],
+      expect.any(Date)
+    );
+  });
+
+  it("item is not left pending when archive no-ops on already-archived page", async () => {
+    const archiveLinearReviewItem = vi.fn(async () => {});
+    const { app, repositories } = buildApp({
+      notion: {
+        syncOpportunity: vi.fn(async () => null),
+        syncRun: vi.fn(async () => null),
+        syncUser: vi.fn(async () => null),
+        archiveLinearReviewItem
+      } as any,
+      prisma: {
+        $transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})),
+        $queryRawUnsafe: vi.fn(async () => [{ count: BigInt(0) }]),
+        sourceItem: {
+          findUnique: vi.fn(async () => ({
+            id: sourceItemDbId(COMPANY_ID, "linear:issue-2"),
+            title: "Another issue",
+            sourceUrl: "https://linear.app/issue/2",
+            occurredAt: new Date("2026-03-14T09:00:00.000Z"),
+            metadataJson: {},
+            notionPageId: "already-archived-page",
+            notionPageFingerprint: "old-fp"
+          })),
+          update: vi.fn(async () => ({}))
+        }
+      } as any
+    });
+
+    const externalId = "linear:issue-2";
+    mockedPipeline.mockResolvedValue({
+      screeningResults: new Map(),
+      created: [],
+      enriched: [],
+      skipped: [],
+      usageEvents: [],
+      processedSourceItemIds: [externalId],
+      linearReviewItems: [],
+      linearClassifications: new Map([[externalId, {
+        classification: "ignore" as const,
+        rationale: "Internal noise",
+        customerVisibility: "internal-only" as const,
+        sensitivityLevel: "safe" as const,
+        evidenceStrength: 0.2,
+        reviewNote: ""
+      }]])
+    });
+
+    await app.run("intelligence:run");
+
+    // Item is still marked as processed (not stuck in retry)
+    expect(repositories.markSourceItemsProcessed).toHaveBeenCalledWith(
+      [sourceItemDbId(COMPANY_ID, externalId)],
+      expect.any(Date)
+    );
+  });
+});
+
+describe("intelligence sync — screening-write warnings", () => {
+  it("surfaces missing-row screening writes in run warnings / SyncRun summary", async () => {
+    const repositories = buildRepositories();
+    repositories.saveScreeningResults.mockResolvedValue({
+      missingIds: ["si_phantom_abc", "si_phantom_def"]
+    });
+    const { app } = buildApp({ repositories });
+
+    const externalId = "ext-1";
+    mockedPipeline.mockResolvedValue({
+      screeningResults: new Map([[externalId, {
+        decision: "skip" as const,
+        rationale: "noise",
+        createOrEnrich: "unknown" as const,
+        relevanceScore: 0.2,
+        sensitivityFlag: false,
+        sensitivityCategories: []
+      }]]),
+      created: [],
+      enriched: [],
+      skipped: [],
+      usageEvents: [],
+      processedSourceItemIds: [externalId],
+      linearReviewItems: [],
+      linearClassifications: new Map()
+    });
+
+    await app.run("intelligence:run");
+
+    // updateSyncRun is called with the finalized run object that includes warnings
+    const updateCalls = repositories.updateSyncRun.mock.calls as any[][];
+    const runObjects = updateCalls.map(call => call[0]);
+    const warningTexts = runObjects.flatMap((r: any) => r.warnings ?? []);
+    expect(warningTexts).toContainEqual(
+      expect.stringContaining("Screening write skipped 2 missing SourceItem(s)")
+    );
+    expect(warningTexts).toContainEqual(
+      expect.stringContaining("si_phantom_abc")
+    );
   });
 });

@@ -349,10 +349,15 @@ export class NotionService {
 
   async archiveLinearReviewItem(notionPageId: string): Promise<void> {
     if (!this.client) return;
-    await this.client.pages.update({
-      page_id: notionPageId,
-      archived: true
-    } as any);
+    try {
+      await this.client.pages.update({
+        page_id: notionPageId,
+        archived: true
+      } as any);
+    } catch (error: unknown) {
+      if (isNotionArchivedError(error) || isNotionObjectNotFoundError(error)) return;
+      throw error;
+    }
   }
 
   /** Write draft content into the page body, replacing any existing draft section. */
@@ -493,10 +498,15 @@ export class NotionService {
 
   async archiveClaapReviewItem(notionPageId: string): Promise<void> {
     if (!this.client) return;
-    await this.client.pages.update({
-      page_id: notionPageId,
-      archived: true
-    } as any);
+    try {
+      await this.client.pages.update({
+        page_id: notionPageId,
+        archived: true
+      } as any);
+    } catch (error: unknown) {
+      if (isNotionArchivedError(error) || isNotionObjectNotFoundError(error)) return;
+      throw error;
+    }
   }
 
   async getEditorialNotes(notionPageId: string): Promise<string> {

@@ -346,7 +346,10 @@ export class EditorialSignalEngineApp {
           result
         }));
         if (screeningEntries.length > 0) {
-          await this.repositories.saveScreeningResults(screeningEntries);
+          const { missingIds } = await this.repositories.saveScreeningResults(screeningEntries);
+          if (missingIds.length > 0) {
+            run.warnings.push(`Screening write skipped ${missingIds.length} missing SourceItem(s): ${missingIds.join(", ")}`);
+          }
         }
 
         // Persist Linear enrichment classifications to DB + sync review items to Notion
@@ -397,8 +400,10 @@ export class EditorialSignalEngineApp {
                   await this.repositories.updateSourceItemNotionSync(dbId, syncResult.notionPageId, reviewFingerprint);
                 }
               } else if (storedItem.notionPageId) {
-                // Archive any existing Linear Review row for this item
+                // Archive any existing Linear Review row for this item and clear the
+                // stale reference so subsequent runs do not re-attempt the archive.
                 await this.notion.archiveLinearReviewItem(storedItem.notionPageId);
+                await this.repositories.updateSourceItemNotionSync(dbId, null, null);
               }
             }
           } catch (error) {
