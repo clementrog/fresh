@@ -326,7 +326,7 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
 
 type SourceCreationMode = "create-capable" | "enrich-only";
 
-function getSourceCreationMode(item: NormalizedSourceItem): SourceCreationMode {
+export function getSourceCreationMode(item: NormalizedSourceItem): SourceCreationMode {
   // This is intentionally based on the audited normalization shape emitted today:
   // - src/connectors/notion.ts sets metadata.notionKind for structured Notion insights/signals
   // - src/connectors/claap.ts does not emit an equivalent insight marker
@@ -351,6 +351,8 @@ function getSourceCreationMode(item: NormalizedSourceItem): SourceCreationMode {
         ? item.metadata.linearEnrichmentClassification : undefined;
       return linearClass === "editorial-lead" ? "create-capable" : "enrich-only";
     }
+    case "hubspot":
+      return "enrich-only";
     default:
       return "enrich-only";
   }
@@ -379,12 +381,14 @@ function isCuratedSource(item: NormalizedSourceItem): boolean {
         ? item.metadata.linearEnrichmentClassification : undefined;
       return linearClass === "editorial-lead";
     }
+    case "hubspot":
+      return false;
     default:
       return false;
   }
 }
 
-function normalizeCreateEnrichDecision(params: {
+export function normalizeCreateEnrichDecision(params: {
   creationMode: SourceCreationMode;
   candidates: ContentOpportunity[];
   decision: CreateEnrichDecision;

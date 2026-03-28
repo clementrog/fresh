@@ -36,6 +36,7 @@ import { ensureConvergenceFoundation, resolveProfileId } from "./services/conver
 import { runIntelligencePipeline } from "./services/intelligence.js";
 import { runMarketResearch } from "./services/market-research.js";
 import { findSupportingEvidence, assessDraftReadiness, deriveProvenanceType, computeReadinessTier, generateOperatorGuidance } from "./services/evidence-pack.js";
+import { fetchHubSpotSignalItems, type BridgeRepositories } from "./connectors/hubspot-signals.js";
 
 type LoggerLike = {
   info: (...args: unknown[]) => void;
@@ -197,6 +198,32 @@ export class EditorialSignalEngineApp {
       if (!context.dryRun) {
         for (const [source, cursor] of sourceMaxCursor.entries()) {
           await this.repositories.setCursor(source, cursor, this.prisma, company.id);
+        }
+      }
+
+      // HubSpot signals bridge — reads from Sales DB tables, not external API.
+      // Non-fatal: if sales tables are missing or the bridge fails, log and continue.
+      if (!context.dryRun) {
+        try {
+          const bridgeRepos = this.buildBridgeRepositories();
+          const hubspotCursor = await this.repositories.getCursor("hubspot-signals", company.id);
+          const bridgeResult = await fetchHubSpotSignalItems({
+            companyId: company.id,
+            repos: bridgeRepos,
+            cursor: hubspotCursor,
+            now: context.now,
+          });
+
+          for (const item of bridgeResult.items) {
+            await this.repositories.upsertSourceItem(item, null, this.prisma, company.id);
+            run.counters.normalized += 1;
+          }
+
+          if (bridgeResult.newCursor && bridgeResult.newCursor !== hubspotCursor) {
+            await this.repositories.setCursor("hubspot-signals", bridgeResult.newCursor, this.prisma, company.id);
+          }
+        } catch (bridgeError) {
+          this.logger.warn?.({ err: bridgeError }, "HubSpot signals bridge failed — skipping");
         }
       }
 
@@ -1666,6 +1693,63 @@ Provide a rationale explaining your assessment.`,
     if (syncResult) {
       await this.repositories.updateSourceItemNotionSync(sourceItem.id, syncResult.notionPageId, reviewFingerprint);
     }
+  }
+
+  private buildBridgeRepositories(): BridgeRepositories {
+    const prisma = this.prisma;
+    return {
+      async listSignalsPage(companyId, fromTimestamp, afterId, limit) {
+        const tsFilter = fromTimestamp
+          ? afterId
+            // Same-class keyset: (detectedAt > T) OR (detectedAt = T AND id > afterId)
+            ? { OR: [
+                { detectedAt: { gt: fromTimestamp } },
+                { detectedAt: fromTimestamp, id: { gt: afterId } },
+              ] }
+            // Cross-class GTE: detectedAt >= T
+            : { detectedAt: { gte: fromTimestamp } }
+          : {};
+        return prisma.salesSignal.findMany({
+          where: { companyId, ...tsFilter },
+          include: { deal: { select: { dealName: true, stage: true } } },
+          orderBy: [{ detectedAt: "asc" }, { id: "asc" }],
+          take: limit,
+        });
+      },
+      async listStandaloneEligibleFactsPage(companyId, fromTimestamp, afterId, limit) {
+        const tsFilter = fromTimestamp
+          ? afterId
+            ? { OR: [
+                { createdAt: { gt: fromTimestamp } },
+                { createdAt: fromTimestamp, id: { gt: afterId } },
+              ] }
+            : { createdAt: { gte: fromTimestamp } }
+          : {};
+        return prisma.salesExtractedFact.findMany({
+          where: {
+            companyId,
+            category: "requested_capability",
+            confidence: { gte: 0.7 },
+            NOT: { extractedValue: "" },
+            ...tsFilter,
+          },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          take: limit,
+        });
+      },
+      async listExtractionsForDeal(dealId) {
+        return prisma.salesExtractedFact.findMany({
+          where: { dealId },
+          orderBy: { createdAt: "desc" },
+        });
+      },
+      async getDeal(dealId) {
+        return prisma.salesDeal.findUnique({
+          where: { id: dealId },
+          select: { dealName: true, stage: true },
+        });
+      },
+    };
   }
 
   private findConfig(configs: ConnectorConfig[], source: NormalizedSourceItem["source"]) {
