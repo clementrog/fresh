@@ -5,6 +5,7 @@ import {
   filterFacts,
   isLowValueSource,
   coerceGuards,
+  scoreCapability,
   activityExtractionSchema,
   MAX_EXTRACTION_ATTEMPTS,
   type ExtractionResult,
@@ -1210,6 +1211,7 @@ describe("sales extraction service", () => {
           activitiesProcessed: 0, activitiesSkipped: 0, factsCreated: 0,
           retryableErrors: 0, exhaustedItems: 0, stageSkipped: 0, terminalSkips: 0,
           errors: [], warnings: [], costUsd: 0, rateLimited: false,
+          capabilityStats: { totalFacts: 0, activitiesWithCapabilities: 0, activitiesProcessed: 0, meanPerActivity: 0, maxPerActivity: 0 },
         }),
       } as any;
       const mockPrisma = {
@@ -1280,6 +1282,193 @@ describe("sales extraction service", () => {
       const callOpts = app.runExtract.mock.calls[0][1];
       expect(callOpts.batchSize).toBeUndefined();
     });
+
+    it("--activity-ids passes activityIds array to runExtract", async () => {
+      const { exitCode, app } = await runCli(["--activity-ids", "act-1,act-2,act-3"]);
+      expect(exitCode).toBe(0);
+      expect(app.runExtract).toHaveBeenCalledWith("c1", expect.objectContaining({
+        activityIds: ["act-1", "act-2", "act-3"],
+      }));
+    });
+
+    it("rejects --activity-ids without a value", async () => {
+      const { exitCode, app } = await runCli(["--activity-ids"]);
+      expect(exitCode).toBe(1);
+      expect(app.runExtract).not.toHaveBeenCalled();
+    });
+
+    it("rejects --activity-ids with more than 50 IDs", async () => {
+      const ids = Array.from({ length: 51 }, (_, i) => `act-${i}`).join(",");
+      const { exitCode, app } = await runCli(["--activity-ids", ids]);
+      expect(exitCode).toBe(1);
+      expect(app.runExtract).not.toHaveBeenCalled();
+    });
+
+    it("rejects --activity-ids combined with --reprocess", async () => {
+      const { exitCode, app } = await runCli(["--activity-ids", "act-1", "--reprocess"]);
+      expect(exitCode).toBe(1);
+      expect(app.runExtract).not.toHaveBeenCalled();
+    });
+
+    it("rejects --activity-ids combined with --drain", async () => {
+      const { exitCode, app } = await runCli(["--activity-ids", "act-1", "--drain"]);
+      expect(exitCode).toBe(1);
+      expect(app.runExtract).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// scoreCapability — behavior-based ranking
+// ---------------------------------------------------------------------------
+
+describe("scoreCapability", () => {
+  it("scores every 3-5 word capability higher than every single-word generic", () => {
+    const specific = ["HMRC RTI filing", "absence tracking with calendar sync", "SSO via SAML 2.0"];
+    const generic = ["reporting", "payroll", "analytics"];
+    for (const s of specific) {
+      for (const g of generic) {
+        expect(scoreCapability(s), `${s} should score higher than ${g}`).toBeGreaterThan(scoreCapability(g));
+      }
+    }
+  });
+
+  it("scores 3-5 word phrases at top tier (2)", () => {
+    expect(scoreCapability("HMRC RTI filing")).toBe(2);
+    expect(scoreCapability("absence tracking with calendar sync")).toBe(2);
+  });
+
+  it("scores single words at zero", () => {
+    expect(scoreCapability("reporting")).toBe(0);
+    expect(scoreCapability("payroll")).toBe(0);
+  });
+
+  it("penalizes verbose capabilities (6+ words)", () => {
+    expect(scoreCapability("comprehensive integrated payroll management and processing solution")).toBe(1);
+  });
+
+  it("sorting by score desc then input order keeps most specific first", () => {
+    const capabilities = [
+      "reporting",                                   // 0, order 0
+      "HMRC RTI filing",                             // 2, order 1
+      "mobile app",                                  // 1, order 2
+      "absence tracking with calendar sync",         // 2, order 3
+      "analytics",                                   // 0, order 4
+      "SSO via SAML 2.0",                            // 2, order 5
+      "comprehensive payroll mgmt solution for enterprises", // 1, order 6
+      "audit log export",                            // 1, order 7
+    ];
+
+    const sorted = capabilities
+      .map((c, i) => ({ value: c, score: scoreCapability(c), order: i }))
+      .sort((a, b) => b.score - a.score || a.order - b.order);
+
+    const top3 = sorted.slice(0, 3);
+    // All top-3 are score-2 items, in original order
+    expect(top3.map((c) => c.value)).toEqual([
+      "HMRC RTI filing",
+      "absence tracking with calendar sync",
+      "SSO via SAML 2.0",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Targeted extraction path (activityIds)
+// ---------------------------------------------------------------------------
+
+describe("targeted extraction (activityIds)", () => {
+  function makeTxMockLocal() {
+    return {
+      salesExtractedFact: { upsert: vi.fn().mockResolvedValue({}) },
+      salesActivity: { update: vi.fn().mockResolvedValue({}) },
+      costLedgerEntry: { create: vi.fn().mockResolvedValue({}) },
+    };
+  }
+
+  function makeReposLocal(txMock: ReturnType<typeof makeTxMockLocal>) {
+    return {
+      acquireRunLease: vi.fn().mockResolvedValue(undefined),
+      renewLease: vi.fn().mockResolvedValue(true),
+      finalizeSyncRun: vi.fn().mockResolvedValue(undefined),
+      listUnextractedActivities: vi.fn().mockResolvedValue([]),
+      listActivitiesByIdScoped: vi.fn().mockResolvedValue([]),
+      getLatestDoctrine: vi.fn().mockResolvedValue(null),
+      listDealsForStageCheck: vi.fn().mockResolvedValue(new Map()),
+      listCompanyNamesForDeals: vi.fn().mockResolvedValue(new Map()),
+      deleteFactsForActivity: vi.fn().mockResolvedValue(undefined),
+      incrementExtractionAttempts: vi.fn().mockResolvedValue(1),
+      transaction: vi.fn().mockImplementation(async (fn: (tx: any) => Promise<void>) => fn(txMock)),
+    } as any;
+  }
+
+  function makeLlmClientLocal() {
+    return {
+      generateStructured: vi.fn().mockResolvedValue({
+        output: {
+          painPoints: [], blockers: [], nextStep: null, urgency: null,
+          competitorMentions: [], budgetMentioned: false, budgetDetails: null,
+          timelineMentioned: false, timelineDetails: null, championIdentified: null,
+          decisionMakerMentioned: null, sentiment: "neutral" as const,
+          requestedCapabilities: ["SSO integration"], complianceConcerns: [],
+        },
+        usage: { mode: "provider" as const, promptTokens: 100, completionTokens: 50, estimatedCostUsd: 0.001 },
+      }),
+    } as any;
+  }
+
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any;
+
+  it("processes only requested activityIds when provided", async () => {
+    const txMock = makeTxMockLocal();
+    const repos = makeReposLocal(txMock);
+    const llmClient = makeLlmClientLocal();
+
+    const targetActivity = makeActivity({ id: "canary-1", dealId: "deal-1" });
+    repos.listActivitiesByIdScoped.mockResolvedValue([targetActivity]);
+
+    const result = await runExtraction({
+      companyId: "comp-1", repos, llmClient, logger,
+      activityIds: ["canary-1"],
+    });
+
+    expect(repos.listActivitiesByIdScoped).toHaveBeenCalledWith("comp-1", ["canary-1"]);
+    expect(repos.listUnextractedActivities).not.toHaveBeenCalled();
+    expect(result.activitiesProcessed).toBe(1);
+  });
+
+  it("targeted fetch excludes activities from other tenants", async () => {
+    const txMock = makeTxMockLocal();
+    const repos = makeReposLocal(txMock);
+    const llmClient = makeLlmClientLocal();
+
+    // listActivitiesByIdScoped returns empty — the ID exists but under a different companyId
+    repos.listActivitiesByIdScoped.mockResolvedValue([]);
+
+    const result = await runExtraction({
+      companyId: "comp-1", repos, llmClient, logger,
+      activityIds: ["cross-tenant-act-1"],
+    });
+
+    expect(repos.listActivitiesByIdScoped).toHaveBeenCalledWith("comp-1", ["cross-tenant-act-1"]);
+    expect(result.activitiesProcessed).toBe(0);
+  });
+
+  it("targeted mode still skips activities with short body", async () => {
+    const txMock = makeTxMockLocal();
+    const repos = makeReposLocal(txMock);
+    const llmClient = makeLlmClientLocal();
+
+    const shortBodyActivity = makeActivity({ id: "canary-1", body: "too short", dealId: "deal-1" });
+    repos.listActivitiesByIdScoped.mockResolvedValue([shortBodyActivity]);
+
+    const result = await runExtraction({
+      companyId: "comp-1", repos, llmClient, logger,
+      activityIds: ["canary-1"],
+    });
+
+    expect(result.activitiesSkipped).toBe(1);
+    expect(result.activitiesProcessed).toBe(0);
   });
 });
 
@@ -1293,6 +1482,7 @@ describe("mergeExtractionResults", () => {
       activitiesProcessed: 0, activitiesSkipped: 0, stageSkipped: 0,
       factsCreated: 0, retryableErrors: 0, terminalSkips: 0, exhaustedItems: 0,
       errors: [], warnings: [], costUsd: 0, rateLimited: false,
+      capabilityStats: { totalFacts: 0, activitiesWithCapabilities: 0, activitiesProcessed: 0, meanPerActivity: 0, maxPerActivity: 0 },
     };
   }
 
@@ -1302,6 +1492,7 @@ describe("mergeExtractionResults", () => {
       activitiesProcessed: 5, activitiesSkipped: 3, stageSkipped: 2,
       factsCreated: 10, retryableErrors: 1, terminalSkips: 1, exhaustedItems: 0,
       errors: ["err1"], warnings: ["warn1"], costUsd: 0.01, rateLimited: false,
+      capabilityStats: { totalFacts: 0, activitiesWithCapabilities: 0, activitiesProcessed: 0, meanPerActivity: 0, maxPerActivity: 0 },
     };
     mergeExtractionResults(target, source);
     expect(target.activitiesProcessed).toBe(5);
@@ -1328,6 +1519,55 @@ describe("mergeExtractionResults", () => {
     expect(target.activitiesProcessed).toBe(5);
     expect(target.factsCreated).toBe(10);
   });
+
+  it("merges capabilityStats: sums totals, takes max, recomputes mean over all processed", () => {
+    const target = emptyResult();
+    // 5 activities processed, 2 had capabilities, 4 total facts → mean = 4/5 = 0.8
+    target.capabilityStats = { totalFacts: 4, activitiesWithCapabilities: 2, activitiesProcessed: 5, meanPerActivity: 0.8, maxPerActivity: 3 };
+    const source: ExtractionResult = {
+      ...emptyResult(),
+      // 3 activities processed, 3 had capabilities, 6 total facts → mean = 6/3 = 2
+      capabilityStats: { totalFacts: 6, activitiesWithCapabilities: 3, activitiesProcessed: 3, meanPerActivity: 2, maxPerActivity: 5 },
+    };
+    mergeExtractionResults(target, source);
+    expect(target.capabilityStats.totalFacts).toBe(10);
+    expect(target.capabilityStats.activitiesWithCapabilities).toBe(5);
+    expect(target.capabilityStats.activitiesProcessed).toBe(8);
+    expect(target.capabilityStats.maxPerActivity).toBe(5);
+    expect(target.capabilityStats.meanPerActivity).toBeCloseTo(1.25); // 10/8
+  });
+
+  it("handles merge when target capabilityStats is empty", () => {
+    const target = emptyResult();
+    const source: ExtractionResult = {
+      ...emptyResult(),
+      capabilityStats: { totalFacts: 3, activitiesWithCapabilities: 1, activitiesProcessed: 2, meanPerActivity: 1.5, maxPerActivity: 3 },
+    };
+    mergeExtractionResults(target, source);
+    expect(target.capabilityStats.totalFacts).toBe(3);
+    expect(target.capabilityStats.activitiesProcessed).toBe(2);
+    expect(target.capabilityStats.meanPerActivity).toBeCloseTo(1.5); // 3/2
+  });
+
+  it("meanPerActivity includes zero-capability activities in denominator", () => {
+    const target = emptyResult();
+    // 10 activities processed, only 3 had capabilities, 6 total facts
+    target.capabilityStats = { totalFacts: 6, activitiesWithCapabilities: 3, activitiesProcessed: 10, meanPerActivity: 0.6, maxPerActivity: 4 };
+    const source = emptyResult();
+    // 5 more activities processed, 0 had capabilities
+    source.capabilityStats = { totalFacts: 0, activitiesWithCapabilities: 0, activitiesProcessed: 5, meanPerActivity: 0, maxPerActivity: 0 };
+    mergeExtractionResults(target, source);
+    expect(target.capabilityStats.activitiesProcessed).toBe(15);
+    expect(target.capabilityStats.totalFacts).toBe(6);
+    expect(target.capabilityStats.meanPerActivity).toBeCloseTo(0.4); // 6/15 — recall dilution is visible
+  });
+
+  it("emptyResult includes zeroed capabilityStats", () => {
+    const result = emptyResult();
+    expect(result.capabilityStats).toEqual({
+      totalFacts: 0, activitiesWithCapabilities: 0, activitiesProcessed: 0, meanPerActivity: 0, maxPerActivity: 0,
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1346,6 +1586,7 @@ describe("SalesApp drain loop", () => {
       activitiesProcessed: 0, activitiesSkipped: 0, stageSkipped: 0,
       factsCreated: 0, retryableErrors: 0, terminalSkips: 0, exhaustedItems: 0,
       errors: [], warnings: [], costUsd: 0, rateLimited: false,
+      capabilityStats: { totalFacts: 0, activitiesWithCapabilities: 0, activitiesProcessed: 0, meanPerActivity: 0, maxPerActivity: 0 },
     };
   }
 
@@ -1558,5 +1799,81 @@ describe("drain starvation prevention (behavior-level)", () => {
     // Verify the second LLM call was for the retryable activity
     const secondCallPrompt = llmClient.generateStructured.mock.calls[1][0].prompt;
     expect(secondCallPrompt).toContain(retryableActivity.body!.slice(0, 50));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SalesApp.runExtract — targeted mode guards
+// ---------------------------------------------------------------------------
+
+describe("SalesApp.runExtract targeted mode", () => {
+  let mockRunExtraction: ReturnType<typeof vi.fn>;
+  let SalesApp: typeof import("../src/sales/app.js").SalesApp;
+
+  function emptyResult(): ExtractionResult {
+    return {
+      activitiesProcessed: 0, activitiesSkipped: 0, stageSkipped: 0,
+      factsCreated: 0, retryableErrors: 0, terminalSkips: 0, exhaustedItems: 0,
+      errors: [], warnings: [], costUsd: 0, rateLimited: false,
+      capabilityStats: { totalFacts: 0, activitiesWithCapabilities: 0, activitiesProcessed: 0, meanPerActivity: 0, maxPerActivity: 0 },
+    };
+  }
+
+  beforeEach(async () => {
+    vi.resetModules();
+    mockRunExtraction = vi.fn().mockResolvedValue(emptyResult());
+
+    vi.doMock("../src/sales/services/extraction.js", () => ({
+      runExtraction: mockRunExtraction,
+    }));
+
+    const appModule = await import("../src/sales/app.js");
+    SalesApp = appModule.SalesApp;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function buildApp() {
+    const mockPrisma = {} as any;
+    const env = {
+      LOG_LEVEL: "silent",
+      SALES_LLM_PROVIDER: "openai",
+      SALES_LLM_MODEL: "gpt-4.1-mini",
+    } as any;
+    return new SalesApp(mockPrisma, env);
+  }
+
+  it("passes activityIds to runExtraction", async () => {
+    await buildApp().runExtract("comp-1", { activityIds: ["act-1", "act-2"] });
+
+    expect(mockRunExtraction).toHaveBeenCalledTimes(1);
+    expect(mockRunExtraction).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: "comp-1", activityIds: ["act-1", "act-2"] })
+    );
+  });
+
+  it("targeted mode does not enter drain loop", async () => {
+    await buildApp().runExtract("comp-1", { activityIds: ["act-1"] });
+
+    // Should be called exactly once (no loop)
+    expect(mockRunExtraction).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects activityIds combined with reprocess", async () => {
+    await expect(
+      buildApp().runExtract("comp-1", { activityIds: ["act-1"], reprocess: true })
+    ).rejects.toThrow("--activity-ids cannot be combined with --reprocess or --drain");
+
+    expect(mockRunExtraction).not.toHaveBeenCalled();
+  });
+
+  it("rejects activityIds combined with drain", async () => {
+    await expect(
+      buildApp().runExtract("comp-1", { activityIds: ["act-1"], drain: true })
+    ).rejects.toThrow("--activity-ids cannot be combined with --reprocess or --drain");
+
+    expect(mockRunExtraction).not.toHaveBeenCalled();
   });
 });

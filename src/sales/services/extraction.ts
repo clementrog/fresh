@@ -43,6 +43,28 @@ export type ActivityExtractionOutput = z.infer<typeof activityExtractionSchema>;
 // Result types
 // ---------------------------------------------------------------------------
 
+export interface CapabilityStats {
+  /** Total requested_capability facts emitted across all processed activities */
+  totalFacts: number;
+  /** Activities that produced ≥1 requested_capability fact */
+  activitiesWithCapabilities: number;
+  /**
+   * Activities that reached LLM extraction and completed fact-write.
+   * Excludes items that were skipped (short body, no deal), stage-filtered,
+   * or exhausted before LLM call — only activities that actually ran
+   * extraction contribute to this counter.
+   */
+  activitiesProcessed: number;
+  /**
+   * totalFacts / activitiesProcessed — requested_capability facts per
+   * processed activity. The denominator includes activities that produced
+   * zero capabilities, so a drop in this metric reliably surfaces recall
+   * regressions. Does NOT count skipped, stage-filtered, or exhausted items.
+   */
+  meanPerActivity: number;
+  maxPerActivity: number;
+}
+
 export interface ExtractionResult {
   activitiesProcessed: number;
   activitiesSkipped: number;
@@ -55,6 +77,7 @@ export interface ExtractionResult {
   warnings: string[];
   costUsd: number;
   rateLimited: boolean;
+  capabilityStats: CapabilityStats;
 }
 
 // ---------------------------------------------------------------------------
@@ -71,7 +94,8 @@ Rules:
 - For urgency, only return "high" if there is explicit time pressure language.
 - For sentiment, return "positive" only when the buyer expresses explicit enthusiasm, commitment, or excitement (e.g. "we're very excited", "this is exactly what we need", "great progress"). Polite language, generic thanks, or standard professional courtesy is "neutral". Return "negative" only for explicit dissatisfaction or frustration. Default to "neutral" or "mixed".
 - For champion/decision-maker, return the person's name or role if mentioned.
-- Budget and timeline: only set to true if explicitly discussed, not inferred from deal context.`;
+- Budget and timeline: only set to true if explicitly discussed, not inferred from deal context.
+- For requestedCapabilities, include at most 3 entries. Only include capabilities the buyer explicitly asked for or expressed a concrete need for — not generic feature categories (e.g. "reporting", "analytics", "mobile app") or restatements of the product's obvious core function. Prefer specific, actionable needs (e.g. "HMRC RTI filing", "multi-entity consolidation", "absence tracking with calendar sync") over broad topics. If more than 3 qualify, keep the most specific.`;
 
 // ---------------------------------------------------------------------------
 // Fan-out: LLM output → SalesExtractedFact rows
@@ -102,6 +126,27 @@ function sanitizeText(value: string, maxChars?: number): string {
     ? value
     : Array.from(value).slice(0, maxChars).join("");
   return input.replace(/[\uD800-\uDFFF]/g, "");
+}
+
+// ---------------------------------------------------------------------------
+// Capability specificity scoring (ranking contract for future hard cap)
+// ---------------------------------------------------------------------------
+
+/**
+ * Score a requested capability by specificity.
+ * Higher = more specific / higher quality.
+ *
+ *   1 word  → 0 (topic, not capability — "payroll", "SSO")
+ *   2 words → 1 (borderline — "absence management")
+ *   3-5 words → 2 (sweet spot — "HMRC RTI filing")
+ *   6+ words → 1 (verbose/vague)
+ */
+export function scoreCapability(value: string): number {
+  const wordCount = value.trim().split(/\s+/).length;
+  if (wordCount <= 1) return 0;
+  if (wordCount === 2) return 1;
+  if (wordCount <= 5) return 2;
+  return 1;
 }
 
 export function fanOutFacts(
@@ -312,6 +357,7 @@ export async function runExtraction(params: {
   model?: string;
   batchSize?: number;
   runId?: string;
+  activityIds?: string[];
 }): Promise<ExtractionResult> {
   const {
     companyId,
@@ -335,6 +381,7 @@ export async function runExtraction(params: {
     warnings: [],
     costUsd: 0,
     rateLimited: false,
+    capabilityStats: { totalFacts: 0, activitiesWithCapabilities: 0, activitiesProcessed: 0, meanPerActivity: 0, maxPerActivity: 0 },
   };
 
   const runId = params.runId ?? createDeterministicId("run", [companyId, "sales:extract", Date.now().toString()]);
@@ -384,8 +431,10 @@ export async function runExtraction(params: {
       logger.warn("No stage labels configured — processing all activities");
     }
 
-    // 3. Get unextracted activities
-    const activities = await repos.listUnextractedActivities(companyId, batchSize);
+    // 3. Get activities (targeted by ID or from unextracted queue)
+    const activities = params.activityIds
+      ? await repos.listActivitiesByIdScoped(companyId, params.activityIds)
+      : await repos.listUnextractedActivities(companyId, batchSize);
 
     // Build deal-stage cache for stage filtering
     const dealIds = [...new Set(activities.filter((a) => a.dealId).map((a) => a.dealId!))];
@@ -626,6 +675,14 @@ export async function runExtraction(params: {
       result.factsCreated += facts.length;
       result.costUsd += llmUsage.estimatedCostUsd;
 
+      const rcCount = facts.filter((f) => f.category === "requested_capability").length;
+      result.capabilityStats.activitiesProcessed += 1;
+      if (rcCount > 0) {
+        result.capabilityStats.totalFacts += rcCount;
+        result.capabilityStats.activitiesWithCapabilities += 1;
+        result.capabilityStats.maxPerActivity = Math.max(result.capabilityStats.maxPerActivity, rcCount);
+      }
+
       if (facts.length === 0) {
         result.terminalSkips++;
       }
@@ -666,6 +723,11 @@ export async function runExtraction(params: {
       }
     }
     throw error;
+  }
+
+  if (result.capabilityStats.activitiesProcessed > 0) {
+    result.capabilityStats.meanPerActivity =
+      result.capabilityStats.totalFacts / result.capabilityStats.activitiesProcessed;
   }
 
   return result;

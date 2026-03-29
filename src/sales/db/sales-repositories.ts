@@ -282,6 +282,15 @@ export class SalesRepositoryBundle {
     });
   }
 
+  async listActivitiesByIdScoped(companyId: string, activityIds: string[]) {
+    return this.prisma.salesActivity.findMany({
+      where: {
+        id: { in: activityIds },
+        companyId,
+      },
+    });
+  }
+
   async markActivityExtracted(id: string) {
     return this.prisma.salesActivity.update({
       where: { id },

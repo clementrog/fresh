@@ -170,10 +170,14 @@ export class SalesApp {
 
   async runExtract(
     companyId: string,
-    opts?: { reprocess?: boolean; batchSize?: number; drain?: boolean },
+    opts?: { reprocess?: boolean; batchSize?: number; drain?: boolean; activityIds?: string[] },
   ): Promise<ExtractionResult & { stopReason?: DrainStopReason; iterations?: number }> {
     const logger = createLogger(this.env);
     const repos = new SalesRepositoryBundle(this.prisma);
+
+    if (opts?.activityIds && (opts.reprocess || opts.drain)) {
+      throw new Error("--activity-ids cannot be combined with --reprocess or --drain");
+    }
 
     if (opts?.reprocess) {
       const reset = await repos.resetExtractions(companyId);
@@ -184,6 +188,10 @@ export class SalesApp {
     const provider = this.env.SALES_LLM_PROVIDER ?? "openai";
     const model = this.env.SALES_LLM_MODEL ?? "gpt-4.1-mini";
     const batchSize = opts?.batchSize ?? (opts?.drain ? 200 : undefined);
+
+    if (opts?.activityIds) {
+      return runExtraction({ companyId, repos, llmClient, logger, provider, model, activityIds: opts.activityIds });
+    }
 
     if (!opts?.drain) {
       return runExtraction({ companyId, repos, llmClient, logger, provider, model, batchSize });
@@ -385,6 +393,7 @@ function emptyExtractionResult(): ExtractionResult {
     warnings: [],
     costUsd: 0,
     rateLimited: false,
+    capabilityStats: { totalFacts: 0, activitiesWithCapabilities: 0, activitiesProcessed: 0, meanPerActivity: 0, maxPerActivity: 0 },
   };
 }
 
@@ -400,6 +409,15 @@ export function mergeExtractionResults(target: ExtractionResult, source: Extract
   target.warnings.push(...source.warnings);
   target.costUsd += source.costUsd;
   target.rateLimited = target.rateLimited || source.rateLimited;
+  target.capabilityStats.totalFacts += source.capabilityStats.totalFacts;
+  target.capabilityStats.activitiesWithCapabilities += source.capabilityStats.activitiesWithCapabilities;
+  target.capabilityStats.activitiesProcessed += source.capabilityStats.activitiesProcessed;
+  target.capabilityStats.maxPerActivity = Math.max(
+    target.capabilityStats.maxPerActivity, source.capabilityStats.maxPerActivity
+  );
+  target.capabilityStats.meanPerActivity = target.capabilityStats.activitiesProcessed > 0
+    ? target.capabilityStats.totalFacts / target.capabilityStats.activitiesProcessed
+    : 0;
 }
 
 function sleep(ms: number): Promise<void> {

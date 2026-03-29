@@ -115,9 +115,30 @@ export async function runSalesCommand(opts: SalesCommandOpts): Promise<void> {
           return;
         }
       }
-      logger.info(`Starting extraction for company "${company.name}" (${company.id})${reprocess ? " [reprocess]" : ""}${drain ? " [drain]" : ""}${batchSize ? ` [batch=${batchSize}]` : ""}`);
+      const activityIdsIdx = process.argv.indexOf("--activity-ids");
+      let activityIds: string[] | undefined;
+      if (activityIdsIdx !== -1) {
+        const raw = process.argv[activityIdsIdx + 1];
+        if (!raw) {
+          logger.error("--activity-ids requires a comma-separated list of activity IDs");
+          exit(1);
+          return;
+        }
+        activityIds = raw.split(",").map((s) => s.trim()).filter(Boolean);
+        if (activityIds.length === 0 || activityIds.length > 50) {
+          logger.error("--activity-ids must contain 1-50 IDs");
+          exit(1);
+          return;
+        }
+      }
+      if (activityIds && (reprocess || drain)) {
+        logger.error("--activity-ids cannot be combined with --reprocess or --drain");
+        exit(1);
+        return;
+      }
+      logger.info(`Starting extraction for company "${company.name}" (${company.id})${reprocess ? " [reprocess]" : ""}${drain ? " [drain]" : ""}${batchSize ? ` [batch=${batchSize}]` : ""}${activityIds ? ` [targeted=${activityIds.length}]` : ""}`);
       try {
-        const result = await app.runExtract(company.id, { reprocess, batchSize, drain });
+        const result = await app.runExtract(company.id, { reprocess, batchSize, drain, activityIds });
         logger.info({
           processed: result.activitiesProcessed,
           skipped: result.activitiesSkipped,
@@ -126,8 +147,9 @@ export async function runSalesCommand(opts: SalesCommandOpts): Promise<void> {
           exhausted: result.exhaustedItems,
           costUsd: result.costUsd,
           rateLimited: result.rateLimited,
+          capabilityStats: result.capabilityStats,
           ...(result.stopReason ? { stopReason: result.stopReason, iterations: result.iterations } : {}),
-        }, drain ? "Drain completed" : "Extraction completed");
+        }, activityIds ? "Targeted extraction completed" : drain ? "Drain completed" : "Extraction completed");
         for (const w of result.warnings) {
           logger.warn(w);
         }
