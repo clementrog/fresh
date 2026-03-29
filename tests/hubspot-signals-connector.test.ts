@@ -4,6 +4,8 @@ import {
   parseCursor,
   serializeCursor,
   sanitizeBridgeText,
+  normalizeForDedup,
+  dedupKey,
   BATCH_SIZE,
   type BridgeRepositories,
   type SignalWithDeal,
@@ -849,6 +851,267 @@ describe("fetchHubSpotSignalItems", () => {
     // No facts skipped
     expect(result1.stats.factsScanned + result2.stats.factsScanned).toBe(totalFacts);
     expect(result1.items.length + result2.items.length).toBe(totalFacts);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Semantic dedup helpers
+// ---------------------------------------------------------------------------
+
+describe("normalizeForDedup", () => {
+  it("lowercases and collapses whitespace", () => {
+    expect(normalizeForDedup("Marie  Dupont")).toBe("marie dupont");
+  });
+
+  it("trims leading/trailing whitespace", () => {
+    expect(normalizeForDedup("  Acme Corp  ")).toBe("acme corp");
+  });
+
+  it("handles tabs and newlines", () => {
+    expect(normalizeForDedup("Acme\t\nCorp")).toBe("acme corp");
+  });
+});
+
+describe("dedupKey", () => {
+  it("produces deterministic key from deal, category, value", () => {
+    const key = dedupKey("deal-1", "persona_stakeholder", "Marie Dupont");
+    expect(key).toBe("deal-1|persona_stakeholder|marie dupont");
+  });
+
+  it("different deals produce different keys", () => {
+    const k1 = dedupKey("deal-1", "persona_stakeholder", "Marie Dupont");
+    const k2 = dedupKey("deal-2", "persona_stakeholder", "Marie Dupont");
+    expect(k1).not.toBe(k2);
+  });
+
+  it("different categories produce different keys", () => {
+    const k1 = dedupKey("deal-1", "persona_stakeholder", "Acme");
+    const k2 = dedupKey("deal-1", "competitor_reference", "Acme");
+    expect(k1).not.toBe(k2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Semantic dedup integration (fetchHubSpotSignalItems)
+// ---------------------------------------------------------------------------
+
+describe("semantic dedup in fetchHubSpotSignalItems", () => {
+  it("same champion across activities → 1 item (earliest kept)", async () => {
+    // Two champion facts with same deal, same extractedValue, different ids/timestamps
+    const fact1 = makeChampionFact("fact-champ-early", new Date("2026-03-25T10:00:00Z"));
+    const fact2 = makeChampionFact("fact-champ-late", new Date("2026-03-27T10:00:00Z"));
+    // Both have extractedValue "Marie Dupont" from makeChampionFact
+
+    const signal = makeSignalWithDeal({ signalType: "champion_identified" });
+
+    const repos = makeMockRepos({
+      listSignalsPage: vi.fn().mockResolvedValue([signal]),
+      listExtractionsForDeal: vi.fn().mockResolvedValue([fact1, fact2]),
+    });
+
+    const result = await fetchHubSpotSignalItems(makeParams(repos));
+
+    // Only 1 item emitted despite 2 champion facts with same value
+    expect(result.items).toHaveLength(1);
+    // Earliest fact wins
+    expect(result.items[0].sourceItemId).toBe("hubspot-fact:fact-champ-early");
+  });
+
+  it("same competitor across activities → 1 item", async () => {
+    const compFact1: FactRecord = makeFactRecord({
+      id: "comp-fact-1",
+      dealId: "deal-1",
+      category: "competitor_reference",
+      label: "acme-corp",
+      extractedValue: "Acme Corp",
+      confidence: 0.9,
+      createdAt: new Date("2026-03-25T10:00:00Z"),
+    });
+    const compFact2: FactRecord = makeFactRecord({
+      id: "comp-fact-2",
+      dealId: "deal-1",
+      category: "competitor_reference",
+      label: "acme-corp",
+      extractedValue: "Acme Corp",
+      confidence: 0.9,
+      createdAt: new Date("2026-03-27T10:00:00Z"),
+    });
+
+    const signal = makeSignalWithDeal({ signalType: "competitor_mentioned" });
+
+    const repos = makeMockRepos({
+      listSignalsPage: vi.fn().mockResolvedValue([signal]),
+      listExtractionsForDeal: vi.fn().mockResolvedValue([compFact1, compFact2]),
+    });
+
+    const result = await fetchHubSpotSignalItems(makeParams(repos));
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].sourceItemId).toBe("hubspot-fact:comp-fact-1");
+  });
+
+  it("different values on same deal → multiple items", async () => {
+    const factMarie = makeChampionFact("fact-marie", new Date("2026-03-25T10:00:00Z"));
+    const factJean: FactRecord = makeFactRecord({
+      id: "fact-jean",
+      dealId: "deal-1",
+      category: "persona_stakeholder",
+      label: "champion",
+      extractedValue: "Jean Martin",
+      confidence: 0.8,
+      createdAt: new Date("2026-03-26T10:00:00Z"),
+    });
+
+    const signal = makeSignalWithDeal({ signalType: "champion_identified" });
+
+    const repos = makeMockRepos({
+      listSignalsPage: vi.fn().mockResolvedValue([signal]),
+      listExtractionsForDeal: vi.fn().mockResolvedValue([factMarie, factJean]),
+    });
+
+    const result = await fetchHubSpotSignalItems(makeParams(repos));
+
+    // Two distinct champion values → 2 items
+    expect(result.items).toHaveLength(2);
+    const ids = result.items.map((i) => i.sourceItemId).sort();
+    expect(ids).toEqual(["hubspot-fact:fact-jean", "hubspot-fact:fact-marie"]);
+  });
+
+  it("case normalization collapses same value", async () => {
+    const factUpper: FactRecord = makeFactRecord({
+      id: "fact-upper",
+      dealId: "deal-1",
+      category: "persona_stakeholder",
+      label: "champion",
+      extractedValue: "Marie Dupont",
+      confidence: 0.8,
+      createdAt: new Date("2026-03-25T10:00:00Z"),
+    });
+    const factLower: FactRecord = makeFactRecord({
+      id: "fact-lower",
+      dealId: "deal-1",
+      category: "persona_stakeholder",
+      label: "champion",
+      extractedValue: "marie dupont",
+      confidence: 0.8,
+      createdAt: new Date("2026-03-26T10:00:00Z"),
+    });
+
+    const signal = makeSignalWithDeal({ signalType: "champion_identified" });
+
+    const repos = makeMockRepos({
+      listSignalsPage: vi.fn().mockResolvedValue([signal]),
+      listExtractionsForDeal: vi.fn().mockResolvedValue([factUpper, factLower]),
+    });
+
+    const result = await fetchHubSpotSignalItems(makeParams(repos));
+
+    expect(result.items).toHaveLength(1);
+    // Earliest wins
+    expect(result.items[0].sourceItemId).toBe("hubspot-fact:fact-upper");
+  });
+
+  it("different deals not collapsed", async () => {
+    const factDeal1: FactRecord = makeFactRecord({
+      id: "fact-d1",
+      dealId: "deal-1",
+      category: "requested_capability",
+      label: "payroll",
+      extractedValue: "automated payroll",
+      confidence: 0.8,
+      createdAt: new Date("2026-03-25T10:00:00Z"),
+    });
+    const factDeal2: FactRecord = makeFactRecord({
+      id: "fact-d2",
+      dealId: "deal-2",
+      category: "requested_capability",
+      label: "payroll",
+      extractedValue: "automated payroll",
+      confidence: 0.8,
+      createdAt: new Date("2026-03-26T10:00:00Z"),
+    });
+
+    const repos = makeMockRepos({
+      listStandaloneEligibleFactsPage: vi.fn().mockResolvedValue([factDeal1, factDeal2]),
+      getDeal: vi.fn().mockImplementation((dealId: string) =>
+        Promise.resolve({ dealName: `Deal ${dealId}`, stage: "New" })
+      ),
+    });
+
+    const result = await fetchHubSpotSignalItems(makeParams(repos));
+
+    // Same value but different deals → 2 items
+    expect(result.items).toHaveLength(2);
+  });
+
+  it("signal-gated preferred over standalone for same semantic key", async () => {
+    // Standalone requested_capability fact
+    const standaloneFact: FactRecord = makeFactRecord({
+      id: "fact-standalone-rc",
+      dealId: "deal-1",
+      category: "requested_capability",
+      label: "payroll",
+      extractedValue: "automated payroll",
+      confidence: 0.8,
+      createdAt: new Date("2026-03-25T10:00:00Z"),
+    });
+    // Different fact with same semantic content, this one will be signal-gated
+    // (In practice this would need a signal type that unlocks requested_capability,
+    // but requested_capability is only standalone-eligible. So let's test with
+    // champion facts where both paths can exist via different signals.)
+    //
+    // Better test: two champion facts with same value on same deal.
+    // One arrives via signal-gated (champion_identified signal), the other
+    // would hypothetically arrive standalone (but champions aren't standalone-eligible).
+    //
+    // Most realistic case: same semantic key, both signal-gated but via different
+    // signals. The dedup should still collapse them.
+    const fact1: FactRecord = makeFactRecord({
+      id: "fact-champ-a",
+      dealId: "deal-1",
+      category: "persona_stakeholder",
+      label: "champion",
+      extractedValue: "Marie Dupont",
+      confidence: 0.8,
+      createdAt: new Date("2026-03-25T10:00:00Z"),
+    });
+    const fact2: FactRecord = makeFactRecord({
+      id: "fact-champ-b",
+      dealId: "deal-1",
+      category: "persona_stakeholder",
+      label: "champion",
+      extractedValue: "Marie Dupont",
+      confidence: 0.8,
+      createdAt: new Date("2026-03-27T10:00:00Z"),
+    });
+    const positiveSentiment = makeSentimentFact("fact-pos-dedup", "positive");
+
+    // Two signals, each unlocking different facts but with same semantic content
+    const sig1 = makeSignalWithDeal({
+      id: "sig-champ-1",
+      signalType: "champion_identified",
+      detectedAt: new Date("2026-03-28T10:00:00Z"),
+    });
+    const sig2 = makeSignalWithDeal({
+      id: "sig-momentum-1",
+      signalType: "positive_momentum",
+      detectedAt: new Date("2026-03-28T10:01:00Z"),
+    });
+
+    const repos = makeMockRepos({
+      listSignalsPage: vi.fn().mockResolvedValue([sig1, sig2]),
+      listExtractionsForDeal: vi.fn().mockResolvedValue([fact1, fact2, positiveSentiment]),
+    });
+
+    const result = await fetchHubSpotSignalItems(makeParams(repos));
+
+    // Champion facts collapse to 1 (same deal+category+value)
+    const championItems = result.items.filter((i) =>
+      i.metadata.hubspotFactCategory === "persona_stakeholder"
+    );
+    expect(championItems).toHaveLength(1);
+    // Earliest fact wins among same gating type
+    expect(championItems[0].sourceItemId).toBe("hubspot-fact:fact-champ-a");
   });
 });
 

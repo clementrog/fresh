@@ -69,7 +69,7 @@ Rules:
 - For competitor mentions, use the company/product name as-is.
 - For pain points and blockers, use short descriptive phrases (3-8 words).
 - For urgency, only return "high" if there is explicit time pressure language.
-- For sentiment, only return "positive" or "negative" if clearly supported; default to "neutral" or "mixed".
+- For sentiment, return "positive" only when the buyer expresses explicit enthusiasm, commitment, or excitement (e.g. "we're very excited", "this is exactly what we need", "great progress"). Polite language, generic thanks, or standard professional courtesy is "neutral". Return "negative" only for explicit dissatisfaction or frustration. Default to "neutral" or "mixed".
 - For champion/decision-maker, return the person's name or role if mentioned.
 - Budget and timeline: only set to true if explicitly discussed, not inferred from deal context.`;
 

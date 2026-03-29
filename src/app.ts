@@ -214,6 +214,14 @@ export class EditorialSignalEngineApp {
             now: context.now,
           });
 
+          this.logger.info({
+            bridge: "hubspot-signals",
+            stats: bridgeResult.stats,
+            itemCount: bridgeResult.items.length,
+            previousCursor: hubspotCursor,
+            newCursor: bridgeResult.newCursor,
+          }, "HubSpot signals bridge completed");
+
           for (const item of bridgeResult.items) {
             await this.repositories.upsertSourceItem(item, null, this.prisma, company.id);
             run.counters.normalized += 1;

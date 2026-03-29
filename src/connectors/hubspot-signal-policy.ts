@@ -96,25 +96,22 @@ export function classifySignal(
     return { eligible: false, unlockedFactIds: [] };
   }
 
-  // positive_momentum has a compound eligibility condition:
-  // requires BOTH champion AND positive sentiment facts
+  // positive_momentum requires a champion — sentiment is no longer gating.
+  // Rationale: the compound champion+sentiment gate was too restrictive;
+  // most deals with momentum have a champion but not explicit positive
+  // sentiment in the CRM notes. Rollback: re-add hasPositiveSentiment check.
   if (signal.signalType === "positive_momentum") {
     const hasChampion = supportingFacts.some(
       (f) => f.category === "persona_stakeholder" && f.label === "champion"
     );
-    const hasPositiveSentiment = supportingFacts.some(
-      (f) => f.category === "sentiment" && f.label === "positive"
-    );
 
-    if (!hasChampion || !hasPositiveSentiment) {
+    if (!hasChampion) {
       return { eligible: false, unlockedFactIds: [] };
     }
 
-    // Unlock both champion and positive sentiment facts
+    // Unlock champion facts only (not sentiment facts)
     const unlocked = supportingFacts.filter(
-      (f) =>
-        (f.category === "persona_stakeholder" && f.label === "champion")
-        || (f.category === "sentiment" && f.label === "positive")
+      (f) => f.category === "persona_stakeholder" && f.label === "champion"
     );
     return { eligible: true, unlockedFactIds: unlocked.map((f) => f.id) };
   }
@@ -146,10 +143,12 @@ export function classifySignal(
  * All other categories return `"ignore"`.
  */
 export function classifyFact(fact: PolicyFact): FactClassification {
+  const trimmed = fact.extractedValue.trim();
   if (
     fact.category === "requested_capability"
     && fact.confidence >= 0.7
-    && fact.extractedValue.trim().length > 0
+    && trimmed.length > 0
+    && trimmed.split(/\s+/).length >= 2
   ) {
     return "enrich-eligible";
   }

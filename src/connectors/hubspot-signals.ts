@@ -73,6 +73,22 @@ export function sanitizeBridgeText(input: string, maxLen: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// Semantic dedup helpers
+//
+// Multiple CRM activities on the same deal can produce distinct fact rows
+// with identical semantic content (same champion name, same competitor, etc).
+// We collapse these into one representative per (dealId, category, value).
+// ---------------------------------------------------------------------------
+
+export function normalizeForDedup(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+export function dedupKey(dealId: string, category: string, extractedValue: string): string {
+  return `${dealId}|${category}|${normalizeForDedup(extractedValue)}`;
+}
+
+// ---------------------------------------------------------------------------
 // Unified record for single-slice batching
 // ---------------------------------------------------------------------------
 
@@ -472,9 +488,42 @@ export async function fetchHubSpotSignalItems(
     }
   }
 
-  // 6-7. Compose NormalizedSourceItem for each unique eligible fact
+  // 6. Semantic dedup: collapse facts with the same (dealId, category,
+  // normalizedExtractedValue) into one representative.
+  //
+  // Tie-breaking:
+  //   1. Signal-gated > standalone
+  //   2. Earliest fact.createdAt
+  //   3. Lexicographically smallest factId
+  const dedupWinners = new Map<string, string>(); // dedupKey → factId
+  for (const [factId, entry] of eligibleFacts) {
+    const key = dedupKey(entry.dealContext.dealId, entry.fact.category, entry.fact.extractedValue);
+    const existing = dedupWinners.get(key);
+    if (!existing) {
+      dedupWinners.set(key, factId);
+      continue;
+    }
+    const existingEntry = eligibleFacts.get(existing)!;
+    const isGated = entry.gatingSignalType !== "standalone";
+    const existingIsGated = existingEntry.gatingSignalType !== "standalone";
+    if (isGated && !existingIsGated) {
+      dedupWinners.set(key, factId);
+    } else if (isGated === existingIsGated) {
+      const cmpTime = entry.fact.createdAt.getTime() - existingEntry.fact.createdAt.getTime();
+      if (cmpTime < 0 || (cmpTime === 0 && factId < existing)) {
+        dedupWinners.set(key, factId);
+      }
+    }
+  }
+  const representativeIds = new Set(dedupWinners.values());
+
+  // 7. Compose NormalizedSourceItem for each deduplicated eligible fact
   const items: NormalizedSourceItem[] = [];
   for (const entry of eligibleFacts.values()) {
+    if (!representativeIds.has(entry.fact.id)) {
+      stats.dropped++;
+      continue;
+    }
     const item = composeBridgedItem(
       entry.fact,
       entry.dealContext,

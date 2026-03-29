@@ -119,26 +119,26 @@ describe("classifySignal", () => {
   });
 
   describe("positive_momentum", () => {
-    it("returns eligible when both champion AND positive sentiment exist", () => {
+    it("returns eligible when champion exists (positive sentiment not required)", () => {
       const signal = makeSignal({ signalType: "positive_momentum" });
       const facts = [
         makeFact({ id: "f1", category: "persona_stakeholder", label: "champion", extractedValue: "Marie Dupont" }),
-        // ref extraction.ts:165-166: category="sentiment", label=output.sentiment, extractedValue=output.sentiment
         makeFact({ id: "f2", category: "sentiment", label: "positive", extractedValue: "positive", confidence: 0.9 }),
       ];
       const result = classifySignal(signal, facts);
       expect(result.eligible).toBe(true);
-      expect(result.unlockedFactIds).toEqual(expect.arrayContaining(["f1", "f2"]));
-      expect(result.unlockedFactIds).toHaveLength(2);
+      // Only champion facts unlocked, not sentiment
+      expect(result.unlockedFactIds).toEqual(["f1"]);
     });
 
-    it("returns not eligible when only champion exists (no positive sentiment)", () => {
+    it("returns eligible with champion only (no sentiment facts at all)", () => {
       const signal = makeSignal({ signalType: "positive_momentum" });
       const facts = [
         makeFact({ id: "f1", category: "persona_stakeholder", label: "champion", extractedValue: "Marie Dupont" }),
       ];
       const result = classifySignal(signal, facts);
-      expect(result.eligible).toBe(false);
+      expect(result.eligible).toBe(true);
+      expect(result.unlockedFactIds).toEqual(["f1"]);
     });
 
     it("returns not eligible when only positive sentiment exists (no champion)", () => {
@@ -150,14 +150,30 @@ describe("classifySignal", () => {
       expect(result.eligible).toBe(false);
     });
 
-    it("returns not eligible when sentiment is negative", () => {
+    it("returns eligible with champion even when sentiment is negative", () => {
       const signal = makeSignal({ signalType: "positive_momentum" });
       const facts = [
         makeFact({ id: "f1", category: "persona_stakeholder", label: "champion", extractedValue: "Marie" }),
         makeFact({ id: "f2", category: "sentiment", label: "negative", extractedValue: "negative" }),
       ];
       const result = classifySignal(signal, facts);
-      expect(result.eligible).toBe(false);
+      expect(result.eligible).toBe(true);
+      // Only champion unlocked, not the negative sentiment
+      expect(result.unlockedFactIds).toEqual(["f1"]);
+    });
+
+    it("does not unlock sentiment facts (only champion)", () => {
+      const signal = makeSignal({ signalType: "positive_momentum" });
+      const facts = [
+        makeFact({ id: "f1", category: "persona_stakeholder", label: "champion", extractedValue: "Marie" }),
+        makeFact({ id: "f2", category: "sentiment", label: "positive", extractedValue: "positive" }),
+        makeFact({ id: "f3", category: "sentiment", label: "negative", extractedValue: "negative" }),
+      ];
+      const result = classifySignal(signal, facts);
+      expect(result.eligible).toBe(true);
+      expect(result.unlockedFactIds).toEqual(["f1"]);
+      expect(result.unlockedFactIds).not.toContain("f2");
+      expect(result.unlockedFactIds).not.toContain("f3");
     });
   });
 
@@ -268,6 +284,36 @@ describe("classifyFact", () => {
       category: "requested_capability",
       label: "whitespace",
       extractedValue: "   ",
+      confidence: 0.8,
+    });
+    expect(classifyFact(fact)).toBe("ignore");
+  });
+
+  it("returns ignore for single-word requested_capability (too vague)", () => {
+    const fact = makeFact({
+      category: "requested_capability",
+      label: "payroll",
+      extractedValue: "payroll",
+      confidence: 0.8,
+    });
+    expect(classifyFact(fact)).toBe("ignore");
+  });
+
+  it("returns enrich-eligible for two-word requested_capability", () => {
+    const fact = makeFact({
+      category: "requested_capability",
+      label: "absence-management",
+      extractedValue: "absence management",
+      confidence: 0.8,
+    });
+    expect(classifyFact(fact)).toBe("enrich-eligible");
+  });
+
+  it("returns ignore for single compound word with slash (still one token)", () => {
+    const fact = makeFact({
+      category: "requested_capability",
+      label: "modernite-ergonomie",
+      extractedValue: "modernité/ergonomie",
       confidence: 0.8,
     });
     expect(classifyFact(fact)).toBe("ignore");
