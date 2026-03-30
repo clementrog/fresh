@@ -46,6 +46,56 @@ export const CONTENT_STATUS = [
 
 export type ContentStatus = (typeof CONTENT_STATUS)[number];
 
+// --- GTM classification enums ---
+
+export const TARGET_SEGMENTS = ["cabinet-owner", "production-manager", "payroll-manager", "it-lead"] as const;
+export type TargetSegment = (typeof TARGET_SEGMENTS)[number];
+
+export const EDITORIAL_PILLARS = ["insight", "proof", "perspective", "personality"] as const;
+export type EditorialPillar = (typeof EDITORIAL_PILLARS)[number];
+
+export const AWARENESS_TARGETS = ["unaware", "problem-aware", "solution-aware", "active-buyer"] as const;
+export type AwarenessTarget = (typeof AWARENESS_TARGETS)[number];
+
+export const CONTENT_MOTIONS = ["category", "demand-capture", "trust", "recruiting"] as const;
+export type ContentMotion = (typeof CONTENT_MOTIONS)[number];
+
+// --- GTM normalization (single boundary function) ---
+
+function normalizeGtmEnum<T extends string>(value: string | null | undefined, allowed: readonly T[]): T | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim().toLowerCase();
+  return (allowed as readonly string[]).includes(trimmed) ? trimmed as T : undefined;
+}
+
+function normalizeGtmFreeform(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function normalizeGtmFields(raw: {
+  targetSegment?: string | null;
+  editorialPillar?: string | null;
+  awarenessTarget?: string | null;
+  buyerFriction?: string | null;
+  contentMotion?: string | null;
+}): {
+  targetSegment?: string;
+  editorialPillar?: string;
+  awarenessTarget?: string;
+  buyerFriction?: string;
+  contentMotion?: string;
+} {
+  return {
+    targetSegment: normalizeGtmEnum(raw.targetSegment, TARGET_SEGMENTS),
+    editorialPillar: normalizeGtmEnum(raw.editorialPillar, EDITORIAL_PILLARS),
+    awarenessTarget: normalizeGtmEnum(raw.awarenessTarget, AWARENESS_TARGETS),
+    buyerFriction: normalizeGtmFreeform(raw.buyerFriction),
+    contentMotion: normalizeGtmEnum(raw.contentMotion, CONTENT_MOTIONS),
+  };
+}
+
 export type RunType =
   | "ingest:run"
   | "market-research:run"
@@ -190,6 +240,8 @@ export interface ScreeningResult {
   relevanceScore: number;
   sensitivityFlag: boolean;
   sensitivityCategories: string[];
+  /** True when the result came from a fallback path (LLM unavailable or partial response). Items with fallback=true should not be marked as processed so they can be retried. */
+  fallback?: boolean;
 }
 
 export interface EnrichmentLogEntry {
@@ -238,6 +290,11 @@ export interface CreateEnrichDecision {
   whatItIsNotAbout: string;
   suggestedFormat: string;
   confidence: number;
+  targetSegment?: string;
+  editorialPillar?: string;
+  awarenessTarget?: string;
+  buyerFriction?: string;
+  contentMotion?: string;
 }
 
 export interface ContentOpportunity {
@@ -248,6 +305,11 @@ export interface ContentOpportunity {
   ownerUserId?: string;
   companyId?: string;
   narrativePillar?: string;
+  targetSegment?: string;
+  editorialPillar?: string;
+  awarenessTarget?: string;
+  buyerFriction?: string;
+  contentMotion?: string;
   angle: string;
   whyNow: string;
   whatItIsAbout: string;
@@ -423,6 +485,11 @@ export interface NotionEditRequest {
   whatItIsNotAbout: string;
   sourceUrl: string;
   editorialNotes: string;
+  targetSegment?: string;
+  editorialPillar?: string;
+  awarenessTarget?: string;
+  buyerFriction?: string;
+  contentMotion?: string;
 }
 
 export interface NotionSyncResult {

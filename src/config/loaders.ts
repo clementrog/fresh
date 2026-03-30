@@ -67,6 +67,11 @@ export async function loadSensitivityMarkdown() {
   return fs.readFile(sensitivityPath, "utf8");
 }
 
+export async function loadGtmFoundationMarkdown() {
+  const gtmPath = path.join(projectRoot, "editorial", "gtm-foundation.md");
+  return fs.readFile(gtmPath, "utf8").catch(() => "");
+}
+
 export async function loadProfileBases(): Promise<ProfileBase[]> {
   const profilesDirectory = path.join(projectRoot, "editorial", "profiles");
   const files = await listFilesRecursive(profilesDirectory);

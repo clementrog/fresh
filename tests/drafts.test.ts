@@ -140,7 +140,8 @@ describe("generateDraft", () => {
       sensitivityRulesMarkdown: "",
       doctrineMarkdown: "Test doctrine.",
       editorialNotes: "Make it punchy.",
-      layer3Defaults: ["Use short paragraphs"]
+      layer3Defaults: ["Use short paragraphs"],
+      gtmFoundationMarkdown: ""
     });
 
     expect(result.blocked).toBe(false);
@@ -193,7 +194,8 @@ describe("generateDraft", () => {
       sensitivityRulesMarkdown: "",
       doctrineMarkdown: "Doctrine text.",
       editorialNotes: "Focus on the adoption angle specifically.",
-      layer3Defaults: []
+      layer3Defaults: [],
+      gtmFoundationMarkdown: ""
     });
 
     expect(capturedPrompt).toContain("Focus on the adoption angle specifically");
@@ -241,7 +243,8 @@ describe("generateDraft", () => {
       sensitivityRulesMarkdown: "",
       doctrineMarkdown: "Doctrine text.",
       editorialNotes: "",
-      layer3Defaults: []
+      layer3Defaults: [],
+      gtmFoundationMarkdown: ""
     });
 
     expect(capturedPrompt).toContain("No editorial notes provided");
@@ -299,7 +302,8 @@ describe("generateDraft", () => {
       sensitivityRulesMarkdown: "",
       doctrineMarkdown: "",
       editorialNotes: "",
-      layer3Defaults: []
+      layer3Defaults: [],
+      gtmFoundationMarkdown: ""
     });
 
     expect(capturedPrompt).toContain("Added corroborating data from Linear");
@@ -316,7 +320,8 @@ describe("generateDraft", () => {
       sensitivityRulesMarkdown: "",
       doctrineMarkdown: "",
       editorialNotes: "",
-      layer3Defaults: []
+      layer3Defaults: [],
+      gtmFoundationMarkdown: ""
     });
 
     expect(result.blocked).toBe(true);
@@ -376,7 +381,8 @@ describe("generateDraft", () => {
       sensitivityRulesMarkdown: "",
       doctrineMarkdown: "",
       editorialNotes: "",
-      layer3Defaults: []
+      layer3Defaults: [],
+      gtmFoundationMarkdown: ""
     });
 
     expect(capturedPrompt).toContain("Punchy and provocative");

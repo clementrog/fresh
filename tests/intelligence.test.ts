@@ -8,6 +8,7 @@ import {
   buildIntelligenceEvidence
 } from "../src/services/intelligence.js";
 import type { NormalizedSourceItem, ContentOpportunity, EvidenceReference, CreateEnrichDecision, UserRecord } from "../src/domain/types.js";
+import { normalizeGtmFields } from "../src/domain/types.js";
 import { sourceItemDbId } from "../src/db/repositories.js";
 import { dedupeEvidenceReferences } from "../src/services/evidence.js";
 
@@ -441,6 +442,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -467,6 +469,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -509,6 +512,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -553,6 +557,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [strongestMatch, weakerMatch]
     });
 
@@ -590,6 +595,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -627,6 +633,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -658,6 +665,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -689,6 +697,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -728,6 +737,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -761,6 +771,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -802,6 +813,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -838,6 +850,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -876,6 +889,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -910,6 +924,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -940,6 +955,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -977,6 +993,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -1023,6 +1040,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -1067,6 +1085,7 @@ describe("runIntelligencePipeline", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -1124,6 +1143,7 @@ describe("editorial-lead curated behavior", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -1162,6 +1182,7 @@ describe("editorial-lead curated behavior", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -1195,6 +1216,7 @@ describe("editorial-lead curated behavior", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -1234,6 +1256,7 @@ describe("editorial-lead curated behavior", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -1269,6 +1292,7 @@ describe("editorial-lead curated behavior", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -1354,6 +1378,7 @@ describe("duplicate prevention across batch items", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [],
       checkOriginDedupe
     });
@@ -1415,6 +1440,7 @@ describe("duplicate prevention across batch items", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existingOpp],
       checkOriginDedupe
     });
@@ -1465,6 +1491,7 @@ describe("duplicate prevention across batch items", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [],  // <-- empty snapshot, opp is NOT loaded
       checkOriginDedupe
     });
@@ -1542,6 +1569,7 @@ describe("duplicate prevention across batch items", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [],
       checkOriginDedupe
     });
@@ -1613,6 +1641,7 @@ describe("duplicate prevention across batch items", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [],
       checkOriginDedupe
     });
@@ -1641,7 +1670,8 @@ import {
   DEDUP_WARNINGS_ENABLED,
   DEDUP_CANDIDATE_WINDOW,
   DEDUP_WARNING_THRESHOLD,
-  DEDUP_CONFIDENCE_CUTOFF
+  DEDUP_CONFIDENCE_CUTOFF,
+  DEDUP_RESCUE_ENABLED
 } from "../src/services/intelligence.js";
 
 describe("lib/text — tokenizeV2 accent normalization", () => {
@@ -1852,6 +1882,10 @@ describe("dedup configuration constants — temporary uncalibrated defaults", ()
   it("exports DEDUP_CONFIDENCE_CUTOFF with temporary default 0.70", () => {
     expect(DEDUP_CONFIDENCE_CUTOFF).toBe(0.70);
   });
+
+  it("exports DEDUP_RESCUE_ENABLED with default true", () => {
+    expect(DEDUP_RESCUE_ENABLED).toBe(true);
+  });
 });
 
 // --- Topical vs boosted score separation ---
@@ -1972,6 +2006,7 @@ describe("runIntelligencePipeline — dedup warnings and events", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2042,6 +2077,7 @@ describe("runIntelligencePipeline — dedup warnings and events", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2086,6 +2122,7 @@ describe("runIntelligencePipeline — dedup warnings and events", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2118,6 +2155,7 @@ describe("runIntelligencePipeline — dedup warnings and events", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -2144,6 +2182,7 @@ describe("runIntelligencePipeline — dedup warnings and events", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -2189,6 +2228,7 @@ describe("runIntelligencePipeline — dedup warnings and events", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2232,6 +2272,7 @@ describe("runIntelligencePipeline — dedup warnings and events", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2324,6 +2365,7 @@ describe("runIntelligencePipeline — regression: same owner does not cause fals
       users: [{ id: "user-thomas", displayName: "thomas", baseProfile: {} } as any],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -2464,6 +2506,7 @@ describe("runIntelligencePipeline — boost-reordered candidate uses topical mat
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [oppA, oppB]
     });
 
@@ -2534,6 +2577,7 @@ describe("DedupEvent — topicalScore and boostedScore are always distinct field
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2566,6 +2610,7 @@ describe("DedupEvent — topicalScore and boostedScore are always distinct field
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -2612,6 +2657,7 @@ describe("DedupEvent — topicalScore and boostedScore are always distinct field
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2663,6 +2709,7 @@ describe("dedupFlag persistence", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2709,6 +2756,7 @@ describe("dedupFlag persistence", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -2718,5 +2766,761 @@ describe("dedupFlag persistence", () => {
     // Simulate DB round-trip: empty string maps to undefined
     const simulatedDbRow = { dedupFlag: created.dedupFlag ?? "" };
     expect(simulatedDbRow.dedupFlag).toBe("");
+  });
+});
+
+// --- Displacement rescue ---
+//
+// Test data design:  For displacement to occur, filler opps must have
+// higher BOOSTED score than the topical opp's RAW topical score.
+// With owner boost (+0.2): filler_topical + 0.2 > topical_opp_topical.
+// With evidence boost (+0.3): filler_topical + 0.3 > topical_opp_topical.
+//
+// Token math (verified empirically):
+//   Item "paie conformite declaration mensuel" → 4 tokens
+//   Filler "paie logiciel gestion processus migration planification deploiement integration"
+//     → shares "paie" → Jaccard 1/11 ≈ 0.091.  + 0.2 owner boost → 0.291.
+//   Topical opp "conformite declaration trimestrielle revision legale suivi reglementaire"
+//     → shares "conformite","declaration" → Jaccard 2/9 ≈ 0.222.  No boost → 0.222.
+//   0.291 > 0.222: displacement. 0.222 > 0.091: topical opp is #1 in topical ranking.
+
+describe("narrowCandidateOpportunities — displacement rescue", () => {
+  const defaultScreening = {
+    decision: "retain" as const,
+    rationale: "",
+    createOrEnrich: "unknown" as const,
+    relevanceScore: 0.5,
+    sensitivityFlag: false,
+    sensitivityCategories: [] as string[]
+  };
+
+  it("rescues a strong topical match displaced by owner boost", () => {
+    const item = makeItem({
+      title: "paie conformite declaration mensuel",
+      summary: ""
+    });
+
+    const screening = { ...defaultScreening, ownerSuggestion: "thomas" };
+
+    // 5 same-owner opps: low topical (~0.09) + owner boost (+0.2) → boosted ~0.29
+    const ownerOpps = Array.from({ length: 5 }, (_, i) =>
+      makeOpportunity({
+        id: `opp-owner-fill-${i}`,
+        ownerProfile: "thomas" as any,
+        title: `paie logiciel gestion variante${i}`,
+        angle: `processus migration planification`,
+        whatItIsAbout: `deploiement integration systeme${i}`
+      })
+    );
+
+    // 1 different-owner opp: higher topical (~0.22) but no boost → boosted 0.22
+    const topicalOpp = makeOpportunity({
+      id: "opp-topical-displaced",
+      ownerProfile: "quentin" as any,
+      title: "conformite declaration trimestrielle",
+      angle: "revision legale suivi",
+      whatItIsAbout: "reglementaire controle audit"
+    });
+
+    const result = narrowCandidateOpportunities(
+      item, screening, [...ownerOpps, topicalOpp], "company-1"
+    );
+
+    // The topical match must appear in candidates (rescued from displacement)
+    expect(result.candidates.some(c => c.id === "opp-topical-displaced")).toBe(true);
+    expect(result.rescuedCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("rescues a strong topical match displaced by evidence boost", () => {
+    const item = makeItem({
+      title: "paie conformite declaration mensuel",
+      summary: "",
+      externalId: "notion:evidence-boost-item"
+    });
+
+    const itemDbId = sourceItemDbId("company-1", "notion:evidence-boost-item");
+
+    // 5 opps with evidence from this source item: low topical (~0.11) + evidence boost (+0.3) → boosted ~0.41
+    const evidenceOpps = Array.from({ length: 5 }, (_, i) =>
+      makeOpportunity({
+        id: `opp-evidence-fill-${i}`,
+        title: `paie logiciel processus variante${i}`,
+        angle: `migration planification deploiement`,
+        whatItIsAbout: `integration systeme infrastructure${i}`,
+        evidence: [{
+          id: `ev-${i}`,
+          source: "notion",
+          sourceItemId: itemDbId,
+          sourceUrl: "https://example.com",
+          timestamp: new Date().toISOString(),
+          excerpt: "excerpt",
+          excerptHash: `hash-${i}`,
+          freshnessScore: 0.8
+        }]
+      })
+    );
+
+    // 1 opp with higher topical (~0.22) but no evidence boost → boosted 0.22
+    const topicalOpp = makeOpportunity({
+      id: "opp-topical-evidence-displaced",
+      title: "conformite declaration trimestrielle",
+      angle: "revision legale suivi",
+      whatItIsAbout: "reglementaire controle audit",
+      evidence: [{
+        id: "ev-unrelated",
+        source: "notion",
+        sourceItemId: "si-unrelated",
+        sourceUrl: "https://example.com",
+        timestamp: new Date().toISOString(),
+        excerpt: "other excerpt",
+        excerptHash: "hash-other",
+        freshnessScore: 0.8
+      }]
+    });
+
+    const result = narrowCandidateOpportunities(
+      item, defaultScreening, [...evidenceOpps, topicalOpp], "company-1"
+    );
+
+    expect(result.candidates.some(c => c.id === "opp-topical-evidence-displaced")).toBe(true);
+    expect(result.rescuedCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("does not rescue when no displacement occurred (legacy cap preserved)", () => {
+    // No owner boost, no evidence boost — boosted ordering = topical ordering
+    const item = makeItem({ title: "common word shared", summary: "" });
+
+    const opps = Array.from({ length: 10 }, (_, i) =>
+      makeOpportunity({
+        id: `opp-no-disp-${i}`,
+        title: `common word shared context ${i}`,
+        angle: `angle ${i}`,
+        whatItIsAbout: `about ${i}`
+      })
+    );
+
+    const result = narrowCandidateOpportunities(item, defaultScreening, opps, "company-1");
+
+    // No displacement → no rescue → legacy cap of 5
+    expect(result.rescuedCount).toBe(0);
+    expect(result.candidates.length).toBeLessThanOrEqual(5);
+  });
+
+  it("caps rescue at 2 even when more candidates are displaced", () => {
+    const item = makeItem({
+      title: "paie conformite declaration mensuel",
+      summary: ""
+    });
+
+    const screening = { ...defaultScreening, ownerSuggestion: "thomas" };
+
+    // 5 same-owner opps to fill boosted top 5 via owner boost
+    const ownerOpps = Array.from({ length: 5 }, (_, i) =>
+      makeOpportunity({
+        id: `opp-cap-fill-${i}`,
+        ownerProfile: "thomas" as any,
+        title: `paie logiciel gestion variante${i}`,
+        angle: `processus migration planification`,
+        whatItIsAbout: `deploiement integration systeme${i}`
+      })
+    );
+
+    // 4 high-topical opps from different owner — all displaced by owner boost
+    const rescueCandidates = Array.from({ length: 4 }, (_, i) =>
+      makeOpportunity({
+        id: `opp-rescue-cap-${i}`,
+        ownerProfile: "quentin" as any,
+        title: `conformite declaration trimestrielle v${i}`,
+        angle: `revision legale suivi procedure${i}`,
+        whatItIsAbout: `reglementaire controle audit norme${i}`
+      })
+    );
+
+    const result = narrowCandidateOpportunities(
+      item, screening, [...ownerOpps, ...rescueCandidates], "company-1"
+    );
+
+    expect(result.rescuedCount).toBeLessThanOrEqual(2);
+    expect(result.candidates.length).toBeLessThanOrEqual(7);
+  });
+
+  it("preserves legacy top-5 cap when enableRescue is false (kill switch)", () => {
+    // Same displacement scenario as the owner-boost test, but with rescue disabled
+    const item = makeItem({
+      title: "paie conformite declaration mensuel",
+      summary: ""
+    });
+
+    const screening = { ...defaultScreening, ownerSuggestion: "thomas" };
+
+    const ownerOpps = Array.from({ length: 5 }, (_, i) =>
+      makeOpportunity({
+        id: `opp-kill-fill-${i}`,
+        ownerProfile: "thomas" as any,
+        title: `paie logiciel gestion variante${i}`,
+        angle: `processus migration planification`,
+        whatItIsAbout: `deploiement integration systeme${i}`
+      })
+    );
+
+    const topicalOpp = makeOpportunity({
+      id: "opp-kill-topical",
+      ownerProfile: "quentin" as any,
+      title: "conformite declaration trimestrielle",
+      angle: "revision legale suivi",
+      whatItIsAbout: "reglementaire controle audit"
+    });
+
+    const result = narrowCandidateOpportunities(
+      item, screening, [...ownerOpps, topicalOpp], "company-1",
+      { enableRescue: false }
+    );
+
+    // Rescue disabled → displaced topical match is NOT rescued → legacy cap of 5
+    expect(result.rescuedCount).toBe(0);
+    expect(result.candidates.length).toBeLessThanOrEqual(5);
+    expect(result.candidates.some(c => c.id === "opp-kill-topical")).toBe(false);
+  });
+});
+
+// --- Pipeline: rescued candidate accepted as enrich target + telemetry ---
+
+describe("runIntelligencePipeline — displacement rescue end-to-end", () => {
+  it("rescued candidate is chosen as enrich target and accepted downstream", async () => {
+    // 5 owner-boosted fillers displace a topical match; LLM enriches the rescued opp
+    const ownerOpps = Array.from({ length: 5 }, (_, i) =>
+      makeOpportunity({
+        id: `opp-e2e-fill-${i}`,
+        ownerProfile: "thomas" as any,
+        title: `paie logiciel gestion variante${i}`,
+        angle: `processus migration planification deploiement`,
+        whatItIsAbout: `deploiement integration systeme${i} infrastructure`
+      })
+    );
+
+    const rescuedOpp = makeOpportunity({
+      id: "opp-e2e-rescued",
+      ownerProfile: "quentin" as any,
+      title: "conformite declaration trimestrielle",
+      angle: "revision legale suivi reglementaire controle",
+      whyNow: "Nouvelles exigences reglementaires",
+      whatItIsAbout: "reglementaire controle audit conformite processus"
+    });
+
+    const item = makeMarketResearchItem({
+      sourceItemId: "market-query:mq-rescue:set:hash-rescue",
+      externalId: "market-research:mq-rescue:hash-rescue",
+      title: "paie conformite declaration mensuel",
+      summary: "conformite declaration mensuel paie entreprises",
+      text: "La conformite des declarations de paie mensuelles est essentielle pour les entreprises soumises aux nouvelles reglementations."
+    });
+
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce({
+          output: {
+            items: [{
+              sourceItemId: "market-research:mq-rescue:hash-rescue",
+              decision: "retain" as const,
+              rationale: "relevant",
+              createOrEnrich: "enrich" as const,
+              relevanceScore: 0.8,
+              sensitivityFlag: false,
+              sensitivityCategories: [],
+              ownerSuggestion: "thomas"
+            }]
+          },
+          usage: { mode: "provider" as const, promptTokens: 100, completionTokens: 50, estimatedCostUsd: 0.001 },
+          mode: "provider" as const
+        })
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "enrich",
+          targetOpportunityId: "opp-e2e-rescued",
+          rationale: "This source directly matches the existing conformite declaration opportunity",
+          confidence: 0.85
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items: [item],
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      gtmFoundationMarkdown: "",
+      recentOpportunities: [...ownerOpps, rescuedOpp]
+    });
+
+    // The rescued opp must be enriched, not skipped
+    expect(result.enriched).toHaveLength(1);
+    expect(result.enriched[0].opportunity.id).toBe("opp-e2e-rescued");
+
+    // The enrich-by-llm event must reference the rescued opp
+    const enrichEvent = result.dedupEvents.find(e => e.action === "enrich-by-llm");
+    expect(enrichEvent).toBeDefined();
+    expect(enrichEvent!.matchedOpportunityId).toBe("opp-e2e-rescued");
+  });
+
+  it("telemetry reason string includes rescued count when rescue fires", async () => {
+    const ownerOpps = Array.from({ length: 5 }, (_, i) =>
+      makeOpportunity({
+        id: `opp-tel-fill-${i}`,
+        ownerProfile: "thomas" as any,
+        title: `paie logiciel gestion variante${i}`,
+        angle: `processus migration planification deploiement`,
+        whatItIsAbout: `deploiement integration systeme${i} infrastructure`
+      })
+    );
+
+    const rescuedOpp = makeOpportunity({
+      id: "opp-tel-rescued",
+      ownerProfile: "quentin" as any,
+      title: "conformite declaration trimestrielle",
+      angle: "revision legale suivi reglementaire controle",
+      whyNow: "Nouvelles exigences reglementaires",
+      whatItIsAbout: "reglementaire controle audit conformite processus"
+    });
+
+    const item = makeMarketResearchItem({
+      sourceItemId: "market-query:mq-tel:set:hash-tel",
+      externalId: "market-research:mq-tel:hash-tel",
+      title: "paie conformite declaration mensuel",
+      summary: "conformite declaration mensuel paie entreprises",
+      text: "La conformite des declarations de paie mensuelles est essentielle pour les entreprises soumises aux nouvelles reglementations."
+    });
+
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce({
+          output: {
+            items: [{
+              sourceItemId: "market-research:mq-tel:hash-tel",
+              decision: "retain" as const,
+              rationale: "relevant",
+              createOrEnrich: "create" as const,
+              relevanceScore: 0.8,
+              sensitivityFlag: false,
+              sensitivityCategories: [],
+              ownerSuggestion: "thomas"
+            }]
+          },
+          usage: { mode: "provider" as const, promptTokens: 100, completionTokens: 50, estimatedCostUsd: 0.001 },
+          mode: "provider" as const
+        })
+        .mockResolvedValueOnce(makeDecisionOutput({
+          action: "enrich",
+          targetOpportunityId: "opp-tel-rescued",
+          confidence: 0.9
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items: [item],
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      gtmFoundationMarkdown: "",
+      recentOpportunities: [...ownerOpps, rescuedOpp]
+    });
+
+    const candidateEvent = result.dedupEvents.find(e =>
+      e.action === "candidate-match" || e.action === "candidate-miss"
+    );
+    expect(candidateEvent).toBeDefined();
+    expect(candidateEvent!.reason).toContain("(1 rescued)");
+  });
+});
+
+
+// ── LLM request payload assertions ────────────────────────────────────────
+
+describe("LLM request payload assertions", () => {
+  it("screening prompt contains operational bridging and no Layer 2", async () => {
+    const items = [makeMarketResearchItem()];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("market-research:mq-1:hash-1"))
+        .mockResolvedValueOnce(makeDecisionOutput())
+    } as any;
+
+    await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "test doctrine",
+      sensitivityMarkdown: "test sensitivity",
+      userDescriptions: "- user1 (human, en)",
+      users: [],
+      layer2Defaults: ["Specific", "Evidence-backed"],
+      layer3Defaults: ["Max 250 words"],
+      gtmFoundationMarkdown: "",
+      recentOpportunities: []
+    });
+
+    const screeningCall = mockLlmClient.generateStructured.mock.calls[0][0];
+    expect(screeningCall.system).toContain("Screening contract");
+    expect(screeningCall.system).toContain("Default to skip");
+    expect(screeningCall.system).toContain("Doctrine §4");
+    expect(screeningCall.system).toContain("Doctrine §10");
+    expect(screeningCall.system).not.toContain("Content Philosophy Defaults");
+    expect(screeningCall.system).not.toContain("Layer 2");
+  });
+
+  it("create-enrich prompt contains quality expectations and no Layer 3", async () => {
+    const items = [makeMarketResearchItem()];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("market-research:mq-1:hash-1"))
+        .mockResolvedValueOnce(makeDecisionOutput())
+    } as any;
+
+    await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "test doctrine",
+      sensitivityMarkdown: "test sensitivity",
+      userDescriptions: "- user1 (human, en)",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: ["Max 250 words"],
+      gtmFoundationMarkdown: "",
+      recentOpportunities: []
+    });
+
+    const createEnrichCall = mockLlmClient.generateStructured.mock.calls[1][0];
+    expect(createEnrichCall.system).toContain("Create quality expectations");
+    expect(createEnrichCall.system).toContain("position-sharpening");
+    expect(createEnrichCall.system).toContain("future-facing");
+    expect(createEnrichCall.system).not.toContain("LinkedIn Craft Defaults");
+    expect(createEnrichCall.system).not.toContain("Layer 3");
+  });
+
+  it("curated source with high-signal item retains under strict screening contract", async () => {
+    const items = [makeMarketResearchItem({
+      title: "Cabinet migration friction: les gestionnaires paie bloquent sur la reprise des compteurs CP",
+      summary: "Observation terrain récurrente: la reprise des compteurs de congés payés est le premier frein à la migration logicielle dans les cabinets.",
+      text: "Lors de trois immersions récentes dans des cabinets d'expertise comptable, le même blocage est apparu systématiquement: la reprise des compteurs de congés payés constitue le frein numéro un au changement de logiciel de paie. Les gestionnaires craignent une perte de données historiques et un recalcul incorrect des soldes."
+    })];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce(makeScreeningOutput("market-research:mq-1:hash-1"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          confidence: 0.8,
+          title: "La reprise des compteurs CP bloque la migration des cabinets",
+          angle: "Le frein principal au changement de logiciel paie dans les cabinets est la peur de perdre les historiques de congés",
+          whyNow: "Observation récurrente lors de trois immersions terrain récentes",
+          whatItIsAbout: "Le blocage migration lié à la reprise des compteurs congés payés dans les cabinets"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "Full editorial doctrine with strict quality bar",
+      sensitivityMarkdown: "sensitivity rules",
+      userDescriptions: "- baptiste (human, fr): territories=[\"vision/mobilisation\"]",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      gtmFoundationMarkdown: "",
+      recentOpportunities: []
+    });
+
+    // High-signal item with concrete field evidence should be created
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0].title).toBe("La reprise des compteurs CP bloque la migration des cabinets");
+    expect(result.processedSourceItemIds).toContain("market-research:mq-1:hash-1");
+
+    // Verify the doctrine was passed through to both LLM calls
+    const screeningCall = mockLlmClient.generateStructured.mock.calls[0][0];
+    expect(screeningCall.system).toContain("Full editorial doctrine");
+    expect(screeningCall.system).toContain("Screening contract");
+  });
+});
+
+// ── Fail-closed degraded-path tests ───────────────────────────────────────
+
+describe("screening fail-closed behavior", () => {
+  it("full LLM failure at screening produces skip with fallback flag", async () => {
+    const items = [makeMarketResearchItem()];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockImplementationOnce((params: { fallback: () => unknown }) => {
+          const fallbackOutput = params.fallback();
+          return Promise.resolve({
+            output: fallbackOutput,
+            usage: { mode: "fallback" as const, promptTokens: 0, completionTokens: 0, estimatedCostUsd: 0, error: "simulated failure" },
+            mode: "fallback" as const
+          });
+        })
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      gtmFoundationMarkdown: "",
+      recentOpportunities: []
+    });
+
+    expect(result.skipped).toEqual([
+      expect.objectContaining({
+        sourceItemId: "market-research:mq-1:hash-1",
+        reason: expect.stringContaining("LLM unavailable")
+      })
+    ]);
+    expect(result.created).toHaveLength(0);
+    expect(result.enriched).toHaveLength(0);
+    expect(result.processedSourceItemIds).not.toContain("market-research:mq-1:hash-1");
+
+    const sr = result.screeningResults.get("market-research:mq-1:hash-1");
+    expect(sr?.decision).toBe("skip");
+    expect(sr?.fallback).toBe(true);
+    expect(sr?.relevanceScore).toBe(0);
+  });
+
+  it("partial batch response marks missing items as fallback-skip, retryable", async () => {
+    const items = [
+      makeMarketResearchItem({ externalId: "market-research:mq-1:hash-1", sourceItemId: "market-query:mq-1:set:hash-1" }),
+      makeMarketResearchItem({ externalId: "market-research:mq-2:hash-2", sourceItemId: "market-query:mq-2:set:hash-2", sourceFingerprint: "market-research-fp-2" })
+    ];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce({
+          output: {
+            items: [{
+              sourceItemId: "market-research:mq-1:hash-1",
+              decision: "skip" as const,
+              rationale: "Generic content",
+              createOrEnrich: "unknown" as const,
+              relevanceScore: 0.2,
+              sensitivityFlag: false,
+              sensitivityCategories: []
+            }]
+          },
+          usage: { mode: "provider" as const, promptTokens: 100, completionTokens: 50, estimatedCostUsd: 0.001 },
+          mode: "provider" as const
+        })
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: [],
+      layer2Defaults: [],
+      layer3Defaults: [],
+      gtmFoundationMarkdown: "",
+      recentOpportunities: []
+    });
+
+    // Normal skip → processed
+    expect(result.processedSourceItemIds).toContain("market-research:mq-1:hash-1");
+    const sr1 = result.screeningResults.get("market-research:mq-1:hash-1");
+    expect(sr1?.fallback).toBeUndefined();
+
+    // Missing item → fallback skip → NOT processed (retryable)
+    expect(result.processedSourceItemIds).not.toContain("market-research:mq-2:hash-2");
+    const sr2 = result.screeningResults.get("market-research:mq-2:hash-2");
+    expect(sr2?.decision).toBe("skip");
+    expect(sr2?.fallback).toBe(true);
+  });
+});
+
+// --- GTM normalization and field flow tests ---
+
+describe("normalizeGtmFields", () => {
+  it("passes valid enum values through unchanged", () => {
+    const result = normalizeGtmFields({
+      targetSegment: "cabinet-owner",
+      editorialPillar: "proof",
+      awarenessTarget: "problem-aware",
+      buyerFriction: "Cannot compare payroll costs across sites",
+      contentMotion: "demand-capture"
+    });
+    expect(result.targetSegment).toBe("cabinet-owner");
+    expect(result.editorialPillar).toBe("proof");
+    expect(result.awarenessTarget).toBe("problem-aware");
+    expect(result.buyerFriction).toBe("Cannot compare payroll costs across sites");
+    expect(result.contentMotion).toBe("demand-capture");
+  });
+
+  it("normalizes invalid enum values to undefined", () => {
+    const result = normalizeGtmFields({
+      targetSegment: "enterprise-cfo",
+      editorialPillar: "thought-leadership",
+      awarenessTarget: "confused",
+      buyerFriction: "real friction",
+      contentMotion: "brand-awareness"
+    });
+    expect(result.targetSegment).toBeUndefined();
+    expect(result.editorialPillar).toBeUndefined();
+    expect(result.awarenessTarget).toBeUndefined();
+    expect(result.buyerFriction).toBe("real friction");
+    expect(result.contentMotion).toBeUndefined();
+  });
+
+  it("case-normalizes valid enum values", () => {
+    const result = normalizeGtmFields({
+      targetSegment: "CABINET-OWNER",
+      editorialPillar: "Proof",
+      awarenessTarget: "PROBLEM-AWARE",
+      contentMotion: "Demand-Capture"
+    });
+    expect(result.targetSegment).toBe("cabinet-owner");
+    expect(result.editorialPillar).toBe("proof");
+    expect(result.awarenessTarget).toBe("problem-aware");
+    expect(result.contentMotion).toBe("demand-capture");
+  });
+
+  it("normalizes null, empty, and undefined to undefined", () => {
+    const result = normalizeGtmFields({
+      targetSegment: null,
+      editorialPillar: "",
+      awarenessTarget: undefined,
+      buyerFriction: null,
+      contentMotion: ""
+    });
+    expect(result.targetSegment).toBeUndefined();
+    expect(result.editorialPillar).toBeUndefined();
+    expect(result.awarenessTarget).toBeUndefined();
+    expect(result.buyerFriction).toBeUndefined();
+    expect(result.contentMotion).toBeUndefined();
+  });
+
+  it("trims whitespace from freeform buyerFriction", () => {
+    const result = normalizeGtmFields({
+      buyerFriction: "  Cannot verify calculation correctness  "
+    });
+    expect(result.buyerFriction).toBe("Cannot verify calculation correctness");
+  });
+
+  it("treats whitespace-only buyerFriction as undefined", () => {
+    const result = normalizeGtmFields({ buyerFriction: "   " });
+    expect(result.buyerFriction).toBeUndefined();
+  });
+});
+
+describe("GTM fields flow through buildNewOpportunity", () => {
+  const evidence: EvidenceReference = {
+    id: "ev-gtm",
+    source: "notion",
+    sourceItemId: "si-gtm",
+    sourceUrl: "https://example.com/gtm",
+    timestamp: new Date().toISOString(),
+    excerpt: "GTM test excerpt",
+    excerptHash: "gtm-hash",
+    freshnessScore: 0.9
+  };
+
+  it("maps valid GTM fields from decision to opportunity", () => {
+    const decision: CreateEnrichDecision = {
+      action: "create",
+      rationale: "test",
+      title: "GTM field test",
+      territory: "sales",
+      angle: "test angle",
+      whyNow: "why now",
+      whatItIsAbout: "about",
+      whatItIsNotAbout: "not about",
+      suggestedFormat: "Post",
+      confidence: 0.9,
+      targetSegment: "production-manager",
+      editorialPillar: "proof",
+      awarenessTarget: "problem-aware",
+      buyerFriction: "Cannot verify calculation correctness",
+      contentMotion: "demand-capture"
+    };
+    const opp = buildNewOpportunity({
+      decision,
+      sourceItem: makeItem(),
+      evidence: [evidence],
+      companyId: "c1"
+    });
+    expect(opp).not.toBeNull();
+    expect(opp!.targetSegment).toBe("production-manager");
+    expect(opp!.editorialPillar).toBe("proof");
+    expect(opp!.awarenessTarget).toBe("problem-aware");
+    expect(opp!.buyerFriction).toBe("Cannot verify calculation correctness");
+    expect(opp!.contentMotion).toBe("demand-capture");
+  });
+
+  it("normalizes invalid GTM values from LLM to undefined", () => {
+    const decision: CreateEnrichDecision = {
+      action: "create",
+      rationale: "test",
+      title: "GTM invalid test",
+      territory: "sales",
+      angle: "test angle",
+      whyNow: "why now",
+      whatItIsAbout: "about",
+      whatItIsNotAbout: "not about",
+      suggestedFormat: "Post",
+      confidence: 0.9,
+      targetSegment: "ceo",
+      editorialPillar: "hot-take",
+      awarenessTarget: "very-aware",
+      buyerFriction: "",
+      contentMotion: "viral"
+    };
+    const opp = buildNewOpportunity({
+      decision,
+      sourceItem: makeItem(),
+      evidence: [evidence],
+      companyId: "c1"
+    });
+    expect(opp).not.toBeNull();
+    expect(opp!.targetSegment).toBeUndefined();
+    expect(opp!.editorialPillar).toBeUndefined();
+    expect(opp!.awarenessTarget).toBeUndefined();
+    expect(opp!.buyerFriction).toBeUndefined();
+    expect(opp!.contentMotion).toBeUndefined();
+  });
+
+  it("handles missing GTM fields gracefully", () => {
+    const decision: CreateEnrichDecision = {
+      action: "create",
+      rationale: "test",
+      title: "No GTM test",
+      territory: "sales",
+      angle: "test angle",
+      whyNow: "why now",
+      whatItIsAbout: "about",
+      whatItIsNotAbout: "not about",
+      suggestedFormat: "Post",
+      confidence: 0.9
+    };
+    const opp = buildNewOpportunity({
+      decision,
+      sourceItem: makeItem(),
+      evidence: [evidence],
+      companyId: "c1"
+    });
+    expect(opp).not.toBeNull();
+    expect(opp!.targetSegment).toBeUndefined();
+    expect(opp!.editorialPillar).toBeUndefined();
+    expect(opp!.awarenessTarget).toBeUndefined();
+    expect(opp!.buyerFriction).toBeUndefined();
+    expect(opp!.contentMotion).toBeUndefined();
   });
 });

@@ -150,8 +150,8 @@ export const llmDraftSafetySchema = sensitivityOutputSchema;
 
 export const notionSelectionRowSchema = z.object({
   notionPageId: z.string().min(1),
-  fingerprint: z.string().min(1),
-  editorialOwner: z.string().min(1)
+  fingerprint: z.string(),
+  editorialOwner: z.string()
 });
 
 export const notionRichTextChunkSchema = z.object({
@@ -197,7 +197,12 @@ export const createEnrichDecisionSchema = z.object({
   whatItIsAbout: z.string().min(1),
   whatItIsNotAbout: z.string().min(1),
   suggestedFormat: z.string().min(1),
-  confidence: z.number().min(0).max(1)
+  confidence: z.number().min(0).max(1),
+  targetSegment: z.string().optional(),
+  editorialPillar: z.string().optional(),
+  awarenessTarget: z.string().optional(),
+  buyerFriction: z.string().optional(),
+  contentMotion: z.string().optional()
 });
 
 export const marketResearchSummarySchema = z.object({

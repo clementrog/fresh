@@ -410,6 +410,11 @@ export class RepositoryBundle {
         ownerProfile: opportunity.ownerProfile,
         ownerUserId: opportunity.ownerUserId,
         narrativePillar: opportunity.narrativePillar,
+        targetSegment: opportunity.targetSegment ?? "",
+        editorialPillar: opportunity.editorialPillar ?? "",
+        awarenessTarget: opportunity.awarenessTarget ?? "",
+        buyerFriction: opportunity.buyerFriction ?? "",
+        contentMotion: opportunity.contentMotion ?? "",
         angle: opportunity.angle,
         whyNow: opportunity.whyNow,
         whatItIsAbout: opportunity.whatItIsAbout,
@@ -436,6 +441,11 @@ export class RepositoryBundle {
         ownerProfile: opportunity.ownerProfile,
         ownerUserId: opportunity.ownerUserId,
         narrativePillar: opportunity.narrativePillar,
+        targetSegment: opportunity.targetSegment ?? "",
+        editorialPillar: opportunity.editorialPillar ?? "",
+        awarenessTarget: opportunity.awarenessTarget ?? "",
+        buyerFriction: opportunity.buyerFriction ?? "",
+        contentMotion: opportunity.contentMotion ?? "",
         angle: opportunity.angle,
         whyNow: opportunity.whyNow,
         whatItIsAbout: opportunity.whatItIsAbout,
@@ -734,6 +744,11 @@ export class RepositoryBundle {
     whatItIsAbout: string;
     whatItIsNotAbout: string;
     editorialNotes: string;
+    targetSegment?: string;
+    editorialPillar?: string;
+    awarenessTarget?: string;
+    buyerFriction?: string;
+    contentMotion?: string;
   }) {
     return this.prisma.opportunity.update({
       where: { id: params.opportunityId },
@@ -743,7 +758,12 @@ export class RepositoryBundle {
         whyNow: params.whyNow,
         whatItIsAbout: params.whatItIsAbout,
         whatItIsNotAbout: params.whatItIsNotAbout,
-        editorialNotes: params.editorialNotes
+        editorialNotes: params.editorialNotes,
+        ...(params.targetSegment !== undefined && { targetSegment: params.targetSegment }),
+        ...(params.editorialPillar !== undefined && { editorialPillar: params.editorialPillar }),
+        ...(params.awarenessTarget !== undefined && { awarenessTarget: params.awarenessTarget }),
+        ...(params.buyerFriction !== undefined && { buyerFriction: params.buyerFriction }),
+        ...(params.contentMotion !== undefined && { contentMotion: params.contentMotion }),
       },
       include: opportunityInclude
     });
@@ -778,11 +798,11 @@ export class RepositoryBundle {
     });
   }
 
-  async markOpportunitySelected(opportunityId: string, editorialOwner: string) {
+  async markOpportunitySelected(opportunityId: string, editorialOwner?: string) {
     return this.prisma.opportunity.update({
       where: { id: opportunityId },
       data: {
-        editorialOwner,
+        ...(editorialOwner ? { editorialOwner } : {}),
         selectedAt: new Date(),
         status: "Selected"
       },

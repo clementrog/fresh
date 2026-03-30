@@ -13,6 +13,7 @@ export async function generateDraft(params: {
   doctrineMarkdown: string;
   editorialNotes: string;
   layer3Defaults: string[];
+  gtmFoundationMarkdown: string;
 }): Promise<{
   draft: DraftV1 | null;
   blocked: boolean;
@@ -43,11 +44,20 @@ export async function generateDraft(params: {
     ? layer3Defaults.map((d) => `- ${d}`).join("\n")
     : "";
 
+  const gtmParts = [
+    opportunity.targetSegment && `Target reader: ${opportunity.targetSegment}`,
+    opportunity.editorialPillar && `Editorial pillar: ${opportunity.editorialPillar}`,
+    opportunity.awarenessTarget && `Reader awareness: ${opportunity.awarenessTarget}`,
+    opportunity.buyerFriction && `Buyer friction addressed: ${opportunity.buyerFriction}`,
+    opportunity.contentMotion && `Content motion: ${opportunity.contentMotion}`
+  ].filter(Boolean);
+
   const promptParts = [
     `## Doctrine\n${doctrineMarkdown || "Prefer concrete proof over generic advice."}`,
     `## Author voice\nTone: ${str("toneSummary")}\nPreferred structure: ${str("preferredStructure")}\nVoice markers (channel the flavor, never copy verbatim): ${arr("typicalPhrases").join(", ")}\nAvoid rules: ${arr("avoidRules").join(", ")}\nContent territories: ${arr("contentTerritories").join(", ")}`,
     layer3Section ? `## Layer 3 — LinkedIn craft defaults\n${layer3Section}` : "",
     `## Opportunity\nTitle: ${opportunity.title}\nAngle: ${opportunity.angle}\nWhy now: ${opportunity.whyNow}\nAbout: ${opportunity.whatItIsAbout}\nNot about: ${opportunity.whatItIsNotAbout}\nSuggested format: ${opportunity.suggestedFormat}`,
+    gtmParts.length > 0 ? `## GTM context\n${gtmParts.join("\n")}` : "",
     `## Evidence\n${evidenceSection}`,
     `## Enrichment history\n${enrichmentSection}`,
     `## Editorial notes\n${editorialNotesSection}`

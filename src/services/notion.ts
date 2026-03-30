@@ -11,6 +11,7 @@ import type {
   NotionSyncResult,
   SyncRun
 } from "../domain/types.js";
+import { normalizeGtmFields } from "../domain/types.js";
 
 export const REQUIRED_DATABASES = [
   "Content Opportunities",
@@ -124,7 +125,12 @@ export class NotionService {
       "What it is about": richTextProperty(opportunity.whatItIsAbout),
       "What it is not about": richTextProperty(opportunity.whatItIsNotAbout),
       "Source URL": richTextProperty(opportunity.primaryEvidence.sourceUrl),
-      "Editorial notes": richTextProperty(opportunity.editorialNotes ?? "")
+      "Editorial notes": richTextProperty(opportunity.editorialNotes ?? ""),
+      "Target segment": opportunity.targetSegment ? selectProperty(opportunity.targetSegment) : { select: null },
+      "Editorial pillar": opportunity.editorialPillar ? selectProperty(opportunity.editorialPillar) : { select: null },
+      "Awareness target": opportunity.awarenessTarget ? selectProperty(opportunity.awarenessTarget) : { select: null },
+      "Buyer friction": richTextProperty(opportunity.buyerFriction ?? ""),
+      "Content motion": opportunity.contentMotion ? selectProperty(opportunity.contentMotion) : { select: null },
     };
 
     return this.upsertDatabasePage({
@@ -659,7 +665,14 @@ export class NotionService {
           whatItIsAbout: getRichTextPropertyText(page, "What it is about"),
           whatItIsNotAbout: getRichTextPropertyText(page, "What it is not about"),
           sourceUrl: getRichTextPropertyText(page, "Source URL"),
-          editorialNotes: getRichTextPropertyText(page, "Editorial notes")
+          editorialNotes: getRichTextPropertyText(page, "Editorial notes"),
+          ...normalizeGtmFields({
+            targetSegment: getSelectPropertyName(page, "Target segment") || undefined,
+            editorialPillar: getSelectPropertyName(page, "Editorial pillar") || undefined,
+            awarenessTarget: getSelectPropertyName(page, "Awareness target") || undefined,
+            buyerFriction: getRichTextPropertyText(page, "Buyer friction") || undefined,
+            contentMotion: getSelectPropertyName(page, "Content motion") || undefined,
+          }),
         });
       }
 
@@ -1087,7 +1100,12 @@ export function getDatabaseProperties(name: RequiredDatabase) {
         "Last digest at": { date: {} },
         "Opportunity fingerprint": { rich_text: {} },
         "Dedup flag": { select: {} },
-        "Request re-evaluation": { checkbox: {} }
+        "Request re-evaluation": { checkbox: {} },
+        "Target segment": { select: {} },
+        "Editorial pillar": { select: {} },
+        "Awareness target": { select: {} },
+        "Buyer friction": { rich_text: {} },
+        "Content motion": { select: {} }
       };
     case "Claap Review":
       return {

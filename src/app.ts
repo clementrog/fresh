@@ -1,6 +1,7 @@
 import {
   loadConnectorConfigs,
   loadDoctrineMarkdown,
+  loadGtmFoundationMarkdown,
   loadMarketResearchRuntimeConfig
 } from "./config/loaders.js";
 import type { AppEnv } from "./config/env.js";
@@ -18,6 +19,7 @@ import type {
   SyncRun,
   UserRecord
 } from "./domain/types.js";
+import { normalizeGtmFields } from "./domain/types.js";
 import { hashParts } from "./lib/ids.js";
 import {
   dedupeEvidenceReferences,
@@ -362,6 +364,7 @@ export class EditorialSignalEngineApp {
         users: inputs.users,
         layer2Defaults: inputs.layer2Defaults,
         layer3Defaults: inputs.layer3Defaults,
+        gtmFoundationMarkdown: inputs.gtmFoundationMarkdown,
         recentOpportunities,
         checkOriginDedupe: async (siDbId) =>
           this.repositories.findActiveOpportunityByOriginSourceItem({
@@ -740,7 +743,8 @@ export class EditorialSignalEngineApp {
         sensitivityRulesMarkdown: inputs.sensitivityMarkdown,
         doctrineMarkdown: inputs.doctrineMarkdown,
         editorialNotes: opportunity.editorialNotes ?? "",
-        layer3Defaults: inputs.layer3Defaults
+        layer3Defaults: inputs.layer3Defaults,
+        gtmFoundationMarkdown: inputs.gtmFoundationMarkdown
       });
 
       for (const usageEvent of result.usageEvents) {
@@ -836,7 +840,8 @@ export class EditorialSignalEngineApp {
             sensitivityRulesMarkdown: inputs.sensitivityMarkdown,
             doctrineMarkdown: inputs.doctrineMarkdown,
             editorialNotes: opportunity.editorialNotes ?? "",
-            layer3Defaults: inputs.layer3Defaults
+            layer3Defaults: inputs.layer3Defaults,
+            gtmFoundationMarkdown: inputs.gtmFoundationMarkdown
           });
 
           for (const usageEvent of result.usageEvents) {
@@ -896,18 +901,35 @@ export class EditorialSignalEngineApp {
 
     try {
       const selected = await this.notion.listSelectedOpportunities();
+      const warnings: string[] = [];
+
       for (const candidate of selected) {
+        const fingerprint = candidate.fingerprint.trim() || undefined;
+        const editorialOwner = candidate.editorialOwner.trim() || undefined;
+
         const opportunity = await this.repositories.findOpportunityByNotionPageId(candidate.notionPageId);
         if (!opportunity || opportunity.status === "Selected") {
           continue;
         }
 
+        if (!fingerprint) {
+          this.logger.warn?.({ notionPageId: candidate.notionPageId, opportunityId: opportunity.id }, "Selected Notion page has empty fingerprint — resolving by page ID only");
+          warnings.push(`Empty fingerprint: notionPageId=${candidate.notionPageId}, opportunityId=${opportunity.id}`);
+        }
+
+        if (!editorialOwner) {
+          this.logger.warn?.({ notionPageId: candidate.notionPageId, opportunityId: opportunity.id }, "Selected Notion page has empty editorial owner — preserving existing DB value");
+          warnings.push(`Empty editorialOwner: notionPageId=${candidate.notionPageId}, opportunityId=${opportunity.id}`);
+        }
+
         if (!context.dryRun) {
-          await this.repositories.markOpportunitySelected(opportunity.id, candidate.editorialOwner);
+          await this.repositories.markOpportunitySelected(opportunity.id, editorialOwner);
         }
       }
 
-      const finished = finalizeRun(run, "completed", `Selection scan processed ${selected.length} candidates`);
+      const warningsSuffix = warnings.length > 0 ? ` (${warnings.length} warning(s))` : "";
+      const finished = finalizeRun(run, "completed", `Selection scan processed ${selected.length} candidates${warningsSuffix}`);
+      finished.warnings.push(...warnings);
       await this.finishRun(finished, [], context);
     } catch (error) {
       const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown selection scan error");
@@ -973,7 +995,12 @@ export class EditorialSignalEngineApp {
             whyNow: request.whyNow,
             whatItIsAbout: request.whatItIsAbout,
             whatItIsNotAbout: request.whatItIsNotAbout,
-            editorialNotes: request.editorialNotes
+            editorialNotes: request.editorialNotes,
+            targetSegment: request.targetSegment,
+            editorialPillar: request.editorialPillar,
+            awarenessTarget: request.awarenessTarget,
+            buyerFriction: request.buyerFriction,
+            contentMotion: request.contentMotion,
           });
 
           if (oppRow.primaryEvidenceId && request.sourceUrl !== oppRow.primaryEvidence?.sourceUrl) {
@@ -1379,9 +1406,10 @@ Provide a rationale explaining your assessment.`,
   }
 
   private async loadIntelligenceInputs(companyId: string) {
-    const [editorialConfig, users] = await Promise.all([
+    const [editorialConfig, users, gtmFoundationMarkdown] = await Promise.all([
       this.repositories.getLatestEditorialConfig(companyId),
-      this.repositories.listUsers(companyId)
+      this.repositories.listUsers(companyId),
+      loadGtmFoundationMarkdown()
     ]);
     if (!editorialConfig) throw new Error("No editorial config. Run convergence foundation first.");
     const layer1 = editorialConfig.layer1CompanyLens as { doctrineMarkdown?: string; sensitivityMarkdown?: string };
@@ -1396,6 +1424,7 @@ Provide a rationale explaining your assessment.`,
       sensitivityMarkdown: layer1.sensitivityMarkdown ?? "",
       layer2Defaults: layer2.defaults ?? [],
       layer3Defaults: layer3.defaults ?? [],
+      gtmFoundationMarkdown,
       userDescriptions,
       users: users.map(mapUserRecord)
     };
@@ -1790,6 +1819,11 @@ Provide a rationale explaining your assessment.`,
     ownerProfile: string | null;
     ownerUserId?: string | null;
     narrativePillar: string | null;
+    targetSegment?: string | null;
+    editorialPillar?: string | null;
+    awarenessTarget?: string | null;
+    buyerFriction?: string | null;
+    contentMotion?: string | null;
     angle: string;
     whyNow: string;
     whatItIsAbout: string;
@@ -1889,6 +1923,13 @@ Provide a rationale explaining your assessment.`,
       ownerProfile: row.ownerProfile as ContentOpportunity["ownerProfile"],
       ownerUserId: row.ownerUserId ?? undefined,
       narrativePillar: row.narrativePillar ?? "",
+      ...normalizeGtmFields({
+        targetSegment: row.targetSegment,
+        editorialPillar: row.editorialPillar,
+        awarenessTarget: row.awarenessTarget,
+        buyerFriction: row.buyerFriction,
+        contentMotion: row.contentMotion,
+      }),
       angle: row.angle,
       whyNow: row.whyNow,
       whatItIsAbout: row.whatItIsAbout,

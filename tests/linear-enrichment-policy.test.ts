@@ -297,6 +297,7 @@ describe("runIntelligencePipeline — Linear enrichment policy", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -337,6 +338,7 @@ describe("runIntelligencePipeline — Linear enrichment policy", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -371,6 +373,7 @@ describe("runIntelligencePipeline — Linear enrichment policy", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -428,6 +431,7 @@ describe("runIntelligencePipeline — Linear enrichment policy", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [opp]
     });
 
@@ -470,6 +474,7 @@ describe("runIntelligencePipeline — Linear enrichment policy", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -620,6 +625,7 @@ describe("Notion: syncLinearReviewItem archived on reclassification", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -648,6 +654,7 @@ describe("Notion: syncLinearReviewItem archived on reclassification", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -712,6 +719,7 @@ describe("Linear classification persistence failure excludes item from processed
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -779,6 +787,7 @@ describe("Linear classification persistence failure excludes item from processed
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: []
     });
 
@@ -1250,6 +1259,7 @@ describe("editorial-lead — create-capable with no candidates", () => {
       users: [],
       layer2Defaults: [],
       layer3Defaults: [],
+      gtmFoundationMarkdown: "",
       recentOpportunities: [] // no existing opportunities
     });
 

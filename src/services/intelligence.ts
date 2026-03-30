@@ -10,7 +10,7 @@ import type {
   ScreeningResult,
   UserRecord
 } from "../domain/types.js";
-import { PROFILE_IDS as PROFILE_ID_VALUES } from "../domain/types.js";
+import { PROFILE_IDS as PROFILE_ID_VALUES, normalizeGtmFields } from "../domain/types.js";
 import {
   buildEvidenceReferences,
   dedupeEvidenceReferences,
@@ -60,7 +60,6 @@ export async function screenSourceItems(params: {
   doctrineMarkdown: string;
   sensitivityMarkdown: string;
   userDescriptions: string;
-  layer2Defaults: string[];
 }): Promise<{ results: Map<string, ScreeningResult>; usageEvents: Array<{ step: string; usage: LlmUsage }> }> {
   const results = new Map<string, ScreeningResult>();
   const usageEvents: Array<{ step: string; usage: LlmUsage }> = [];
@@ -89,11 +88,16 @@ export async function screenSourceItems(params: {
       "## Sensitivity Rules",
       params.sensitivityMarkdown,
       "",
-      "## Content Philosophy Defaults (Layer 2)",
-      ...params.layer2Defaults.map((d) => `- ${d}`),
-      "",
       "## Available owners and their territories",
       params.userDescriptions,
+      "",
+      "## Screening contract",
+      "Apply the doctrine strictly. Default to skip.",
+      "- Retain only if the item reveals something real about how cabinets buy, produce, control, migrate, or experience payroll (Doctrine §10: Retain).",
+      "- Skip if the item is generic, internal-only, obvious, weakly sourced, or could come from any B2B SaaS company (Doctrine §7, §8, §11).",
+      "- The quality bar is: specific, traceable, consequential, non-generic, position-sharpening (Doctrine §4). All five must plausibly hold.",
+      "- Prefer proof over opinion, observations over slogans, frictions over abstractions.",
+      "- When in doubt, skip. A retained item that is below the bar wastes all downstream pipeline stages.",
       "",
       "For each source item, decide: skip (not relevant) or retain (potential content opportunity).",
       "If retaining, suggest an owner displayName if obvious, and hint at create vs enrich.",
@@ -103,10 +107,10 @@ export async function screenSourceItems(params: {
     const fallback = () => ({
       items: batch.map((item) => ({
         sourceItemId: item.externalId,
-        decision: "retain" as const,
-        rationale: "Fallback: retained for manual review",
+        decision: "skip" as const,
+        rationale: "Fallback: skipped — LLM unavailable, requires retry",
         createOrEnrich: "unknown" as const,
-        relevanceScore: 0.5,
+        relevanceScore: 0,
         sensitivityFlag: false,
         sensitivityCategories: []
       }))
@@ -122,6 +126,7 @@ export async function screenSourceItems(params: {
     });
 
     usageEvents.push({ step: "screening", usage: response.usage });
+    const isFallback = response.mode === "fallback";
 
     for (const result of response.output.items) {
       const screening: ScreeningResult = {
@@ -131,21 +136,23 @@ export async function screenSourceItems(params: {
         createOrEnrich: result.createOrEnrich,
         relevanceScore: result.relevanceScore,
         sensitivityFlag: result.sensitivityFlag,
-        sensitivityCategories: result.sensitivityCategories
+        sensitivityCategories: result.sensitivityCategories,
+        fallback: isFallback || undefined
       };
       results.set(result.sourceItemId, screening);
     }
 
-    // Fill in any items not returned by the LLM
+    // Fill in any items not returned by the LLM — fail-closed, retryable
     for (const item of batch) {
       if (!results.has(item.externalId)) {
         results.set(item.externalId, {
-          decision: "retain",
-          rationale: "Not returned by screening LLM, retained by default",
+          decision: "skip",
+          rationale: "Not returned by screening LLM — deferred for retry",
           createOrEnrich: "unknown",
-          relevanceScore: 0.5,
+          relevanceScore: 0,
           sensitivityFlag: false,
-          sensitivityCategories: []
+          sensitivityCategories: [],
+          fallback: true
         });
       }
     }
@@ -283,6 +290,8 @@ export const DEDUP_WARNINGS_ENABLED = process.env.DEDUP_WARNINGS_ENABLED !== "fa
 export const DEDUP_WARNING_THRESHOLD = parseFloat(process.env.DEDUP_WARNING_THRESHOLD ?? "0.20");
 /** Temporary default — must be calibrated against labeled duplicate/non-duplicate pairs. */
 export const DEDUP_CONFIDENCE_CUTOFF = parseFloat(process.env.DEDUP_CONFIDENCE_CUTOFF ?? "0.70");
+/** Kill switch for displacement rescue — independent of warnings.  Set to "false" to disable. */
+export const DEDUP_RESCUE_ENABLED = process.env.DEDUP_RESCUE_ENABLED !== "false";
 
 function tokenizeForScoring(text: string): Set<string> {
   if (DEDUP_SCORING_VERSION === "v1") {
@@ -294,7 +303,7 @@ function tokenizeForScoring(text: string): Set<string> {
 // --- Narrow Candidates ---
 
 export interface CandidateResult {
-  /** Top 5 candidates ranked by boosted score — passed to LLM for create/enrich decision. */
+  /** Top 5 candidates by boosted score, plus up to 2 displaced topical matches rescued by boost reordering. */
   candidates: ContentOpportunity[];
   /** Highest boosted score (includes owner/evidence boosts) — used for candidate ranking. */
   topScore: number;
@@ -305,6 +314,8 @@ export interface CandidateResult {
   /** Candidate with the highest raw topical overlap — used for duplicate warning metadata.
    *  May differ from topCandidate when owner/evidence boosts reorder the ranking. */
   bestTopicalCandidate?: ContentOpportunity;
+  /** Number of candidates rescued by displacement detection (0 when no boost reordering occurred). */
+  rescuedCount: number;
 }
 
 export function narrowCandidateOpportunities(
@@ -312,11 +323,12 @@ export function narrowCandidateOpportunities(
   screening: ScreeningResult,
   opportunities: ContentOpportunity[],
   companyId: string,
-  opts: { enableOwnerBoost?: boolean } = {}
+  opts: { enableOwnerBoost?: boolean; enableRescue?: boolean } = {}
 ): CandidateResult {
   const itemWords = tokenizeForScoring(`${item.title} ${item.summary}`);
   const itemDbId = sourceItemDbId(companyId, item.externalId);
   const enableOwnerBoost = opts.enableOwnerBoost ?? true;
+  const enableRescue = opts.enableRescue ?? DEDUP_RESCUE_ENABLED;
 
   const scored = opportunities.map((opp) => {
     const oppWords = tokenizeForScoring(`${opp.title} ${opp.angle} ${opp.whatItIsAbout}`);
@@ -341,19 +353,38 @@ export function narrowCandidateOpportunities(
     }
   }
 
-  // Candidates ranked by boosted score for LLM
-  const filtered = scored
+  // Primary ranking: top 5 by boosted score (legacy behavior)
+  const boostedTop = scored
     .filter((entry) => entry.boostedScore > 0.05)
     .sort((a, b) => b.boostedScore - a.boostedScore)
     .slice(0, 5);
 
+  // Displacement rescue: restore strong topical matches that boosts pushed out.
+  // Compare boosted top-5 against raw-topical top-5.  Candidates in the topical
+  // set but not the boosted set were displaced by owner/evidence boosts.
+  let topicalRescue: typeof scored = [];
+  if (enableRescue) {
+    const topicalTop = scored
+      .filter((entry) => entry.topicalScore > 0.05)
+      .sort((a, b) => b.topicalScore - a.topicalScore)
+      .slice(0, 5);
+
+    const boostedIds = new Set(boostedTop.map((e) => e.opp.id));
+    topicalRescue = topicalTop
+      .filter((e) => !boostedIds.has(e.opp.id) && e.topicalScore >= 0.10)
+      .slice(0, 2);
+  }
+
+  const filtered = [...boostedTop, ...topicalRescue];
+
   return {
     candidates: filtered.map((entry) => entry.opp),
-    topScore: filtered.length > 0 ? filtered[0].boostedScore : 0,
+    topScore: boostedTop.length > 0 ? boostedTop[0].boostedScore : 0,
     topTopicalScore: bestTopicalEntry?.topicalScore ?? 0,
-    topCandidate: filtered.length > 0 ? filtered[0].opp : undefined,
+    topCandidate: boostedTop.length > 0 ? boostedTop[0].opp : undefined,
     bestTopicalCandidate: bestTopicalEntry && bestTopicalEntry.topicalScore > 0
-      ? bestTopicalEntry.opp : undefined
+      ? bestTopicalEntry.opp : undefined,
+    rescuedCount: topicalRescue.length
   };
 }
 
@@ -565,7 +596,7 @@ export async function decideCreateOrEnrich(params: {
   llmClient: LlmClient;
   doctrineMarkdown: string;
   userDescriptions: string;
-  layer3Defaults: string[];
+  gtmFoundationMarkdown: string;
 }): Promise<{ decision: CreateEnrichDecision; usage: LlmUsage }> {
   const candidateDescriptions = params.candidates.length > 0
     ? params.candidates.map((c) => [
@@ -586,14 +617,32 @@ export async function decideCreateOrEnrich(params: {
     "## Available owners",
     params.userDescriptions,
     "",
-    "## LinkedIn Craft Defaults (Layer 3)",
-    ...params.layer3Defaults.map((d) => `- ${d}`),
-    "",
+    ...(params.gtmFoundationMarkdown ? [
+      "## GTM Foundation",
+      params.gtmFoundationMarkdown,
+      "",
+      "## GTM classification",
+      "For each opportunity, also classify these optional fields:",
+      "- targetSegment: who is this post really for? One of: cabinet-owner, production-manager, payroll-manager, it-lead",
+      "- editorialPillar: what kind of editorial move? One of: insight, proof, perspective, personality",
+      "- awarenessTarget: how aware is the intended reader? One of: unaware, problem-aware, solution-aware, active-buyer",
+      "- buyerFriction: the specific blocker or hesitation this content addresses (freeform, be specific)",
+      "- contentMotion: why does this content exist in the GTM motion? One of: category, demand-capture, trust, recruiting",
+      "",
+    ] : []),
     params.creationMode === "enrich-only"
       ? "This source is evidence-shaped and may only enrich an existing opportunity or be skipped. Never create a new opportunity from it."
       : params.curated
         ? "This is a curated source with established provenance. Create a new opportunity if it contains at least one concrete insight, problem, or event — even if the framing is rough. You do not need polished prose or a fully developed angle. Focus on whether real substance exists, not on presentation quality."
         : "This source may create a new opportunity if it contains a reusable insight with enough substance.",
+    "",
+    "## Create quality expectations",
+    "A 'create' decision must produce a sharp angle: a specific claim, tension, or lesson — not a vague topic label.",
+    "- The angle must be position-sharpening: it helps explain what Linc sees, rejects, or is building around.",
+    "- If the signal is interesting but the angle would be generic (could come from any company), skip or enrich — do not create.",
+    "- If the topic is future-facing, speculative, or under co-construction, prefer skip over create. Only create from shipped reality or observed field evidence.",
+    "- For enrich: the signal must add a concrete new proof point, pattern, or angle. Do not enrich with redundant evidence.",
+    "",
     params.creationMode === "enrich-only"
       ? "Decide: 'enrich' an existing opportunity (provide targetOpportunityId) or 'skip'."
       : params.candidates.length > 0
@@ -717,6 +766,13 @@ export function buildNewOpportunity(params: {
     ownerProfile,
     ownerUserId: params.ownerUserId,
     narrativePillar: params.decision.territory,
+    ...normalizeGtmFields({
+      targetSegment: params.decision.targetSegment,
+      editorialPillar: params.decision.editorialPillar,
+      awarenessTarget: params.decision.awarenessTarget,
+      buyerFriction: params.decision.buyerFriction,
+      contentMotion: params.decision.contentMotion,
+    }),
     angle: params.decision.angle,
     whyNow: params.decision.whyNow,
     whatItIsAbout: params.decision.whatItIsAbout,
@@ -824,6 +880,7 @@ export interface IntelligencePipelineParams {
   users: UserRecord[];
   layer2Defaults: string[];
   layer3Defaults: string[];
+  gtmFoundationMarkdown: string;
   recentOpportunities: ContentOpportunity[];
   /** DB-backed origin dedupe. When provided, called before every create decision. */
   checkOriginDedupe?: OriginDedupeCheck;
@@ -906,8 +963,7 @@ export async function runIntelligencePipeline(
     llmClient: params.llmClient,
     doctrineMarkdown: params.doctrineMarkdown,
     sensitivityMarkdown: params.sensitivityMarkdown,
-    userDescriptions: params.userDescriptions,
-    layer2Defaults: params.layer2Defaults
+    userDescriptions: params.userDescriptions
   });
   result.usageEvents.push(...screening.usageEvents);
   result.screeningResults = screening.results;
@@ -921,7 +977,10 @@ export async function runIntelligencePipeline(
         sourceItemId: item.externalId,
         reason: sr?.rationale ?? "Screened out"
       });
-      result.processedSourceItemIds.push(item.externalId);
+      // Fallback-skipped items stay unprocessed so they can be retried next run
+      if (!sr?.fallback) {
+        result.processedSourceItemIds.push(item.externalId);
+      }
       continue;
     }
     retainedAfterScreening.push({ item, screening: sr });
@@ -1014,7 +1073,7 @@ export async function runIntelligencePipeline(
 
     try {
       const creationMode = getSourceCreationMode(item);
-      const { candidates, topScore, topTopicalScore, topCandidate, bestTopicalCandidate } = narrowCandidateOpportunities(
+      const { candidates, topScore, topTopicalScore, topCandidate, bestTopicalCandidate, rescuedCount } = narrowCandidateOpportunities(
         item,
         sr,
         workingOpportunities,
@@ -1032,7 +1091,7 @@ export async function runIntelligencePipeline(
         boostedScore: topScore,
         matchedOpportunityId: bestTopicalCandidate?.id,
         matchedOpportunityTitle: bestTopicalCandidate?.title,
-        reason: `Window ${workingOpportunities.length} opps, ${candidates.length} candidates above 0.05, topical ${topTopicalScore.toFixed(3)}, boosted ${topScore.toFixed(3)}`
+        reason: `Window ${workingOpportunities.length} opps, ${candidates.length} candidates above 0.05${rescuedCount > 0 ? ` (${rescuedCount} rescued)` : ""}, topical ${topTopicalScore.toFixed(3)}, boosted ${topScore.toFixed(3)}`
       });
 
       if (creationMode === "enrich-only" && candidates.length === 0) {
@@ -1057,7 +1116,7 @@ export async function runIntelligencePipeline(
         llmClient: params.llmClient,
         doctrineMarkdown: params.doctrineMarkdown,
         userDescriptions: params.userDescriptions,
-        layer3Defaults: params.layer3Defaults
+        gtmFoundationMarkdown: params.gtmFoundationMarkdown
       });
       result.usageEvents.push({ step: "create-enrich", usage });
       const finalDecision = enforceCreateQualityGate({ item, decision, curated });

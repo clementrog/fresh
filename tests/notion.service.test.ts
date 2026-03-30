@@ -1053,4 +1053,71 @@ describe("readToneOfVoiceProfiles body fallback", () => {
     expect(createProps).toHaveProperty("Dedup flag");
     expect(createProps["Dedup flag"]).toEqual({ select: null });
   });
+
+  it("writes GTM fields as editable properties on initial creation", async () => {
+    const pagesCreate = vi.fn(async () => ({ id: "page-created" }));
+    const client = makeNotionClient({
+      pages: { create: pagesCreate, update: vi.fn(async () => ({})) }
+    });
+    const service = new NotionService("", "parent-page", { client });
+
+    const opp = makeOpportunity({
+      targetSegment: "production-manager",
+      editorialPillar: "proof",
+      awarenessTarget: "problem-aware",
+      buyerFriction: "Calculation opacity",
+      contentMotion: "demand-capture"
+    });
+
+    await service.syncOpportunity(opp as any, null);
+
+    expect(pagesCreate).toHaveBeenCalledTimes(1);
+    const createProps = (pagesCreate.mock.calls[0] as any[])[0].properties;
+    expect(createProps["Target segment"]).toEqual({ select: { name: "production-manager" } });
+    expect(createProps["Editorial pillar"]).toEqual({ select: { name: "proof" } });
+    expect(createProps["Awareness target"]).toEqual({ select: { name: "problem-aware" } });
+    expect(createProps["Buyer friction"]).toHaveProperty("rich_text");
+    expect(createProps["Content motion"]).toEqual({ select: { name: "demand-capture" } });
+  });
+
+  it("does not overwrite GTM fields when notionEditsPending is true", async () => {
+    const pagesUpdate = vi.fn(async () => ({}));
+    const pagesCreate = vi.fn(async () => ({ id: "page-existing" }));
+    const client = makeNotionClient({
+      pages: { create: pagesCreate, update: pagesUpdate },
+      databases: {
+        query: vi.fn(async () => ({
+          results: [{
+            object: "page",
+            id: "page-existing",
+            properties: {
+              "Opportunity fingerprint": { type: "rich_text", rich_text: [{ plain_text: "opp-fp-1" }] }
+            }
+          }],
+          has_more: false,
+          next_cursor: null
+        })),
+        create: vi.fn(async () => ({ id: "db-1" })),
+        retrieve: vi.fn(async () => ({ properties: {} })),
+        update: vi.fn(async () => ({}))
+      }
+    });
+    const service = new NotionService("", "parent-page", { client });
+
+    const opp = makeOpportunity({
+      notionEditsPending: true,
+      notionPageId: "page-existing",
+      targetSegment: "production-manager",
+      editorialPillar: "proof"
+    });
+
+    await service.syncOpportunity(opp as any, null);
+
+    expect(pagesUpdate).toHaveBeenCalledTimes(1);
+    const updateProps = (pagesUpdate.mock.calls[0] as any[])[0].properties;
+    // When notionEditsPending is true, editable properties (including GTM) are NOT written
+    expect(updateProps).not.toHaveProperty("Target segment");
+    expect(updateProps).not.toHaveProperty("Editorial pillar");
+    expect(updateProps).not.toHaveProperty("Title");
+  });
 });

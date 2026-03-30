@@ -94,6 +94,23 @@ check_focused_integration "getDraft returns draft with included opportunity and 
 check_focused_integration "listSourceConfigs returns both enabled and disabled"
 check_focused_integration "getRun returns run with costEntries ordered by createdAt"
 
+check_focused_integration_file() {
+  local pattern="$1"
+  local file="$2"
+  local output
+  output=$(INTEGRATION=1 pnpm exec vitest run --testNamePattern "$pattern" "$file" 2>&1)
+  local passed
+  passed=$(echo "$output" | grep -Eo '[0-9]+ passed' | head -1 | cut -d' ' -f1)
+  if [[ "$passed" != "1" ]]; then
+    echo "$output"
+    fail "Expected 1 passed for integration pattern '$pattern' in $file, got '${passed:-0}'"
+  fi
+  pass "  '$pattern' → 1 passed ($file)"
+}
+
+check_focused_integration_file "preserves existing editorialOwner when called with undefined" tests/selection-scan.integration.test.ts
+check_focused_integration_file "overwrites editorialOwner when a non-empty value is provided" tests/selection-scan.integration.test.ts
+
 # ── 7. Notion pull-edits round-trip smoke test ──────────────────────────────
 # Runs the pull-edits command in dry-run mode against the configured Notion
 # workspace. Verifies the command can reach Notion, query the database, and

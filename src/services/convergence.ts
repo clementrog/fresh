@@ -1,9 +1,16 @@
 import type { AppEnv } from "../config/env.js";
 import { loadConnectorConfigs, loadDoctrineMarkdown, loadProfileBases, loadSensitivityMarkdown } from "../config/loaders.js";
 import { PROFILE_IDS, type CompanyRecord, type EditorialConfigRecord, type ProfileBase, type SourceConfigRecord, type UserRecord } from "../domain/types.js";
-import { createDeterministicId } from "../lib/ids.js";
+import { createDeterministicId, hashParts } from "../lib/ids.js";
 import type { RepositoryBundle } from "../db/repositories.js";
 import type { NotionService } from "./notion.js";
+
+/** Narrow a Prisma JsonValue to Record<string, unknown>, returning undefined for non-objects. */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value != null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
 
 export async function ensureConvergenceFoundation(
   repositories: RepositoryBundle,
@@ -74,16 +81,22 @@ export async function ensureConvergenceFoundation(
     await repositories.upsertSourceConfig(dbConfig);
   }
 
-  if (!existingEditorialConfig) {
+  const currentDoctrineHash = hashParts(["layer1", doctrineMarkdown, sensitivityMarkdown]);
+  const existingLayer1 = asRecord(existingEditorialConfig?.layer1CompanyLens);
+  const storedDoctrineHash = existingLayer1
+    ? hashParts(["layer1", String(existingLayer1.doctrineMarkdown ?? ""), String(existingLayer1.sensitivityMarkdown ?? "")])
+    : null;
+
+  if (!existingEditorialConfig || currentDoctrineHash !== storedDoctrineHash) {
     const editorialConfig: EditorialConfigRecord = {
-      id: createDeterministicId("editorial-config", [company.id, "1"]),
+      id: existingEditorialConfig?.id ?? createDeterministicId("editorial-config", [company.id, "1"]),
       companyId: company.id,
-      version: 1,
+      version: existingEditorialConfig?.version ?? 1,
       layer1CompanyLens: {
         doctrineMarkdown,
         sensitivityMarkdown
       },
-      layer2ContentPhilosophy: {
+      layer2ContentPhilosophy: asRecord(existingEditorialConfig?.layer2ContentPhilosophy) ?? {
         defaults: [
           "Specific",
           "Evidence-backed",
@@ -92,7 +105,7 @@ export async function ensureConvergenceFoundation(
           "Non-generic"
         ]
       },
-      layer3LinkedInCraft: {
+      layer3LinkedInCraft: asRecord(existingEditorialConfig?.layer3LinkedInCraft) ?? {
         defaults: [
           "Max 250 words. One idea per post.",
           "First 2 lines must create a reason to click voir plus. No descriptive openings.",
@@ -103,7 +116,11 @@ export async function ensureConvergenceFoundation(
           "Vary structure across posts. Never repeat the same skeleton."
         ]
       },
-      createdAt: new Date().toISOString()
+      createdAt: existingEditorialConfig?.createdAt
+        ? (typeof existingEditorialConfig.createdAt === "string"
+            ? existingEditorialConfig.createdAt
+            : existingEditorialConfig.createdAt.toISOString())
+        : new Date().toISOString()
     };
     await repositories.upsertEditorialConfig(editorialConfig);
   }
