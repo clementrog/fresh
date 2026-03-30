@@ -33,7 +33,7 @@ import { buildSpikeWarnings, createCostEntry, createRun, finalizeRun } from "./s
 import { NotionService } from "./services/notion.js";
 import { computeRawTextExpiry } from "./services/retention.js";
 import { ensureConvergenceFoundation, resolveProfileId } from "./services/convergence.js";
-import { runIntelligencePipeline } from "./services/intelligence.js";
+import { runIntelligencePipeline, DEDUP_CANDIDATE_WINDOW } from "./services/intelligence.js";
 import { runMarketResearch } from "./services/market-research.js";
 import { findSupportingEvidence, assessDraftReadiness, deriveProvenanceType, computeReadinessTier, generateOperatorGuidance } from "./services/evidence-pack.js";
 import { fetchHubSpotSignalItems, type BridgeRepositories } from "./connectors/hubspot-signals.js";
@@ -348,7 +348,7 @@ export class EditorialSignalEngineApp {
 
       const opportunityRows = await this.repositories.listRecentActiveOpportunities({
         companyId: company.id,
-        take: 40
+        take: DEDUP_CANDIDATE_WINDOW
       });
       const recentOpportunities = opportunityRows.map((row) => this.mapOpportunityRow(row));
 
@@ -372,6 +372,20 @@ export class EditorialSignalEngineApp {
 
       for (const event of pipelineResult.usageEvents) {
         this.recordUsage(run, costs, event.usage, event.step, fallbackSteps);
+      }
+
+      // Log dedup events separately from usage/cost telemetry
+      if (pipelineResult.dedupEvents.length > 0) {
+        this.logger.info?.({
+          dedupEvents: pipelineResult.dedupEvents,
+          summary: {
+            total: pipelineResult.dedupEvents.length,
+            warnings: pipelineResult.dedupEvents.filter(e => e.action === "create-with-warning").length,
+            originHits: pipelineResult.dedupEvents.filter(e => e.action === "origin-dedup-hit" || e.action === "enrich-by-origin").length,
+            llmEnrich: pipelineResult.dedupEvents.filter(e => e.action === "enrich-by-llm").length,
+            cleanCreates: pipelineResult.dedupEvents.filter(e => e.action === "create-clean").length
+          }
+        }, "Dedup decision audit trail");
       }
 
       if (!context.dryRun) {
@@ -1788,6 +1802,7 @@ Provide a rationale explaining your assessment.`,
     evidenceFreshness: number;
     editorialOwner: string | null;
     editorialNotes?: string | null;
+    dedupFlag?: string | null;
     notionEditsPending?: boolean;
     selectedAt: Date | null;
     lastDigestAt?: Date | null;
@@ -1890,6 +1905,7 @@ Provide a rationale explaining your assessment.`,
       enrichmentLog,
       editorialOwner: row.editorialOwner ?? undefined,
       editorialNotes: row.editorialNotes ?? "",
+      dedupFlag: row.dedupFlag || undefined,
       notionEditsPending: row.notionEditsPending ?? false,
       selectedAt: row.selectedAt?.toISOString(),
       v1History: expectStringArray(row.v1HistoryJson ?? []),

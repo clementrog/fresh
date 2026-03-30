@@ -113,7 +113,8 @@ export class NotionService {
       "V1 draft": richTextProperty(draft ? `V1 generated on ${new Date().toISOString().slice(0, 10)}` : ""),
       "Selected at": opportunity.selectedAt ? dateProperty(opportunity.selectedAt) : emptyDateProperty(),
       "Editorial owner": richTextProperty(ownerDisplay),
-      "Opportunity fingerprint": richTextProperty(opportunity.notionPageFingerprint)
+      "Opportunity fingerprint": richTextProperty(opportunity.notionPageFingerprint),
+      "Dedup flag": opportunity.dedupFlag ? selectProperty(opportunity.dedupFlag) : { select: null }
     };
 
     const editableProperties = {
@@ -1085,6 +1086,7 @@ export function getDatabaseProperties(name: RequiredDatabase) {
         "Selected at": { date: {} },
         "Last digest at": { date: {} },
         "Opportunity fingerprint": { rich_text: {} },
+        "Dedup flag": { select: {} },
         "Request re-evaluation": { checkbox: {} }
       };
     case "Claap Review":

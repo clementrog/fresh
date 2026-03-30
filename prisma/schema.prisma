@@ -119,6 +119,7 @@ model Opportunity {
   primaryEvidenceId       String?
   editorialOwner          String?
   editorialNotes          String?  @default("")
+  dedupFlag               String?  @default("")
   notionEditsPending      Boolean  @default(false)
   selectedAt              DateTime?
   lastDigestAt            DateTime?

@@ -253,6 +253,7 @@ describe("intelligence sync — created opportunities", () => {
       enriched: [],
       skipped: [],
       usageEvents: [],
+      dedupEvents: [],
       processedSourceItemIds: ["ext-origin"],
       linearReviewItems: [],
       linearClassifications: new Map()
@@ -330,6 +331,7 @@ describe("intelligence sync — created opportunities", () => {
       enriched: [],
       skipped: [],
       usageEvents: [],
+      dedupEvents: [],
       processedSourceItemIds: ["ext-origin"],
       linearReviewItems: [],
       linearClassifications: new Map()
@@ -408,6 +410,7 @@ describe("intelligence sync — enriched opportunities", () => {
       }],
       skipped: [],
       usageEvents: [],
+      dedupEvents: [],
       processedSourceItemIds: ["mr-current"],
       linearReviewItems: [],
       linearClassifications: new Map()
@@ -479,6 +482,7 @@ describe("intelligence sync — claim-aware downgrade reaches Notion", () => {
       enriched: [],
       skipped: [],
       usageEvents: [],
+      dedupEvents: [],
       processedSourceItemIds: ["ext-origin"],
       linearReviewItems: [],
       linearClassifications: new Map()
@@ -561,6 +565,7 @@ describe("intelligence sync — Linear archive path", () => {
       enriched: [],
       skipped: [],
       usageEvents: [],
+      dedupEvents: [],
       processedSourceItemIds: [externalId],
       linearReviewItems: [],
       linearClassifications: new Map([[externalId, {
@@ -624,6 +629,7 @@ describe("intelligence sync — Linear archive path", () => {
       enriched: [],
       skipped: [],
       usageEvents: [],
+      dedupEvents: [],
       processedSourceItemIds: [externalId],
       linearReviewItems: [],
       linearClassifications: new Map([[externalId, {
@@ -668,6 +674,7 @@ describe("intelligence sync — screening-write warnings", () => {
       enriched: [],
       skipped: [],
       usageEvents: [],
+      dedupEvents: [],
       processedSourceItemIds: [externalId],
       linearReviewItems: [],
       linearClassifications: new Map()

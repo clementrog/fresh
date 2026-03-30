@@ -22,6 +22,7 @@ import type { LinearEnrichmentClassification } from "../config/schema.js";
 import type { LlmClient, LlmUsage } from "./llm.js";
 import { sourceItemDbId } from "../db/repositories.js";
 import { isBlockedByPublishability } from "./evidence-pack.js";
+import { tokenizeV1, tokenizeV2, removeStopWords, jaccardSimilarity } from "../lib/text.js";
 
 // --- Prefilter ---
 
@@ -269,7 +270,42 @@ export async function evaluateLinearEnrichmentPolicy(params: {
   return { results, usageEvents };
 }
 
+// --- Dedup configuration (env-var rollback switches) ---
+// Thresholds below are TEMPORARY UNCALIBRATED DEFAULTS chosen by inspection,
+// not by replay against labeled real data.  They must be validated via Phase 0
+// baseline measurement before claiming calibration is complete.  Override with
+// env vars for tuning; set DEDUP_WARNINGS_ENABLED=false to disable entirely.
+
+export const DEDUP_CANDIDATE_WINDOW = parseInt(process.env.DEDUP_CANDIDATE_WINDOW ?? "200", 10);
+export const DEDUP_SCORING_VERSION = (process.env.DEDUP_SCORING_VERSION ?? "v2") as "v1" | "v2";
+export const DEDUP_WARNINGS_ENABLED = process.env.DEDUP_WARNINGS_ENABLED !== "false";
+/** Temporary default — must be calibrated against labeled duplicate/non-duplicate pairs. */
+export const DEDUP_WARNING_THRESHOLD = parseFloat(process.env.DEDUP_WARNING_THRESHOLD ?? "0.20");
+/** Temporary default — must be calibrated against labeled duplicate/non-duplicate pairs. */
+export const DEDUP_CONFIDENCE_CUTOFF = parseFloat(process.env.DEDUP_CONFIDENCE_CUTOFF ?? "0.70");
+
+function tokenizeForScoring(text: string): Set<string> {
+  if (DEDUP_SCORING_VERSION === "v1") {
+    return new Set(tokenizeV1(text));
+  }
+  return new Set(removeStopWords(tokenizeV2(text)));
+}
+
 // --- Narrow Candidates ---
+
+export interface CandidateResult {
+  /** Top 5 candidates ranked by boosted score — passed to LLM for create/enrich decision. */
+  candidates: ContentOpportunity[];
+  /** Highest boosted score (includes owner/evidence boosts) — used for candidate ranking. */
+  topScore: number;
+  /** Highest raw topical Jaccard across ALL scored opportunities — used for duplicate warning thresholds. */
+  topTopicalScore: number;
+  /** Candidate with the highest boosted score — passed to LLM. */
+  topCandidate?: ContentOpportunity;
+  /** Candidate with the highest raw topical overlap — used for duplicate warning metadata.
+   *  May differ from topCandidate when owner/evidence boosts reorder the ranking. */
+  bestTopicalCandidate?: ContentOpportunity;
+}
 
 export function narrowCandidateOpportunities(
   item: NormalizedSourceItem,
@@ -277,49 +313,48 @@ export function narrowCandidateOpportunities(
   opportunities: ContentOpportunity[],
   companyId: string,
   opts: { enableOwnerBoost?: boolean } = {}
-): { candidates: ContentOpportunity[]; topScore: number } {
-  const itemWords = tokenize(`${item.title} ${item.summary}`);
+): CandidateResult {
+  const itemWords = tokenizeForScoring(`${item.title} ${item.summary}`);
   const itemDbId = sourceItemDbId(companyId, item.externalId);
   const enableOwnerBoost = opts.enableOwnerBoost ?? true;
 
   const scored = opportunities.map((opp) => {
-    const oppWords = tokenize(`${opp.title} ${opp.angle} ${opp.whatItIsAbout}`);
-    let score = jaccardSimilarity(itemWords, oppWords);
+    const oppWords = tokenizeForScoring(`${opp.title} ${opp.angle} ${opp.whatItIsAbout}`);
+    const topicalScore = jaccardSimilarity(itemWords, oppWords);
 
+    let boostedScore = topicalScore;
     if (enableOwnerBoost && screening.ownerSuggestion && opp.ownerProfile === screening.ownerSuggestion) {
-      score += 0.2;
+      boostedScore += 0.2;
     }
-
     if (opp.evidence.some((e) => e.sourceItemId === itemDbId)) {
-      score += 0.3;
+      boostedScore += 0.3;
     }
 
-    return { opp, score };
+    return { opp, topicalScore, boostedScore };
   });
 
+  // Best topical match — independent of boosts, across all scored opportunities
+  let bestTopicalEntry: typeof scored[0] | undefined;
+  for (const entry of scored) {
+    if (!bestTopicalEntry || entry.topicalScore > bestTopicalEntry.topicalScore) {
+      bestTopicalEntry = entry;
+    }
+  }
+
+  // Candidates ranked by boosted score for LLM
   const filtered = scored
-    .filter((entry) => entry.score > 0.05)
-    .sort((a, b) => b.score - a.score)
+    .filter((entry) => entry.boostedScore > 0.05)
+    .sort((a, b) => b.boostedScore - a.boostedScore)
     .slice(0, 5);
 
   return {
     candidates: filtered.map((entry) => entry.opp),
-    topScore: filtered.length > 0 ? filtered[0].score : 0
+    topScore: filtered.length > 0 ? filtered[0].boostedScore : 0,
+    topTopicalScore: bestTopicalEntry?.topicalScore ?? 0,
+    topCandidate: filtered.length > 0 ? filtered[0].opp : undefined,
+    bestTopicalCandidate: bestTopicalEntry && bestTopicalEntry.topicalScore > 0
+      ? bestTopicalEntry.opp : undefined
   };
-}
-
-function tokenize(text: string): Set<string> {
-  return new Set(text.toLowerCase().split(/\s+/).filter(Boolean));
-}
-
-function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 0;
-  let intersection = 0;
-  for (const word of a) {
-    if (b.has(word)) intersection++;
-  }
-  const union = a.size + b.size - intersection;
-  return union === 0 ? 0 : intersection / union;
 }
 
 // --- Create/Enrich Decision ---
@@ -794,12 +829,36 @@ export interface IntelligencePipelineParams {
   checkOriginDedupe?: OriginDedupeCheck;
 }
 
+export interface DedupEvent {
+  sourceItemId: string;
+  timestamp: string;
+  action:
+    | "origin-dedup-hit"
+    | "origin-dedup-miss"
+    | "candidate-window"
+    | "candidate-match"
+    | "candidate-miss"
+    | "create-with-warning"
+    | "create-clean"
+    | "enrich-by-llm"
+    | "enrich-by-origin";
+  matchedOpportunityId?: string;
+  matchedOpportunityTitle?: string;
+  /** Raw topical Jaccard (no boosts) — the score used for duplicate warning thresholds. */
+  topicalScore?: number;
+  /** Boosted score (topical + owner + evidence boosts) — the score used for candidate ranking. */
+  boostedScore?: number;
+  llmConfidence?: number;
+  reason: string;
+}
+
 export interface IntelligencePipelineResult {
   screeningResults: Map<string, ScreeningResult>;
   created: ContentOpportunity[];
   enriched: Array<{ opportunity: ContentOpportunity; logEntry: EnrichmentLogEntry; addedEvidence: EvidenceReference[] }>;
   skipped: Array<{ sourceItemId: string; reason: string }>;
   usageEvents: Array<{ step: string; usage: LlmUsage }>;
+  dedupEvents: DedupEvent[];
   processedSourceItemIds: string[];
   linearReviewItems: Array<{
     item: NormalizedSourceItem;
@@ -817,6 +876,7 @@ export async function runIntelligencePipeline(
     enriched: [],
     skipped: [],
     usageEvents: [],
+    dedupEvents: [],
     processedSourceItemIds: [],
     linearReviewItems: [],
     linearClassifications: new Map()
@@ -954,7 +1014,7 @@ export async function runIntelligencePipeline(
 
     try {
       const creationMode = getSourceCreationMode(item);
-      const { candidates, topScore } = narrowCandidateOpportunities(
+      const { candidates, topScore, topTopicalScore, topCandidate, bestTopicalCandidate } = narrowCandidateOpportunities(
         item,
         sr,
         workingOpportunities,
@@ -962,6 +1022,18 @@ export async function runIntelligencePipeline(
         { enableOwnerBoost: creationMode === "create-capable" }
       );
       const curated = isCuratedSource(item);
+
+      // Dedup telemetry: candidate window stats
+      result.dedupEvents.push({
+        sourceItemId: item.externalId,
+        timestamp: new Date().toISOString(),
+        action: candidates.length > 0 ? "candidate-match" : "candidate-miss",
+        topicalScore: topTopicalScore,
+        boostedScore: topScore,
+        matchedOpportunityId: bestTopicalCandidate?.id,
+        matchedOpportunityTitle: bestTopicalCandidate?.title,
+        reason: `Window ${workingOpportunities.length} opps, ${candidates.length} candidates above 0.05, topical ${topTopicalScore.toFixed(3)}, boosted ${topScore.toFixed(3)}`
+      });
 
       if (creationMode === "enrich-only" && candidates.length === 0) {
         result.skipped.push({
@@ -1033,6 +1105,14 @@ export async function runIntelligencePipeline(
             sourceItemId: item.externalId,
             reason: `Origin dedupe: opportunity "${dedupeHit.title}" (${dedupeHit.id}) already has evidence from this source item`
           });
+          result.dedupEvents.push({
+            sourceItemId: item.externalId,
+            timestamp: new Date().toISOString(),
+            action: "origin-dedup-hit",
+            matchedOpportunityId: dedupeHit.id,
+            matchedOpportunityTitle: dedupeHit.title,
+            reason: "Origin dedupe hit (DB match, not in working set) — skipped"
+          });
         } else if (existingFromSameOrigin) {
           const enrichResult = buildEnrichmentUpdate({
             existing: existingFromSameOrigin,
@@ -1048,7 +1128,30 @@ export async function runIntelligencePipeline(
           });
           const idx = workingOpportunities.findIndex(o => o.id === existingFromSameOrigin.id);
           if (idx >= 0) workingOpportunities[idx] = enrichResult.updatedOpportunity;
+          result.dedupEvents.push({
+            sourceItemId: item.externalId,
+            timestamp: new Date().toISOString(),
+            action: "enrich-by-origin",
+            matchedOpportunityId: existingFromSameOrigin.id,
+            matchedOpportunityTitle: existingFromSameOrigin.title,
+            reason: "Origin dedupe hit — converted create to enrich"
+          });
         } else {
+          // Phase-1 duplicate warning: if strong TOPICAL overlap (ignoring
+          // owner/evidence boosts) and LLM chose "create" with low confidence,
+          // attach a reviewer warning + flag.  Uses bestTopicalCandidate, not
+          // topCandidate (which is ranked by boosted score and may be a
+          // same-owner non-duplicate).
+          let dedupWarning = false;
+          if (
+            DEDUP_WARNINGS_ENABLED &&
+            topTopicalScore >= DEDUP_WARNING_THRESHOLD &&
+            finalDecision.confidence < DEDUP_CONFIDENCE_CUTOFF &&
+            bestTopicalCandidate
+          ) {
+            dedupWarning = true;
+          }
+
           const opp = buildNewOpportunity({
             decision: finalDecision,
             sourceItem: item,
@@ -1058,8 +1161,25 @@ export async function runIntelligencePipeline(
             users: params.users
           });
           if (opp) {
+            if (dedupWarning && bestTopicalCandidate) {
+              opp.editorialNotes = `[Possible overlap] Top candidate: "${bestTopicalCandidate.title}" (topical score: ${topTopicalScore.toFixed(2)})`;
+              opp.dedupFlag = "Possible duplicate";
+            }
             result.created.push(opp);
             workingOpportunities.push(opp);
+            result.dedupEvents.push({
+              sourceItemId: item.externalId,
+              timestamp: new Date().toISOString(),
+              action: dedupWarning ? "create-with-warning" : "create-clean",
+              topicalScore: topTopicalScore,
+              boostedScore: topScore,
+              llmConfidence: finalDecision.confidence,
+              matchedOpportunityId: bestTopicalCandidate?.id,
+              matchedOpportunityTitle: bestTopicalCandidate?.title,
+              reason: dedupWarning
+                ? `Created with warning: topicalScore=${topTopicalScore.toFixed(3)}, confidence=${finalDecision.confidence.toFixed(2)}`
+                : `Clean create: topicalScore=${topTopicalScore.toFixed(3)}, confidence=${finalDecision.confidence.toFixed(2)}`
+            });
           }
         }
       } else if (finalDecision.action === "enrich" && finalDecision.targetOpportunityId) {
@@ -1079,6 +1199,17 @@ export async function runIntelligencePipeline(
           });
           const idx = workingOpportunities.findIndex(o => o.id === existing.id);
           if (idx >= 0) workingOpportunities[idx] = enrichResult.updatedOpportunity;
+          result.dedupEvents.push({
+            sourceItemId: item.externalId,
+            timestamp: new Date().toISOString(),
+            action: "enrich-by-llm",
+            matchedOpportunityId: existing.id,
+            matchedOpportunityTitle: existing.title,
+            topicalScore: topTopicalScore,
+            boostedScore: topScore,
+            llmConfidence: finalDecision.confidence,
+            reason: `LLM chose enrich target "${existing.title}"`
+          });
         }
       } else {
         result.skipped.push({ sourceItemId: item.externalId, reason: finalDecision.rationale });

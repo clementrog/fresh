@@ -9,30 +9,12 @@ import type {
 } from "../domain/types.js";
 import { buildIntelligenceEvidence } from "./intelligence.js";
 import { dedupeEvidenceReferences, evidenceSignature } from "./evidence.js";
-
-// --- Stop words ---
-
-const STOP_WORDS = new Set([
-  "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-  "of", "with", "by", "from", "is", "it", "its", "this", "that", "are",
-  "was", "were", "be", "been", "being", "have", "has", "had", "do", "does",
-  "did", "will", "would", "could", "should", "may", "might", "can", "shall",
-  "not", "no", "nor", "so", "if", "then", "than", "too", "very", "just",
-  "about", "above", "after", "again", "all", "also", "am", "any", "as",
-  "because", "before", "between", "both", "each", "few", "here", "how",
-  "into", "more", "most", "other", "out", "over", "own", "same", "some",
-  "such", "them", "there", "these", "they", "through", "under", "up",
-  "what", "when", "where", "which", "while", "who", "whom", "why",
-  "de", "la", "le", "les", "un", "une", "des", "du", "et", "en", "est",
-  "que", "qui", "dans", "pour", "sur", "par", "avec", "ce", "se", "ne",
-  "pas", "son", "sa", "ses", "nous", "vous", "ils", "elle", "elles",
-  // Domain-generic words that cause false matches
-  "content", "post", "team", "company", "business", "work", "new", "way",
-  "make", "use", "get", "like", "one", "time", "now", "well", "good",
-  "need", "want", "know", "take", "see", "come", "think", "look", "go",
-  "day", "people", "thing", "part", "first", "last", "long", "great",
-  "help", "still", "even", "back", "much", "many", "only", "right", "old"
-]);
+import {
+  tokenizeV2 as tokenize,
+  removeStopWords,
+  jaccardSimilarity,
+  hasMeaningfulOverlap
+} from "../lib/text.js";
 
 // --- Publishability guard ---
 
@@ -130,57 +112,7 @@ export function deriveProvenanceType(item: NormalizedSourceItem): string {
   }
 }
 
-// --- Tokenization ---
-
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9àâäéèêëïîôùûüÿçœæ\s-]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
-}
-
-function removeStopWords(tokens: string[]): string[] {
-  return tokens.filter((t) => !STOP_WORDS.has(t) && t.length > 2);
-}
-
-function extractBigrams(tokens: string[]): Set<string> {
-  const bigrams = new Set<string>();
-  for (let i = 0; i < tokens.length - 1; i++) {
-    bigrams.add(`${tokens[i]} ${tokens[i + 1]}`);
-  }
-  return bigrams;
-}
-
-function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 0;
-  let intersection = 0;
-  for (const word of a) {
-    if (b.has(word)) intersection++;
-  }
-  const union = a.size + b.size - intersection;
-  return union === 0 ? 0 : intersection / union;
-}
-
-function hasMeaningfulOverlap(oppTokens: string[], itemTokens: string[]): boolean {
-  const oppClean = removeStopWords(oppTokens);
-  const itemClean = removeStopWords(itemTokens);
-
-  // Check bigram overlap (2-word sequence match)
-  const oppBigrams = extractBigrams(oppClean);
-  const itemBigrams = extractBigrams(itemClean);
-  for (const bigram of oppBigrams) {
-    if (itemBigrams.has(bigram)) return true;
-  }
-
-  // Check specific token overlap — at least 1 non-generic word shared
-  const oppSet = new Set(oppClean);
-  for (const token of itemClean) {
-    if (oppSet.has(token)) return true;
-  }
-
-  return false;
-}
+// Tokenization, stopwords, Jaccard, and overlap functions imported from ../lib/text.js
 
 // --- Supporting evidence search ---
 

@@ -1003,4 +1003,54 @@ describe("readToneOfVoiceProfiles body fallback", () => {
       source: "properties"
     });
   });
+
+  it("syncOpportunity includes 'Dedup flag' select property when dedupFlag is set", async () => {
+    const pagesCreate = vi.fn(async () => ({ id: "page-created" }));
+    const client = makeNotionClient({
+      pages: { create: pagesCreate, update: vi.fn(async () => ({})) },
+      databases: {
+        query: vi.fn(async () => ({ results: [], has_more: false, next_cursor: null })),
+        create: vi.fn(async () => ({ id: "db-opps" })),
+        retrieve: vi.fn(async () => ({ properties: {} })),
+        update: vi.fn(async () => ({}))
+      },
+      search: vi.fn(async () => ({ results: [] }))
+    });
+
+    const service = new NotionService("", "parent-page", { client });
+    const opp = makeOpportunity({ dedupFlag: "Possible duplicate" });
+
+    await service.syncOpportunity(opp, null);
+
+    expect(pagesCreate).toHaveBeenCalledTimes(1);
+    const createProps = (pagesCreate.mock.calls[0] as any[])[0].properties;
+    expect(createProps).toHaveProperty("Dedup flag");
+    expect(createProps["Dedup flag"]).toEqual({
+      select: { name: "Possible duplicate" }
+    });
+  });
+
+  it("syncOpportunity clears 'Dedup flag' when dedupFlag is not set", async () => {
+    const pagesCreate = vi.fn(async () => ({ id: "page-created" }));
+    const client = makeNotionClient({
+      pages: { create: pagesCreate, update: vi.fn(async () => ({})) },
+      databases: {
+        query: vi.fn(async () => ({ results: [], has_more: false, next_cursor: null })),
+        create: vi.fn(async () => ({ id: "db-opps" })),
+        retrieve: vi.fn(async () => ({ properties: {} })),
+        update: vi.fn(async () => ({}))
+      },
+      search: vi.fn(async () => ({ results: [] }))
+    });
+
+    const service = new NotionService("", "parent-page", { client });
+    const opp = makeOpportunity();  // no dedupFlag
+
+    await service.syncOpportunity(opp, null);
+
+    expect(pagesCreate).toHaveBeenCalledTimes(1);
+    const createProps = (pagesCreate.mock.calls[0] as any[])[0].properties;
+    expect(createProps).toHaveProperty("Dedup flag");
+    expect(createProps["Dedup flag"]).toEqual({ select: null });
+  });
 });

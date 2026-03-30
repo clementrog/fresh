@@ -264,6 +264,7 @@ export interface ContentOpportunity {
   enrichmentLog: EnrichmentLogEntry[];
   editorialOwner?: string;
   editorialNotes?: string;
+  dedupFlag?: string;
   notionEditsPending?: boolean;
   selectedAt?: string;
   v1History?: string[];
