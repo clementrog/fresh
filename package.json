@@ -35,7 +35,8 @@
     "sales:match": "tsx src/sales/cli.ts sales:match",
     "sales:check-config": "tsx src/sales/cli.ts sales:check-config",
     "sales:cleanup": "tsx src/sales/cli.ts sales:cleanup",
-    "sales:status": "tsx src/sales/cli.ts sales:status"
+    "sales:status": "tsx src/sales/cli.ts sales:status",
+    "sales:cleanup-orphans": "tsx src/sales/cli.ts sales:cleanup-orphans"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

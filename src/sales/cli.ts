@@ -269,6 +269,42 @@ export async function runSalesCommand(opts: SalesCommandOpts): Promise<void> {
       break;
     }
 
+    case "sales:cleanup-orphans": {
+      const companySlug = env.DEFAULT_COMPANY_SLUG ?? "default";
+      const company = await prisma.company.findUnique({ where: { slug: companySlug } });
+      if (!company) {
+        logger.error(`Company "${companySlug}" not found.`);
+        exit(1);
+        return;
+      }
+      const commit = process.argv.includes("--commit");
+      const force = process.argv.includes("--force");
+      if (force && !commit) {
+        logger.error("--force requires --commit");
+        exit(1);
+        return;
+      }
+      logger.info(`Cleaning orphaned HubSpot source items for "${company.name}" (${company.id})${commit ? " [commit]" : " [dry-run]"}${force ? " [force]" : ""}`);
+      const result = await app.runCleanupOrphans(company.id, { commit, force });
+      if (result.dryRun) {
+        logger.info({
+          scanned: result.scanned,
+          orphaned: result.orphaned,
+          estimatedCascadeEvidenceReferences: result.cascadeEvidenceReferences,
+          estimatedNulledSignalLinks: result.nulledSignalLinks,
+        }, "Dry-run completed (counts are estimates) — pass --commit to delete orphans");
+      } else {
+        logger.info({
+          scanned: result.scanned,
+          orphaned: result.orphaned,
+          deleted: result.deleted,
+          cascadeEvidenceReferences: result.cascadeEvidenceReferences,
+          nulledSignalLinks: result.nulledSignalLinks,
+        }, "Cleanup completed");
+      }
+      break;
+    }
+
     case "sales:match":
     case "sales:cleanup":
       logger.warn(`Command ${command} is not yet implemented (Slice 4+)`);
@@ -287,7 +323,7 @@ async function main() {
 
   if (!command) {
     logger.error("Usage: tsx src/sales/cli.ts <command>");
-    logger.error("Commands: sales:check-config, sales:preflight, sales:sync, sales:extract, sales:detect, sales:status, sales:diagnostics, sales:match, sales:cleanup");
+    logger.error("Commands: sales:check-config, sales:preflight, sales:sync, sales:extract, sales:detect, sales:status, sales:diagnostics, sales:cleanup-orphans, sales:match, sales:cleanup");
     process.exit(1);
   }
 

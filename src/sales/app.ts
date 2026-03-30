@@ -58,6 +58,20 @@ export interface DiagnosticsResult {
   adjustedProcessingRate: number;
 }
 
+export interface CleanupOrphansResult {
+  /** Total HubSpot fact-backed SourceItems found for this company. */
+  scanned: number;
+  /** Items whose backing SalesExtractedFact no longer exists. */
+  orphaned: number;
+  /** Items actually deleted (0 in dry-run). */
+  deleted: number;
+  dryRun: boolean;
+  /** EvidenceReference rows that would be / were CASCADE deleted. */
+  cascadeEvidenceReferences: number;
+  /** SalesSignal rows that would have / had sourceItemId SET NULL. */
+  nulledSignalLinks: number;
+}
+
 /**
  * SalesApp — top-level orchestrator for Fresh Sales.
  *
@@ -324,6 +338,140 @@ export class SalesApp {
       : 0;
 
     return { ...diag, adjustedTotal, adjustedProcessingRate };
+  }
+
+  async runCleanupOrphans(
+    companyId: string,
+    opts: { commit: boolean; force?: boolean },
+  ): Promise<CleanupOrphansResult> {
+    const FACT_PREFIX = "hubspot-fact:";
+    const BATCH_SIZE = 200;
+    const SAFETY_THRESHOLD = 500;
+
+    // --- Scan phase (outside transaction) ---
+    const hubspotItems = await this.prisma.sourceItem.findMany({
+      where: { companyId, source: "hubspot", sourceItemId: { startsWith: FACT_PREFIX } },
+      select: { id: true, sourceItemId: true },
+    });
+
+    if (hubspotItems.length === 0) {
+      return { scanned: 0, orphaned: 0, deleted: 0, dryRun: !opts.commit,
+               cascadeEvidenceReferences: 0, nulledSignalLinks: 0 };
+    }
+
+    // Parse factId from each sourceItemId
+    const itemsByFactId = new Map<string, string>(); // factId → SourceItem.id
+    const emptyFactItemIds: string[] = [];
+    for (const item of hubspotItems) {
+      const factId = item.sourceItemId.slice(FACT_PREFIX.length);
+      if (factId) {
+        itemsByFactId.set(factId, item.id);
+      } else {
+        emptyFactItemIds.push(item.id);
+      }
+    }
+
+    // Check which facts still exist
+    const existingFacts = await this.prisma.salesExtractedFact.findMany({
+      where: { id: { in: [...itemsByFactId.keys()] } },
+      select: { id: true },
+    });
+    const existingIds = new Set(existingFacts.map(f => f.id));
+
+    const orphanIds = [
+      ...emptyFactItemIds,
+      ...[...itemsByFactId.entries()]
+        .filter(([factId]) => !existingIds.has(factId))
+        .map(([, siId]) => siId),
+    ];
+
+    // Safety threshold (checked before blast-radius to avoid unnecessary queries)
+    if (opts.commit && orphanIds.length > SAFETY_THRESHOLD && !opts.force) {
+      throw new Error(
+        `Orphan count (${orphanIds.length}) exceeds safety threshold (${SAFETY_THRESHOLD}). ` +
+        `Pass --force to proceed.`,
+      );
+    }
+
+    // --- Dry-run: compute scan-phase estimates and return ---
+    if (!opts.commit) {
+      const [estEvidence, estSignals] = orphanIds.length > 0
+        ? await Promise.all([
+            this.prisma.evidenceReference.count({ where: { sourceItemId: { in: orphanIds } } }),
+            this.prisma.salesSignal.count({ where: { sourceItemId: { in: orphanIds } } }),
+          ])
+        : [0, 0];
+      return {
+        scanned: hubspotItems.length, orphaned: orphanIds.length, deleted: 0,
+        dryRun: true, cascadeEvidenceReferences: estEvidence, nulledSignalLinks: estSignals,
+      };
+    }
+
+    // --- Commit phase (inside transaction: re-validate → count dependents → delete) ---
+    if (orphanIds.length === 0) {
+      return { scanned: hubspotItems.length, orphaned: 0, deleted: 0,
+               dryRun: false, cascadeEvidenceReferences: 0, nulledSignalLinks: 0 };
+    }
+
+    const txResult = await this.prisma.$transaction(async (tx) => {
+      // Pass 1: re-validate all batches, collect still-orphaned IDs
+      const stillOrphanedIds: string[] = [];
+
+      for (let i = 0; i < orphanIds.length; i += BATCH_SIZE) {
+        const batch = orphanIds.slice(i, i + BATCH_SIZE);
+
+        const candidates = await tx.sourceItem.findMany({
+          where: { id: { in: batch } },
+          select: { id: true, sourceItemId: true },
+        });
+
+        const candidateFactIds = candidates
+          .map(c => c.sourceItemId.slice(FACT_PREFIX.length))
+          .filter(Boolean);
+
+        const nowExisting = candidateFactIds.length > 0
+          ? await tx.salesExtractedFact.findMany({
+              where: { id: { in: candidateFactIds } },
+              select: { id: true },
+            })
+          : [];
+        const nowExistingSet = new Set(nowExisting.map(f => f.id));
+
+        for (const c of candidates) {
+          const factId = c.sourceItemId.slice(FACT_PREFIX.length);
+          if (!factId || !nowExistingSet.has(factId)) {
+            stillOrphanedIds.push(c.id);
+          }
+        }
+      }
+
+      if (stillOrphanedIds.length === 0) {
+        return { orphaned: 0, deleted: 0, evidenceRefs: 0, signalLinks: 0 };
+      }
+
+      // Pass 2: count dependents BEFORE deletion (accurate blast radius)
+      const [evidenceRefs, signalLinks] = await Promise.all([
+        tx.evidenceReference.count({ where: { sourceItemId: { in: stillOrphanedIds } } }),
+        tx.salesSignal.count({ where: { sourceItemId: { in: stillOrphanedIds } } }),
+      ]);
+
+      // Pass 3: delete in batches
+      let totalDeleted = 0;
+      for (let i = 0; i < stillOrphanedIds.length; i += BATCH_SIZE) {
+        const deleteBatch = stillOrphanedIds.slice(i, i + BATCH_SIZE);
+        const result = await tx.sourceItem.deleteMany({ where: { id: { in: deleteBatch } } });
+        totalDeleted += result.count;
+      }
+
+      return { orphaned: stillOrphanedIds.length, deleted: totalDeleted, evidenceRefs, signalLinks };
+    });
+
+    return {
+      scanned: hubspotItems.length, orphaned: txResult.orphaned,
+      deleted: txResult.deleted, dryRun: false,
+      cascadeEvidenceReferences: txResult.evidenceRefs,
+      nulledSignalLinks: txResult.signalLinks,
+    };
   }
 
   async runResolveStages(companyId: string): Promise<Record<string, string>> {
