@@ -8,7 +8,7 @@ import {
   buildIntelligenceEvidence
 } from "../src/services/intelligence.js";
 import type { NormalizedSourceItem, ContentOpportunity, EvidenceReference, CreateEnrichDecision, UserRecord } from "../src/domain/types.js";
-import { normalizeGtmFields } from "../src/domain/types.js";
+import { normalizeGtmFields, normalizeGtmFieldsForOperatorEdit } from "../src/domain/types.js";
 import { sourceItemDbId } from "../src/db/repositories.js";
 import { dedupeEvidenceReferences } from "../src/services/evidence.js";
 
@@ -3522,5 +3522,79 @@ describe("GTM fields flow through buildNewOpportunity", () => {
     expect(opp!.awarenessTarget).toBeUndefined();
     expect(opp!.buyerFriction).toBeUndefined();
     expect(opp!.contentMotion).toBeUndefined();
+  });
+});
+
+describe("normalizeGtmFieldsForOperatorEdit", () => {
+  it("maps cleared select (empty string) to explicit clear", () => {
+    const result = normalizeGtmFieldsForOperatorEdit({
+      targetSegment: "",
+      editorialPillar: "",
+      awarenessTarget: "",
+      buyerFriction: "",
+      contentMotion: ""
+    });
+    expect(result.targetSegment).toBe("");
+    expect(result.editorialPillar).toBe("");
+    expect(result.awarenessTarget).toBe("");
+    expect(result.buyerFriction).toBe("");
+    expect(result.contentMotion).toBe("");
+  });
+
+  it("maps valid enum to normalized value", () => {
+    const result = normalizeGtmFieldsForOperatorEdit({
+      targetSegment: "Cabinet-Owner",
+      editorialPillar: "PROOF",
+      contentMotion: "demand-capture"
+    });
+    expect(result.targetSegment).toBe("cabinet-owner");
+    expect(result.editorialPillar).toBe("proof");
+    expect(result.contentMotion).toBe("demand-capture");
+  });
+
+  it("maps invalid non-empty enum to undefined (preserves DB)", () => {
+    const result = normalizeGtmFieldsForOperatorEdit({
+      targetSegment: "ceo",
+      editorialPillar: "hot-take",
+      contentMotion: "viral"
+    });
+    expect(result.targetSegment).toBeUndefined();
+    expect(result.editorialPillar).toBeUndefined();
+    expect(result.contentMotion).toBeUndefined();
+  });
+
+  it("maps null to explicit clear", () => {
+    const result = normalizeGtmFieldsForOperatorEdit({
+      targetSegment: null,
+      buyerFriction: null
+    });
+    expect(result.targetSegment).toBe("");
+    expect(result.buyerFriction).toBe("");
+  });
+
+  it("maps undefined to undefined (field absent — preserve DB)", () => {
+    const result = normalizeGtmFieldsForOperatorEdit({
+      targetSegment: undefined,
+      editorialPillar: undefined,
+      buyerFriction: undefined
+    });
+    expect(result.targetSegment).toBeUndefined();
+    expect(result.editorialPillar).toBeUndefined();
+    expect(result.buyerFriction).toBeUndefined();
+  });
+
+  it("distinguishes undefined (preserve) from null (clear) from empty (clear)", () => {
+    const result = normalizeGtmFieldsForOperatorEdit({
+      targetSegment: undefined,  // absent → preserve
+      editorialPillar: null,     // explicit clear
+      awarenessTarget: "",       // explicit clear
+      buyerFriction: "real friction",
+      contentMotion: "ceo"       // invalid → preserve
+    });
+    expect(result.targetSegment).toBeUndefined();
+    expect(result.editorialPillar).toBe("");
+    expect(result.awarenessTarget).toBe("");
+    expect(result.buyerFriction).toBe("real friction");
+    expect(result.contentMotion).toBeUndefined();
   });
 });

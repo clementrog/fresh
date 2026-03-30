@@ -132,7 +132,12 @@ describe("Notion pull-edits", () => {
         whatItIsAbout: "Edited About",
         whatItIsNotAbout: "Edited Not about",
         sourceUrl: "https://edited.com",
-        editorialNotes: "User notes"
+        editorialNotes: "User notes",
+        targetSegment: "",
+        editorialPillar: "",
+        awarenessTarget: "",
+        buyerFriction: "",
+        contentMotion: ""
       });
 
       // Verify the filter was applied
@@ -141,6 +146,77 @@ describe("Notion pull-edits", () => {
         property: "Request re-evaluation",
         checkbox: { equals: true }
       });
+    });
+
+    it("unsupported non-empty Notion GTM select values normalize to undefined (skipped writes)", async () => {
+      const page = makeNotionPage("page-gtm", {
+        "Target segment": { type: "select", select: { name: "ceo" } },
+        "Editorial pillar": { type: "select", select: { name: "hot-take" } },
+        "Awareness target": { type: "select", select: { name: "solution-aware" } },
+        "Buyer friction": { type: "rich_text", rich_text: [{ plain_text: "Real friction text" }] },
+        "Content motion": { type: "select", select: { name: "brand-awareness" } }
+      });
+      const client = makeNotionClient({
+        databases: {
+          query: vi.fn(async () => ({
+            results: [page],
+            has_more: false,
+            next_cursor: null
+          })),
+          create: vi.fn(async () => ({ id: "db-opps" })),
+          retrieve: vi.fn(async () => ({ properties: {} })),
+          update: vi.fn(async () => ({}))
+        }
+      });
+
+      const service = new NotionService("", "parent-page", { client });
+      const results = await service.listReEvaluationRequests();
+
+      expect(results).toHaveLength(1);
+      const row = results[0];
+      // Invalid enum values → undefined (conditional spread will skip, preserving DB)
+      expect(row.targetSegment).toBeUndefined();
+      expect(row.editorialPillar).toBeUndefined();
+      // Valid enum → normalized
+      expect(row.awarenessTarget).toBe("solution-aware");
+      // Freeform → preserved as-is
+      expect(row.buyerFriction).toBe("Real friction text");
+      // Invalid enum → undefined
+      expect(row.contentMotion).toBeUndefined();
+    });
+
+    it("cleared Notion GTM selects normalize to empty string (explicit clear)", async () => {
+      const page = makeNotionPage("page-cleared", {
+        "Target segment": { type: "select", select: null },
+        "Editorial pillar": { type: "select", select: null },
+        "Awareness target": { type: "select", select: null },
+        "Buyer friction": { type: "rich_text", rich_text: [] },
+        "Content motion": { type: "select", select: null }
+      });
+      const client = makeNotionClient({
+        databases: {
+          query: vi.fn(async () => ({
+            results: [page],
+            has_more: false,
+            next_cursor: null
+          })),
+          create: vi.fn(async () => ({ id: "db-opps" })),
+          retrieve: vi.fn(async () => ({ properties: {} })),
+          update: vi.fn(async () => ({}))
+        }
+      });
+
+      const service = new NotionService("", "parent-page", { client });
+      const results = await service.listReEvaluationRequests();
+
+      expect(results).toHaveLength(1);
+      const row = results[0];
+      // All cleared → "" (will persist as clear to DB via conditional spread)
+      expect(row.targetSegment).toBe("");
+      expect(row.editorialPillar).toBe("");
+      expect(row.awarenessTarget).toBe("");
+      expect(row.buyerFriction).toBe("");
+      expect(row.contentMotion).toBe("");
     });
 
     it("3. returns empty array when no rows are checked", async () => {
