@@ -112,6 +112,7 @@ model Opportunity {
   buyerFriction           String?  @default("")
   contentMotion           String?  @default("")
   angle                   String
+  editorialClaim          String?  @default("")
   whyNow                  String
   whatItIsAbout           String
   whatItIsNotAbout        String

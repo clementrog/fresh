@@ -22,7 +22,9 @@ import type { LinearEnrichmentClassification } from "../config/schema.js";
 import type { LlmClient, LlmUsage } from "./llm.js";
 import { sourceItemDbId } from "../db/repositories.js";
 import { isBlockedByPublishability } from "./evidence-pack.js";
-import { tokenizeV1, tokenizeV2, removeStopWords, jaccardSimilarity } from "../lib/text.js";
+import { tokenizeV1, tokenizeV2, removeStopWords, jaccardSimilarity, hasMeaningfulOverlap, assessAngleSharpness } from "../lib/text.js";
+import type { AngleSharpnessResult } from "../lib/text.js";
+import type { AngleQualitySignals } from "../domain/types.js";
 
 // --- Prefilter ---
 
@@ -290,6 +292,16 @@ export const DEDUP_WARNINGS_ENABLED = process.env.DEDUP_WARNINGS_ENABLED !== "fa
 export const DEDUP_WARNING_THRESHOLD = parseFloat(process.env.DEDUP_WARNING_THRESHOLD ?? "0.20");
 /** Temporary default — must be calibrated against labeled duplicate/non-duplicate pairs. */
 export const DEDUP_CONFIDENCE_CUTOFF = parseFloat(process.env.DEDUP_CONFIDENCE_CUTOFF ?? "0.70");
+
+// --- Angle quality gate mode ---
+// "v2" = full contract enforcement (default), "v1" = legacy length-only, "observe" = run v2 but use v1 verdict
+export type AngleQualityGateMode = "v1" | "v2" | "observe";
+/** Read at call time so tests can override via process.env */
+export function getAngleQualityGateMode(): AngleQualityGateMode {
+  return (process.env.ANGLE_QUALITY_GATE ?? "v2") as AngleQualityGateMode;
+}
+// Backwards-compat: exported constant for import convenience (reads at module load)
+export const ANGLE_QUALITY_GATE = getAngleQualityGateMode();
 /** Kill switch for displacement rescue — independent of warnings.  Set to "false" to disable. */
 export const DEDUP_RESCUE_ENABLED = process.env.DEDUP_RESCUE_ENABLED !== "false";
 
@@ -521,67 +533,339 @@ export function normalizeCreateEnrichDecision(params: {
   };
 }
 
-function enforceCreateQualityGate(params: {
+// --- Angle quality contract ---
+
+export interface AngleContractDimensionResult {
+  pass: boolean;
+  reason: string;
+}
+
+export interface AngleContractResult {
+  verdict: "pass" | "warn" | "fail";
+  dimensionResults: {
+    specificity: AngleContractDimensionResult;
+    consequence: AngleContractDimensionResult;
+    tensionOrContrast: AngleContractDimensionResult;
+    traceableEvidence: AngleContractDimensionResult;
+    positionSharpening: AngleContractDimensionResult;
+  };
+  sharpness: AngleSharpnessResult;
+  passedCount: number;
+  gateDecisionPath: string[];
+}
+
+export interface AngleQualityEvent {
+  sourceItemId: string;
+  angle: string;
+  editorialClaim?: string;
+  action: "passed" | "warned" | "blocked-skip" | "blocked-enrich" | "enrich-no-substance";
+  gateMode: AngleQualityGateMode;
+  contractResult: AngleContractResult | null;
+  curated: boolean;
+}
+
+const DOMAIN_TERMS_FOR_POSITION = /\b(linc|cabinet|cabinets|paie|payroll|dsn|hcr|ccn|dpae|bulletin|fiche|solde|regularisation|régularisation|migration|conformit|compliance)\b/i;
+
+function checkDimension(
+  signalValue: string | undefined,
+  crossCheck: boolean,
+  crossCheckReason: string
+): AngleContractDimensionResult {
+  const signalPresent = signalValue !== undefined
+    && signalValue.trim().length >= 15
+    && signalValue.trim().toLowerCase() !== "none";
+  if (signalPresent && crossCheck) return { pass: true, reason: "signal and cross-check passed" };
+  if (!signalPresent && crossCheck) return { pass: crossCheck, reason: "signal absent but cross-check passed" };
+  if (signalPresent && !crossCheck) return { pass: false, reason: crossCheckReason };
+  return { pass: false, reason: `signal ${signalPresent ? "present" : "absent"}; ${crossCheckReason}` };
+}
+
+export function evaluateAngleContract(params: {
+  decision: CreateEnrichDecision;
+  item: NormalizedSourceItem;
+  evidence: EvidenceReference[];
+  curated: boolean;
+}): AngleContractResult {
+  const { decision, item, evidence, curated } = params;
+  const signals = decision.angleQualitySignals;
+  const gateDecisionPath: string[] = [];
+
+  // Deterministic sharpness assessment
+  const sharpness = assessAngleSharpness(decision.angle, item.title);
+  gateDecisionPath.push(`sharpness: ${sharpness.isSharp ? "pass" : `fail (${sharpness.failedChecks.join(", ")})`}`);
+
+  // Cross-checks for each dimension
+  const angleTokens = removeStopWords(tokenizeV2(decision.angle));
+  const topicTokens = removeStopWords(tokenizeV2(decision.whatItIsAbout));
+  const angleSet = new Set(angleTokens);
+  const topicSet = new Set(topicTokens);
+  const angleTopicJaccard = jaccardSimilarity(angleSet, topicSet);
+
+  const specificity = checkDimension(
+    signals?.specificity,
+    angleTopicJaccard < 0.6,
+    `angle too similar to topic (Jaccard ${angleTopicJaccard.toFixed(2)} >= 0.6)`
+  );
+
+  const consequenceText = (signals?.consequence ?? "").toLowerCase();
+  const hasChangeLanguage = /\b(chang\w*|improv\w*|reduc\w*|increas\w*|eliminat\w*|enabl\w*|sav\w*|prevent\w*|decid\w*|prioritiz\w*|migrat\w*|organiz\w*|control\w*|explain\w*|review\w*|delay\w*|block\w*|cost\w*|acceler\w*|simplif\w*)\b/i.test(consequenceText);
+  const consequence = checkDimension(
+    signals?.consequence,
+    hasChangeLanguage || (signals?.consequence === undefined && sharpness.checks.hasStake),
+    "no action/change language in consequence"
+  );
+
+  const claimOrAngle = (decision.editorialClaim ?? decision.angle).toLowerCase();
+  const hasTensionInClaim = sharpness.checks.hasStake;
+  const tensionOrContrast = checkDimension(
+    signals?.tensionOrContrast,
+    hasTensionInClaim,
+    "no tension/contrast in editorial claim or angle"
+  );
+
+  const hasSubstantiveEvidence = evidence.some((e) => e.excerpt && e.excerpt.trim().length >= 30);
+  const traceableEvidence = checkDimension(
+    signals?.traceableEvidence,
+    hasSubstantiveEvidence,
+    "no evidence excerpt >= 30 chars"
+  );
+
+  const posSignal = (signals?.positionSharpening ?? "").toLowerCase();
+  const hasDomainRef = DOMAIN_TERMS_FOR_POSITION.test(posSignal) || DOMAIN_TERMS_FOR_POSITION.test(claimOrAngle);
+  const positionSharpening = checkDimension(
+    signals?.positionSharpening,
+    hasDomainRef,
+    "no domain term reference in position-sharpening"
+  );
+
+  const dimensionResults = { specificity, consequence, tensionOrContrast, traceableEvidence, positionSharpening };
+  const allDims = Object.values(dimensionResults);
+  const passedCount = allDims.filter((d) => d.pass).length;
+
+  // Sharpness-critical dimensions (never relaxable)
+  const criticalPass = specificity.pass && consequence.pass && tensionOrContrast.pass;
+  // Evidence/positioning dimensions (relaxable for curated)
+  const relaxablePass = traceableEvidence.pass && positionSharpening.pass;
+  const relaxableCount = [traceableEvidence, positionSharpening].filter((d) => d.pass).length;
+
+  let verdict: "pass" | "warn" | "fail";
+  if (sharpness.isSharp && criticalPass && relaxablePass) {
+    verdict = "pass";
+    gateDecisionPath.push("all 5 dimensions passed");
+  } else if (sharpness.isSharp && criticalPass && curated && relaxableCount >= 1) {
+    verdict = "warn";
+    gateDecisionPath.push(`curated warn: ${passedCount}/5 dimensions (${5 - passedCount} relaxed)`);
+  } else {
+    verdict = "fail";
+    const reasons: string[] = [];
+    if (!sharpness.isSharp) reasons.push("sharpness failed");
+    if (!criticalPass) {
+      if (!specificity.pass) reasons.push("specificity failed");
+      if (!consequence.pass) reasons.push("consequence failed");
+      if (!tensionOrContrast.pass) reasons.push("tension/contrast failed");
+    }
+    if (!relaxablePass && !curated) {
+      if (!traceableEvidence.pass) reasons.push("traceable evidence failed");
+      if (!positionSharpening.pass) reasons.push("position-sharpening failed");
+    }
+    gateDecisionPath.push(`fail: ${reasons.join(", ")}`);
+  }
+
+  return { verdict, dimensionResults, sharpness, passedCount, gateDecisionPath };
+}
+
+// --- Enrich downgrade: find a concrete content match ---
+
+function findConcreteEnrichCandidate(params: {
+  item: NormalizedSourceItem;
+  evidence: EvidenceReference[];
+  candidates: ContentOpportunity[];
+}): ContentOpportunity | null {
+  const itemTokens = tokenizeV2(params.item.title + " " + params.item.summary);
+  const itemEvidenceSignatures = new Set(params.evidence.map(evidenceSignature));
+
+  type ScoredCandidate = { opp: ContentOpportunity; jaccard: number };
+  const matches: ScoredCandidate[] = [];
+
+  for (const opp of params.candidates) {
+    const oppTokens = tokenizeV2(opp.title + " " + opp.angle + " " + opp.whatItIsAbout);
+
+    // Check 1: meaningful keyword overlap (bigrams or shared non-stopword tokens)
+    if (!hasMeaningfulOverlap(oppTokens, itemTokens)) continue;
+
+    // Check 2: new evidence available (at least one excerpt not already on this opportunity)
+    const existingSignatures = new Set(opp.evidence.map(evidenceSignature));
+    const hasNewEvidence = params.evidence.some(
+      (e) => !existingSignatures.has(evidenceSignature(e))
+    );
+    if (!hasNewEvidence) continue;
+
+    // Tiebreaker: raw Jaccard score
+    const oppClean = new Set(removeStopWords(oppTokens));
+    const itemClean = new Set(removeStopWords(itemTokens));
+    const jaccard = jaccardSimilarity(oppClean, itemClean);
+    matches.push({ opp, jaccard });
+  }
+
+  if (matches.length === 0) return null;
+  matches.sort((a, b) => b.jaccard - a.jaccard);
+  return matches[0].opp;
+}
+
+// --- Quality gate ---
+
+function enforceCreateQualityGateLegacy(params: {
   item: NormalizedSourceItem;
   decision: CreateEnrichDecision;
   curated: boolean;
-}): CreateEnrichDecision {
-  if (params.decision.action !== "create") {
-    return params.decision;
-  }
-
+}): { decision: CreateEnrichDecision; failureReasons: string[] } {
   const failureReasons: string[] = [];
   const summaryLength = params.item.summary.trim().length;
   const textLength = params.item.text.trim().length;
 
   if (params.curated) {
-    // Curated tier: lower thresholds, still blocks junk
-    if (params.decision.confidence < 0.4) {
-      failureReasons.push("confidence below 0.4");
-    }
-    if (params.decision.title.trim().length < 6) {
-      failureReasons.push("title too short");
-    }
-    if (params.decision.angle.trim().length < 10) {
-      failureReasons.push("angle too short");
-    }
-    if (params.decision.whatItIsAbout.trim().length < 10) {
-      failureReasons.push("what-it-is-about too short");
-    }
-    if (summaryLength < 30 && textLength < 60) {
-      failureReasons.push("source evidence is too thin");
-    }
+    if (params.decision.confidence < 0.4) failureReasons.push("confidence below 0.4");
+    if (params.decision.title.trim().length < 6) failureReasons.push("title too short");
+    if (params.decision.angle.trim().length < 10) failureReasons.push("angle too short");
+    if (params.decision.whatItIsAbout.trim().length < 10) failureReasons.push("what-it-is-about too short");
+    if (summaryLength < 30 && textLength < 60) failureReasons.push("source evidence is too thin");
   } else {
-    // Strict tier: unchanged thresholds
-    if (params.decision.confidence < 0.7) {
-      failureReasons.push("confidence below 0.7");
-    }
-    if (params.decision.title.trim().length < 16) {
-      failureReasons.push("title too short");
-    }
-    if (params.decision.angle.trim().length < 24) {
-      failureReasons.push("angle too short");
-    }
-    if (params.decision.whyNow.trim().length < 24) {
-      failureReasons.push("why-now too short");
-    }
-    if (params.decision.whatItIsAbout.trim().length < 24) {
-      failureReasons.push("what-it-is-about too short");
-    }
-    if (summaryLength < 60 && textLength < 180) {
-      failureReasons.push("source evidence is too thin");
-    }
+    if (params.decision.confidence < 0.7) failureReasons.push("confidence below 0.7");
+    if (params.decision.title.trim().length < 16) failureReasons.push("title too short");
+    if (params.decision.angle.trim().length < 24) failureReasons.push("angle too short");
+    if (params.decision.whyNow.trim().length < 24) failureReasons.push("why-now too short");
+    if (params.decision.whatItIsAbout.trim().length < 24) failureReasons.push("what-it-is-about too short");
+    if (summaryLength < 60 && textLength < 180) failureReasons.push("source evidence is too thin");
   }
 
-  if (failureReasons.length === 0) {
-    return params.decision;
+  if (failureReasons.length === 0) return { decision: params.decision, failureReasons };
+
+  return {
+    decision: {
+      ...params.decision,
+      action: "skip",
+      targetOpportunityId: undefined,
+      rationale: `${params.decision.rationale} Skipped create because the quality gate failed: ${failureReasons.join("; ")}.`
+    },
+    failureReasons
+  };
+}
+
+export function enforceCreateQualityGate(params: {
+  item: NormalizedSourceItem;
+  decision: CreateEnrichDecision;
+  curated: boolean;
+  evidence: EvidenceReference[];
+  candidates: ContentOpportunity[];
+}): { decision: CreateEnrichDecision; contractResult: AngleContractResult | null } {
+  if (params.decision.action !== "create") {
+    return { decision: params.decision, contractResult: null };
+  }
+
+  // Action-aware field validation: create requires non-empty opportunity fields
+  const requiredFields = ["title", "angle", "whyNow", "whatItIsAbout", "whatItIsNotAbout", "suggestedFormat", "territory"] as const;
+  const emptyFields = requiredFields.filter((f) => !params.decision[f]?.trim());
+  if (emptyFields.length > 0) {
+    return {
+      decision: {
+        ...params.decision,
+        action: "skip",
+        targetOpportunityId: undefined,
+        rationale: `${params.decision.rationale} Skipped create: required fields empty (${emptyFields.join(", ")}).`,
+        skipReasons: [`required fields empty: ${emptyFields.join(", ")}`]
+      },
+      contractResult: null
+    };
+  }
+
+  const gateMode = getAngleQualityGateMode();
+
+  // v1 legacy checks (always run as baseline)
+  const legacy = enforceCreateQualityGateLegacy({
+    item: params.item,
+    decision: params.decision,
+    curated: params.curated
+  });
+
+  if (gateMode === "v1") {
+    return { decision: legacy.decision, contractResult: null };
+  }
+
+  // v2 / observe: run full contract
+  const contractResult = evaluateAngleContract({
+    decision: params.decision,
+    item: params.item,
+    evidence: params.evidence,
+    curated: params.curated
+  });
+
+  // In observe mode, return v1 verdict but include v2 contract result for telemetry.
+  // Append what v2 would have done so telemetry can report correctly.
+  if (gateMode === "observe") {
+    if (contractResult.verdict === "fail") {
+      const enrichCandidate = findConcreteEnrichCandidate({
+        item: params.item,
+        evidence: params.evidence,
+        candidates: params.candidates
+      });
+      if (enrichCandidate) {
+        contractResult.gateDecisionPath.push(`[observe] would enrich on "${enrichCandidate.title}"`);
+      }
+    }
+    return { decision: legacy.decision, contractResult };
+  }
+
+  // v2 mode: v1 must also pass (baseline length/confidence checks)
+  if (legacy.failureReasons.length > 0) {
+    return {
+      decision: legacy.decision,
+      contractResult
+    };
+  }
+
+  // v2 verdict
+  if (contractResult.verdict === "pass") {
+    return { decision: params.decision, contractResult };
+  }
+
+  if (contractResult.verdict === "warn") {
+    return {
+      decision: {
+        ...params.decision,
+        rationale: `${params.decision.rationale} [Angle quality warning: ${contractResult.gateDecisionPath.join("; ")}]`
+      },
+      contractResult
+    };
+  }
+
+  // verdict === "fail": try enrich downgrade with concrete content match
+  const enrichCandidate = findConcreteEnrichCandidate({
+    item: params.item,
+    evidence: params.evidence,
+    candidates: params.candidates
+  });
+
+  if (enrichCandidate) {
+    return {
+      decision: {
+        ...params.decision,
+        action: "enrich",
+        targetOpportunityId: enrichCandidate.id,
+        rationale: `${params.decision.rationale} Angle quality gate failed (${contractResult.gateDecisionPath.join("; ")}). Downgraded to enrich on "${enrichCandidate.title}" based on concrete content match.`
+      },
+      contractResult
+    };
   }
 
   return {
-    ...params.decision,
-    action: "skip",
-    targetOpportunityId: undefined,
-    rationale: `${params.decision.rationale} Skipped create because the quality gate failed: ${failureReasons.join("; ")}.`
+    decision: {
+      ...params.decision,
+      action: "skip",
+      targetOpportunityId: undefined,
+      rationale: `${params.decision.rationale} Angle quality gate failed: ${contractResult.gateDecisionPath.join("; ")}.`,
+      skipReasons: contractResult.gateDecisionPath
+    },
+    contractResult
   };
 }
 
@@ -630,18 +914,40 @@ export async function decideCreateOrEnrich(params: {
       "- contentMotion: why does this content exist in the GTM motion? One of: category, demand-capture, trust, recruiting",
       "",
     ] : []),
+    "## Angle quality contract",
+    "",
+    "### Three levels of editorial specificity",
+    "- `whatItIsAbout`: the broad subject/topic",
+    "- `angle`: the specific editorial framing — MUST go beyond the topic",
+    "- `editorialClaim`: the position, tension, or consequence — what makes this worth reading",
+    "",
+    "### Quality self-assessment",
+    "For create/enrich, provide `angleQualitySignals`:",
+    "- specificity: What concrete fact/tension makes this specific?",
+    "- consequence: What changes for the reader/cabinet?",
+    "- tensionOrContrast: What contradiction/surprise exists? Write \"none\" if genuinely absent.",
+    "- traceableEvidence: What source material backs this? Quote or cite.",
+    "- positionSharpening: How does this define Linc's position vs generic commentary?",
+    "",
+    "### Do NOT create when:",
+    "- Angle is a topic label or broad question",
+    "- Angle could appear in any B2B SaaS content calendar",
+    "- No concrete stake, consequence, or tension",
+    "- Evidence too thin, future/speculative, or technically true but editorially useless",
+    "Use enrich (if candidate matches) or skip with skipReasons instead.",
+    "",
+    "### Enrich requirements",
+    "Enrich only when the source adds a concrete new proof point, a sharper angle, or a distinct evidence thread. Do not enrich just because the topic overlaps.",
+    "",
+    "### Examples",
+    "BAD angles (will be blocked): \"Payroll automation trends\" (topic label), \"The importance of reliability\" (generic), \"How cabinets think about migration\" (no claim)",
+    "GOOD angles: \"Cabinets run dual payroll for 3 months because no vendor proves parity upfront\", \"DSN regularization failures cost 2-3h per cycle but most assume it's unavoidable\", \"Clickable payslip gives cabinets proof of calculation logic for the first time\"",
+    "",
     params.creationMode === "enrich-only"
       ? "This source is evidence-shaped and may only enrich an existing opportunity or be skipped. Never create a new opportunity from it."
       : params.curated
-        ? "This is a curated source with established provenance. Create a new opportunity if it contains at least one concrete insight, problem, or event — even if the framing is rough. You do not need polished prose or a fully developed angle. Focus on whether real substance exists, not on presentation quality."
-        : "This source may create a new opportunity if it contains a reusable insight with enough substance.",
-    "",
-    "## Create quality expectations",
-    "A 'create' decision must produce a sharp angle: a specific claim, tension, or lesson — not a vague topic label.",
-    "- The angle must be position-sharpening: it helps explain what Linc sees, rejects, or is building around.",
-    "- If the signal is interesting but the angle would be generic (could come from any company), skip or enrich — do not create.",
-    "- If the topic is future-facing, speculative, or under co-construction, prefer skip over create. Only create from shipped reality or observed field evidence.",
-    "- For enrich: the signal must add a concrete new proof point, pattern, or angle. Do not enrich with redundant evidence.",
+        ? "This is a curated source with established provenance. Create a new opportunity if the angle is sharp and specific — even if the framing is rough. Focus on whether real substance exists, not on presentation quality."
+        : "This source may create a new opportunity if it contains a reusable insight with enough substance and a sharp, specific angle.",
     "",
     params.creationMode === "enrich-only"
       ? "Decide: 'enrich' an existing opportunity (provide targetOpportunityId) or 'skip'."
@@ -649,7 +955,9 @@ export async function decideCreateOrEnrich(params: {
         ? "Decide: 'create' a new opportunity, 'enrich' an existing one (provide targetOpportunityId), or 'skip'."
         : "No existing opportunities match. Decide whether to 'create' a new opportunity or 'skip'.",
     "Return JSON matching the createEnrichDecision schema.",
-    "IMPORTANT: All string fields (title, territory, angle, whyNow, whatItIsAbout, whatItIsNotAbout, suggestedFormat) must be non-empty even when action is 'skip'. For skip actions, populate them with your best assessment of what the opportunity would have been."
+    "For skip actions: provide rationale and skipReasons. Opportunity fields (title, angle, etc.) may be empty strings. Do NOT fabricate fields to make a skip look like an opportunity.",
+    "For create actions: all opportunity fields must be substantive and non-empty.",
+    "For enrich actions: if the enrichment only adds new evidence and the existing angle/whyNow are already good, you may leave those fields empty or matching the existing values. Do not fabricate changes. Provide non-empty fields only when you have a genuinely sharper angle or updated whyNow to suggest."
   ].join("\n");
 
   const prompt = [
@@ -695,15 +1003,15 @@ export async function decideCreateOrEnrich(params: {
     return {
       action: "skip",
       rationale: "LLM fallback — skipped because structured output failed. Create-capable sources require a real LLM decision to create.",
-      title: params.item.title,
-      ownerDisplayName: params.screening.ownerSuggestion,
-      territory: "general",
-      angle: params.item.summary.slice(0, 200),
-      whyNow: `Fresh evidence from ${params.item.source} on ${params.item.occurredAt}`,
-      whatItIsAbout: params.item.summary,
-      whatItIsNotAbout: "Requires editorial review — generated from LLM fallback.",
-      suggestedFormat: "Narrative lesson post",
-      confidence: 0
+      title: "",
+      territory: "",
+      angle: "",
+      whyNow: "",
+      whatItIsAbout: "",
+      whatItIsNotAbout: "",
+      suggestedFormat: "",
+      confidence: 0,
+      skipReasons: ["LLM structured output failed"]
     };
   };
 
@@ -774,6 +1082,7 @@ export function buildNewOpportunity(params: {
       contentMotion: params.decision.contentMotion,
     }),
     angle: params.decision.angle,
+    editorialClaim: params.decision.editorialClaim,
     whyNow: params.decision.whyNow,
     whatItIsAbout: params.decision.whatItIsAbout,
     whatItIsNotAbout: params.decision.whatItIsNotAbout,
@@ -815,13 +1124,19 @@ export function buildEnrichmentUpdate(params: {
 
   const primaryEvidence = selectPrimaryEvidence(allEvidence);
 
+  // Sanitize enrich outputs: blank/empty strings must not become suggested updates
+  const sanitizedAngle = params.decision.angle?.trim() || undefined;
+  const sanitizedWhyNow = params.decision.whyNow?.trim() || undefined;
+  const sanitizedClaim = params.decision.editorialClaim?.trim() || undefined;
+
   const logEntry: EnrichmentLogEntry = {
     createdAt: new Date().toISOString(),
     rawSourceItemId: params.sourceItem.externalId,
     evidenceIds: addedEvidence.map((e) => e.id),
     contextComment: params.decision.rationale,
-    suggestedAngleUpdate: params.decision.angle !== params.existing.angle ? params.decision.angle : undefined,
-    suggestedWhyNowUpdate: params.decision.whyNow !== params.existing.whyNow ? params.decision.whyNow : undefined,
+    suggestedAngleUpdate: sanitizedAngle && sanitizedAngle !== params.existing.angle ? sanitizedAngle : undefined,
+    suggestedWhyNowUpdate: sanitizedWhyNow && sanitizedWhyNow !== params.existing.whyNow ? sanitizedWhyNow : undefined,
+    suggestedEditorialClaimUpdate: sanitizedClaim && sanitizedClaim !== (params.existing.editorialClaim ?? undefined) ? sanitizedClaim : undefined,
     ownerSuggestionUpdate: params.ownerUserId && params.ownerUserId !== params.existing.ownerUserId
       ? params.ownerUserId
       : undefined,
@@ -916,6 +1231,7 @@ export interface IntelligencePipelineResult {
   skipped: Array<{ sourceItemId: string; reason: string }>;
   usageEvents: Array<{ step: string; usage: LlmUsage }>;
   dedupEvents: DedupEvent[];
+  angleQualityEvents: AngleQualityEvent[];
   processedSourceItemIds: string[];
   linearReviewItems: Array<{
     item: NormalizedSourceItem;
@@ -934,6 +1250,7 @@ export async function runIntelligencePipeline(
     skipped: [],
     usageEvents: [],
     dedupEvents: [],
+    angleQualityEvents: [],
     processedSourceItemIds: [],
     linearReviewItems: [],
     linearClassifications: new Map()
@@ -1119,7 +1436,47 @@ export async function runIntelligencePipeline(
         gtmFoundationMarkdown: params.gtmFoundationMarkdown
       });
       result.usageEvents.push({ step: "create-enrich", usage });
-      const finalDecision = enforceCreateQualityGate({ item, decision, curated });
+      const { decision: gatedDecision, contractResult } = enforceCreateQualityGate({
+        item, decision, curated, evidence, candidates
+      });
+      const finalDecision = gatedDecision;
+
+      // Emit angle quality event — always report v2 verdict, not the final action
+      // (in observe mode, v1 drives the real decision but telemetry shows what v2 would do)
+      if (decision.action === "create" && contractResult) {
+        const v2Verdict = contractResult.verdict;
+        // Determine blocked-enrich vs blocked-skip:
+        // - In v2 mode: check if the gate actually downgraded to enrich
+        // - In observe mode: check if the gate path indicates an enrich candidate was found
+        const wasDowngradedToEnrich = finalDecision.action === "enrich"
+          || contractResult.gateDecisionPath.some(p => p.includes("enrich"));
+        const eventAction: AngleQualityEvent["action"] =
+          v2Verdict === "pass" ? "passed"
+          : v2Verdict === "warn" ? "warned"
+          : wasDowngradedToEnrich ? "blocked-enrich"
+          : "blocked-skip";
+        result.angleQualityEvents.push({
+          sourceItemId: item.externalId,
+          angle: decision.angle,
+          editorialClaim: decision.editorialClaim,
+          action: eventAction,
+          gateMode: getAngleQualityGateMode(),
+          contractResult,
+          curated
+        });
+      } else if (decision.action === "create" && !contractResult) {
+        // v1 mode or empty-field skip — no contract result, report based on final action
+        const eventAction: AngleQualityEvent["action"] = finalDecision.action === "create" ? "passed" : "blocked-skip";
+        result.angleQualityEvents.push({
+          sourceItemId: item.externalId,
+          angle: decision.angle,
+          editorialClaim: decision.editorialClaim,
+          action: eventAction,
+          gateMode: getAngleQualityGateMode(),
+          contractResult: null,
+          curated
+        });
+      }
 
       // Map ownerDisplayName -> User.id
       let ownerUserId: string | undefined;
@@ -1180,21 +1537,44 @@ export async function runIntelligencePipeline(
             newEvidence: evidence,
             ownerUserId
           });
-          result.enriched.push({
-            opportunity: enrichResult.updatedOpportunity,
-            logEntry: enrichResult.logEntry,
-            addedEvidence: enrichResult.addedEvidence
-          });
-          const idx = workingOpportunities.findIndex(o => o.id === existingFromSameOrigin.id);
-          if (idx >= 0) workingOpportunities[idx] = enrichResult.updatedOpportunity;
-          result.dedupEvents.push({
-            sourceItemId: item.externalId,
-            timestamp: new Date().toISOString(),
-            action: "enrich-by-origin",
-            matchedOpportunityId: existingFromSameOrigin.id,
-            matchedOpportunityTitle: existingFromSameOrigin.title,
-            reason: "Origin dedupe hit — converted create to enrich"
-          });
+
+          // Enrich substance check (same guard as LLM enrich path)
+          const originHasNewEvidence = enrichResult.addedEvidence.length > 0;
+          const originHasSharperAngle = enrichResult.logEntry.suggestedAngleUpdate !== undefined;
+          const originHasSharperWhyNow = enrichResult.logEntry.suggestedWhyNowUpdate !== undefined;
+          const originHasNewClaim = enrichResult.logEntry.suggestedEditorialClaimUpdate !== undefined;
+          const originEnrichHasSubstance = originHasNewEvidence || originHasSharperAngle || originHasSharperWhyNow || originHasNewClaim;
+
+          if (!originEnrichHasSubstance) {
+            result.skipped.push({
+              sourceItemId: item.externalId,
+              reason: `Origin dedupe enrich adds no new evidence or sharper angle to "${existingFromSameOrigin.title}".`
+            });
+            result.dedupEvents.push({
+              sourceItemId: item.externalId,
+              timestamp: new Date().toISOString(),
+              action: "enrich-by-origin",
+              matchedOpportunityId: existingFromSameOrigin.id,
+              matchedOpportunityTitle: existingFromSameOrigin.title,
+              reason: "Origin dedupe hit — enrich skipped (no substance)"
+            });
+          } else {
+            result.enriched.push({
+              opportunity: enrichResult.updatedOpportunity,
+              logEntry: enrichResult.logEntry,
+              addedEvidence: enrichResult.addedEvidence
+            });
+            const idx = workingOpportunities.findIndex(o => o.id === existingFromSameOrigin.id);
+            if (idx >= 0) workingOpportunities[idx] = enrichResult.updatedOpportunity;
+            result.dedupEvents.push({
+              sourceItemId: item.externalId,
+              timestamp: new Date().toISOString(),
+              action: "enrich-by-origin",
+              matchedOpportunityId: existingFromSameOrigin.id,
+              matchedOpportunityTitle: existingFromSameOrigin.title,
+              reason: "Origin dedupe hit — converted create to enrich"
+            });
+          }
         } else {
           // Phase-1 duplicate warning: if strong TOPICAL overlap (ignoring
           // owner/evidence boosts) and LLM chose "create" with low confidence,
@@ -1251,24 +1631,48 @@ export async function runIntelligencePipeline(
             newEvidence: evidence,
             ownerUserId
           });
-          result.enriched.push({
-            opportunity: enrichResult.updatedOpportunity,
-            logEntry: enrichResult.logEntry,
-            addedEvidence: enrichResult.addedEvidence
-          });
-          const idx = workingOpportunities.findIndex(o => o.id === existing.id);
-          if (idx >= 0) workingOpportunities[idx] = enrichResult.updatedOpportunity;
-          result.dedupEvents.push({
-            sourceItemId: item.externalId,
-            timestamp: new Date().toISOString(),
-            action: "enrich-by-llm",
-            matchedOpportunityId: existing.id,
-            matchedOpportunityTitle: existing.title,
-            topicalScore: topTopicalScore,
-            boostedScore: topScore,
-            llmConfidence: finalDecision.confidence,
-            reason: `LLM chose enrich target "${existing.title}"`
-          });
+
+          // Enrich substance check: verify the enrichment adds real value
+          const hasNewEvidence = enrichResult.addedEvidence.length > 0;
+          const hasSharperAngle = enrichResult.logEntry.suggestedAngleUpdate !== undefined;
+          const hasSharperWhyNow = enrichResult.logEntry.suggestedWhyNowUpdate !== undefined;
+          const hasNewClaim = enrichResult.logEntry.suggestedEditorialClaimUpdate !== undefined;
+          const enrichHasSubstance = hasNewEvidence || hasSharperAngle || hasSharperWhyNow || hasNewClaim;
+
+          if (!enrichHasSubstance) {
+            result.skipped.push({
+              sourceItemId: item.externalId,
+              reason: `Enrich adds no new evidence or sharper angle to "${existing.title}".`
+            });
+            result.angleQualityEvents.push({
+              sourceItemId: item.externalId,
+              angle: finalDecision.angle,
+              editorialClaim: finalDecision.editorialClaim,
+              action: "enrich-no-substance",
+              gateMode: getAngleQualityGateMode(),
+              contractResult: null,
+              curated
+            });
+          } else {
+            result.enriched.push({
+              opportunity: enrichResult.updatedOpportunity,
+              logEntry: enrichResult.logEntry,
+              addedEvidence: enrichResult.addedEvidence
+            });
+            const idx = workingOpportunities.findIndex(o => o.id === existing.id);
+            if (idx >= 0) workingOpportunities[idx] = enrichResult.updatedOpportunity;
+            result.dedupEvents.push({
+              sourceItemId: item.externalId,
+              timestamp: new Date().toISOString(),
+              action: "enrich-by-llm",
+              matchedOpportunityId: existing.id,
+              matchedOpportunityTitle: existing.title,
+              topicalScore: topTopicalScore,
+              boostedScore: topScore,
+              llmConfidence: finalDecision.confidence,
+              reason: `LLM chose enrich target "${existing.title}"`
+            });
+          }
         }
       } else {
         result.skipped.push({ sourceItemId: item.externalId, reason: finalDecision.rationale });

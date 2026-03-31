@@ -1238,12 +1238,20 @@ describe("editorial-lead — create-capable with no candidates", () => {
         rationale: "Standalone editorial opportunity from shipped feature",
         title: "Bulletin cliquable : rendre chaque montant explicable",
         territory: "general",
-        angle: "Clickable payslip as transparency tool for accountants",
-        whyNow: "Just shipped to all customers",
-        whatItIsAbout: "Interactive payslip PDF feature",
-        whatItIsNotAbout: "Not about internal tooling",
+        angle: "Clickable payslip gives accountants proof of calculation logic for the first time",
+        whyNow: "Just shipped to all customers — eliminates the trust gap that blocked mid-size cabinet adoption",
+        whatItIsAbout: "Interactive payslip PDF feature that makes every line item traceable and verifiable by the cabinet",
+        whatItIsNotAbout: "Not about internal tooling or generic feature announcements",
         suggestedFormat: "Narrative lesson post",
-        confidence: 0.9
+        confidence: 0.9,
+        editorialClaim: "Transparency in payroll calculations eliminates the trust gap that blocks mid-size cabinet adoption",
+        angleQualitySignals: {
+          specificity: "Clickable payslip makes every calculation line traceable — a concrete feature with cabinet-visible impact",
+          consequence: "Accountants can now verify and explain every payroll line to clients, reducing disputes and building trust",
+          tensionOrContrast: "Payroll calculations have always been opaque to cabinet users — this is the first time they can click through to the source logic",
+          traceableEvidence: "Shipped to all customers as of this release cycle",
+          positionSharpening: "Linc proves payroll can be transparent, unlike incumbents who treat calculation logic as a black box"
+        }
       },
       usage: FALLBACK_USAGE,
       mode: "provider"

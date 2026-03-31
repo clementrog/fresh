@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, afterAll, describe, expect, it, vi } from "vitest";
 import {
   prefilterSourceItems,
   narrowCandidateOpportunities,
@@ -7,6 +7,14 @@ import {
   runIntelligencePipeline,
   buildIntelligenceEvidence
 } from "../src/services/intelligence.js";
+
+// Use legacy gate for existing tests — v2 contract tests are in text.test.ts and dedicated describes below
+const _originalGateMode = process.env.ANGLE_QUALITY_GATE;
+beforeAll(() => { process.env.ANGLE_QUALITY_GATE = "v1"; });
+afterAll(() => {
+  if (_originalGateMode !== undefined) process.env.ANGLE_QUALITY_GATE = _originalGateMode;
+  else delete process.env.ANGLE_QUALITY_GATE;
+});
 import type { NormalizedSourceItem, ContentOpportunity, EvidenceReference, CreateEnrichDecision, UserRecord } from "../src/domain/types.js";
 import { normalizeGtmFields, normalizeGtmFieldsForOperatorEdit } from "../src/domain/types.js";
 import { sourceItemDbId } from "../src/db/repositories.js";
@@ -3198,9 +3206,9 @@ describe("LLM request payload assertions", () => {
     });
 
     const createEnrichCall = mockLlmClient.generateStructured.mock.calls[1][0];
-    expect(createEnrichCall.system).toContain("Create quality expectations");
-    expect(createEnrichCall.system).toContain("position-sharpening");
-    expect(createEnrichCall.system).toContain("future-facing");
+    expect(createEnrichCall.system).toContain("Angle quality contract");
+    expect(createEnrichCall.system).toContain("positionSharpening");
+    expect(createEnrichCall.system).toContain("Do NOT create when");
     expect(createEnrichCall.system).not.toContain("LinkedIn Craft Defaults");
     expect(createEnrichCall.system).not.toContain("Layer 3");
   });

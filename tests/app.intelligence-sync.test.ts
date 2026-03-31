@@ -256,7 +256,8 @@ describe("intelligence sync — created opportunities", () => {
       dedupEvents: [],
       processedSourceItemIds: ["ext-origin"],
       linearReviewItems: [],
-      linearClassifications: new Map()
+      linearClassifications: new Map(),
+      angleQualityEvents: []
     });
 
     // Candidate with overlapping topic keywords (payroll, recalculation, compliance)
@@ -334,7 +335,8 @@ describe("intelligence sync — created opportunities", () => {
       dedupEvents: [],
       processedSourceItemIds: ["ext-origin"],
       linearReviewItems: [],
-      linearClassifications: new Map()
+      linearClassifications: new Map(),
+      angleQualityEvents: []
     });
 
     repositories.listCandidateSourceItems.mockResolvedValue([] as any);
@@ -413,7 +415,8 @@ describe("intelligence sync — enriched opportunities", () => {
       dedupEvents: [],
       processedSourceItemIds: ["mr-current"],
       linearReviewItems: [],
-      linearClassifications: new Map()
+      linearClassifications: new Map(),
+      angleQualityEvents: []
     });
 
     // Hydration returns both source items — including the older proof
@@ -485,7 +488,8 @@ describe("intelligence sync — claim-aware downgrade reaches Notion", () => {
       dedupEvents: [],
       processedSourceItemIds: ["ext-origin"],
       linearReviewItems: [],
-      linearClassifications: new Map()
+      linearClassifications: new Map(),
+      angleQualityEvents: []
     });
 
     // Candidate with overlapping topic but NOT internal-proof
@@ -575,7 +579,8 @@ describe("intelligence sync — Linear archive path", () => {
         sensitivityLevel: "safe" as const,
         evidenceStrength: 0.8,
         reviewNote: ""
-      }]])
+      }]]),
+      angleQualityEvents: []
     });
 
     await app.run("intelligence:run");
@@ -639,7 +644,8 @@ describe("intelligence sync — Linear archive path", () => {
         sensitivityLevel: "safe" as const,
         evidenceStrength: 0.2,
         reviewNote: ""
-      }]])
+      }]]),
+      angleQualityEvents: []
     });
 
     await app.run("intelligence:run");
@@ -677,7 +683,8 @@ describe("intelligence sync — screening-write warnings", () => {
       dedupEvents: [],
       processedSourceItemIds: [externalId],
       linearReviewItems: [],
-      linearClassifications: new Map()
+      linearClassifications: new Map(),
+      angleQualityEvents: []
     });
 
     await app.run("intelligence:run");

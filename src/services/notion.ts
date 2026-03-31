@@ -121,6 +121,7 @@ export class NotionService {
     const editableProperties = {
       Title: titleProperty(opportunity.title),
       Angle: richTextProperty(opportunity.angle),
+      "Editorial claim": richTextProperty(opportunity.editorialClaim ?? ""),
       "Why now": richTextProperty(opportunity.whyNow),
       "What it is about": richTextProperty(opportunity.whatItIsAbout),
       "What it is not about": richTextProperty(opportunity.whatItIsNotAbout),

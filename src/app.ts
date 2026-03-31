@@ -391,6 +391,22 @@ export class EditorialSignalEngineApp {
         }, "Dedup decision audit trail");
       }
 
+      // Log angle quality events
+      if (pipelineResult.angleQualityEvents.length > 0) {
+        const aqe = pipelineResult.angleQualityEvents;
+        this.logger.info?.({
+          summary: {
+            total: aqe.length,
+            passed: aqe.filter(e => e.action === "passed").length,
+            warned: aqe.filter(e => e.action === "warned").length,
+            blockedSkip: aqe.filter(e => e.action === "blocked-skip").length,
+            blockedEnrich: aqe.filter(e => e.action === "blocked-enrich").length,
+            enrichNoSubstance: aqe.filter(e => e.action === "enrich-no-substance").length,
+            gateMode: aqe[0]?.gateMode
+          }
+        }, "Angle quality audit trail");
+      }
+
       if (!context.dryRun) {
         // Save screening results
         const screeningEntries = [...pipelineResult.screeningResults.entries()].map(([externalId, result]) => ({
@@ -1825,6 +1841,7 @@ Provide a rationale explaining your assessment.`,
     buyerFriction?: string | null;
     contentMotion?: string | null;
     angle: string;
+    editorialClaim?: string | null;
     whyNow: string;
     whatItIsAbout: string;
     whatItIsNotAbout: string;
@@ -1931,6 +1948,7 @@ Provide a rationale explaining your assessment.`,
         contentMotion: row.contentMotion,
       }),
       angle: row.angle,
+      editorialClaim: row.editorialClaim || undefined,
       whyNow: row.whyNow,
       whatItIsAbout: row.whatItIsAbout,
       whatItIsNotAbout: row.whatItIsNotAbout,

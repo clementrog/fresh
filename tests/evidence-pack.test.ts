@@ -815,7 +815,7 @@ describe("classifyClaimPosture", () => {
   it("product capability → product-claim", () => {
     const opp = makeOpportunity({
       title: "Linc permet d'automatiser la paie",
-      angle: "La fonctionnalité de calcul automatisé simplifie le traitement mensuel",
+      angle: "La fonctionnalité de calcul automatisé de Linc élimine le traitement manuel qui ralentissait chaque cycle de paie",
       whatItIsAbout: "Comment le module de paie automatise les opérations de bout en bout"
     });
     expect(classifyClaimPosture(opp)).toBe("product-claim");
@@ -1006,7 +1006,7 @@ describe("assessDraftReadiness claim-awareness", () => {
       evidence,
       primaryEvidence: evidence[0],
       title: "Loi de finances 2026 et conformité DSN",
-      angle: "La réforme impacte la conformité DSN pour les déclarations sociales",
+      angle: "La réforme DSN 2026 force les cabinets à revoir leurs processus de déclaration malgré des délais très courts",
       whatItIsAbout: "Nouvelles obligations de réglementation pour les entreprises"
     });
     const result = assessDraftReadiness(opp, evidence);
@@ -1020,7 +1020,7 @@ describe("assessDraftReadiness claim-awareness", () => {
       evidence,
       primaryEvidence: evidence[0],
       title: "Linc permet d'automatiser le calcul de paie",
-      angle: "La fonctionnalité de calcul automatisé simplifie le traitement mensuel",
+      angle: "La fonctionnalité de calcul automatisé de Linc élimine le traitement manuel qui ralentissait chaque cycle de paie",
       whatItIsAbout: "Le module de paie automatise les opérations de bout en bout"
     });
     const result = assessDraftReadiness(opp, evidence);
@@ -1045,7 +1045,7 @@ describe("assessDraftReadiness claim-awareness", () => {
       evidence,
       primaryEvidence: evidence[0],
       title: "Linc permet d'automatiser le calcul de paie",
-      angle: "La fonctionnalité de calcul automatisé simplifie le traitement mensuel",
+      angle: "La fonctionnalité de calcul automatisé de Linc élimine le traitement manuel qui ralentissait chaque cycle de paie",
       whatItIsAbout: "Le module de paie automatise les opérations de bout en bout"
     });
     const result = assessDraftReadiness(opp, evidence, { sourceItems });
@@ -1070,7 +1070,7 @@ describe("assessDraftReadiness claim-awareness", () => {
       evidence,
       primaryEvidence: evidence[0],
       title: "Linc permet d'automatiser le calcul de paie",
-      angle: "La fonctionnalité de calcul automatisé simplifie le traitement mensuel",
+      angle: "La fonctionnalité de calcul automatisé de Linc élimine le traitement manuel qui ralentissait chaque cycle de paie",
       whatItIsAbout: "Le module de paie automatise les opérations de bout en bout"
     });
     const result = assessDraftReadiness(opp, evidence, { sourceItems });
@@ -1085,7 +1085,7 @@ describe("assessDraftReadiness claim-awareness", () => {
       evidence,
       primaryEvidence: evidence[0],
       title: "Les équipes RH face au risque d'erreur",
-      angle: "La difficulté croissante des équipes RH face à la complexité réglementaire",
+      angle: "Les équipes RH risquent des erreurs critiques parce que la complexité réglementaire dépasse leurs processus manuels",
       whatItIsAbout: "Les problèmes et frustrations liés aux processus manuels"
     });
     const result = assessDraftReadiness(opp, evidence);
@@ -1124,7 +1124,7 @@ describe("assessDraftReadiness claim-awareness", () => {
       evidence,
       primaryEvidence: evidence[0],
       title: "Montrer l'impact des règles de paie pour réduire le risque",
-      angle: "Simuler les impacts avant de confirmer pour éviter les erreurs",
+      angle: "La simulation avant confirmation élimine les erreurs qui coûtent des heures de correction aux cabinets",
       whatItIsAbout: "L'interface de simulation permet d'éviter la frustration des erreurs"
     });
     const result = assessDraftReadiness(opp, evidence, { sourceItems });
@@ -1274,7 +1274,7 @@ describe("reassessment correctness", () => {
       evidence,
       primaryEvidence: evidence[0],
       title: "Linc permet d'automatiser le calcul de paie",
-      angle: "La fonctionnalité de calcul automatisé réduit les erreurs de paie",
+      angle: "Le calcul automatisé de Linc réduit les erreurs qui coûtaient des heures de vérification manuelle aux cabinets",
       whatItIsAbout: "Le module de paie automatise les calculs complexes"
     });
 
