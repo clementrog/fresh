@@ -1,6 +1,7 @@
 import {
   loadConnectorConfigs,
   loadDoctrineMarkdown,
+  loadExtractionProfilesMarkdown,
   loadGtmFoundationMarkdown,
   loadMarketResearchRuntimeConfig
 } from "./config/loaders.js";
@@ -365,6 +366,7 @@ export class EditorialSignalEngineApp {
         layer2Defaults: inputs.layer2Defaults,
         layer3Defaults: inputs.layer3Defaults,
         gtmFoundationMarkdown: inputs.gtmFoundationMarkdown,
+        extractionProfilesMarkdown: inputs.extractionProfilesMarkdown,
         recentOpportunities,
         checkOriginDedupe: async (siDbId) =>
           this.repositories.findActiveOpportunityByOriginSourceItem({
@@ -405,6 +407,35 @@ export class EditorialSignalEngineApp {
             gateMode: aqe[0]?.gateMode
           }
         }, "Angle quality audit trail");
+      }
+
+      // Log speaker context events
+      if (pipelineResult.speakerContextEvents.length > 0) {
+        const sce = pipelineResult.speakerContextEvents;
+        this.logger.info?.({
+          summary: {
+            total: sce.length,
+            resolved: sce.filter(e => e.resolved).length,
+            resolvedByIdentity: sce.filter(e => e.resolved?.source === "identity").length,
+            resolvedByHint: sce.filter(e => e.resolved?.source === "content-hint").length,
+            unresolved: sce.filter(e => !e.resolved).length,
+            promptModified: sce.filter(e => e.promptModified).length,
+            depthMode: sce[0]?.depthMode,
+          },
+          // Capped per-item sample for auditing correctness on real runs.
+          // Includes all resolved events (to verify identity/hint accuracy) plus
+          // up to 5 unresolved events (to spot missed aliases). Cap at 20 total.
+          sample: [
+            ...sce.filter(e => e.resolved),
+            ...sce.filter(e => !e.resolved).slice(0, 5)
+          ].slice(0, 20).map(e => ({
+            sourceItemId: e.sourceItemId,
+            speakerName: e.speakerName ?? null,
+            profileHint: e.profileHint ?? null,
+            resolved: e.resolved ?? null,
+            promptModified: e.promptModified,
+          }))
+        }, "Speaker context audit trail");
       }
 
       if (!context.dryRun) {
@@ -1422,10 +1453,11 @@ Provide a rationale explaining your assessment.`,
   }
 
   private async loadIntelligenceInputs(companyId: string) {
-    const [editorialConfig, users, gtmFoundationMarkdown] = await Promise.all([
+    const [editorialConfig, users, gtmFoundationMarkdown, extractionProfilesMarkdown] = await Promise.all([
       this.repositories.getLatestEditorialConfig(companyId),
       this.repositories.listUsers(companyId),
-      loadGtmFoundationMarkdown()
+      loadGtmFoundationMarkdown(),
+      loadExtractionProfilesMarkdown()
     ]);
     if (!editorialConfig) throw new Error("No editorial config. Run convergence foundation first.");
     const layer1 = editorialConfig.layer1CompanyLens as { doctrineMarkdown?: string; sensitivityMarkdown?: string };
@@ -1441,6 +1473,7 @@ Provide a rationale explaining your assessment.`,
       layer2Defaults: layer2.defaults ?? [],
       layer3Defaults: layer3.defaults ?? [],
       gtmFoundationMarkdown,
+      extractionProfilesMarkdown,
       userDescriptions,
       users: users.map(mapUserRecord)
     };

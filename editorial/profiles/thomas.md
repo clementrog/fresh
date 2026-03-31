@@ -18,6 +18,9 @@ contentTerritories:
   - paie / conformite / operations
 weakFitTerritories:
   - broad company storytelling
+speakerAliases:
+  - "Thomas Music"
+  - "Thomas"
 sampleExcerpts:
   - "Je ne pars jamais d'une idee 'marketing'. Je pars de ce qu'on voit et ce qu'on nous dit. Chaque semaine, je passe dans nos outils internes et je repere les sujets qui reviennent chez nos cabinets partenaires, les frictions produit/support, les incomprehensions recurrentes."
 ---

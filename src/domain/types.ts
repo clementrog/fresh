@@ -273,6 +273,7 @@ export interface ProfileBase {
   avoidRules: string[];
   contentTerritories: string[];
   weakFitTerritories: string[];
+  speakerAliases: string[];
   sampleExcerpts: string[];
   sourcePath: string;
   notionPageId?: string;

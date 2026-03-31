@@ -18,6 +18,9 @@ contentTerritories:
   - changements de fond dans la paie et les RH
 weakFitTerritories:
   - deeply technical product detail
+speakerAliases:
+  - "Baptiste Fradin"
+  - "Baptiste"
 sampleExcerpts: []
 ---
 LinkedIn voice: Founder energy but grounded. Sees patterns others miss. Doesn't inspire for the sake of it: names the change happening and what it demands. Direct, warm, no bullshit. Asks real questions. When he's asking for help, he says it straight.

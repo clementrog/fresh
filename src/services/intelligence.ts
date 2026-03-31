@@ -22,6 +22,8 @@ import type { LinearEnrichmentClassification } from "../config/schema.js";
 import type { LlmClient, LlmUsage } from "./llm.js";
 import { sourceItemDbId } from "../db/repositories.js";
 import { isBlockedByPublishability } from "./evidence-pack.js";
+import { resolveSpeakerContext, buildExtractionDepthBlock } from "../lib/speaker-context.js";
+import type { SpeakerContextSource } from "../lib/speaker-context.js";
 import { tokenizeV1, tokenizeV2, removeStopWords, jaccardSimilarity, hasMeaningfulOverlap, assessAngleSharpness } from "../lib/text.js";
 import type { AngleSharpnessResult } from "../lib/text.js";
 import type { AngleQualitySignals } from "../domain/types.js";
@@ -305,6 +307,13 @@ export const ANGLE_QUALITY_GATE = getAngleQualityGateMode();
 /** Kill switch for displacement rescue — independent of warnings.  Set to "false" to disable. */
 export const DEDUP_RESCUE_ENABLED = process.env.DEDUP_RESCUE_ENABLED !== "false";
 
+// --- Extraction depth mode ---
+// "observe" = resolve context + emit telemetry only (default), "enabled" = inject into prompts, "disabled" = same as observe
+export type ExtractionDepthMode = "enabled" | "disabled" | "observe";
+export function getExtractionDepthMode(): ExtractionDepthMode {
+  return (process.env.EXTRACTION_DEPTH_MODE ?? "observe") as ExtractionDepthMode;
+}
+
 function tokenizeForScoring(text: string): Set<string> {
   if (DEDUP_SCORING_VERSION === "v1") {
     return new Set(tokenizeV1(text));
@@ -562,6 +571,15 @@ export interface AngleQualityEvent {
   gateMode: AngleQualityGateMode;
   contractResult: AngleContractResult | null;
   curated: boolean;
+}
+
+export interface SpeakerContextEvent {
+  sourceItemId: string;
+  speakerName?: string;
+  profileHint?: string;
+  resolved?: { profileId: string; role: string; source: SpeakerContextSource };
+  depthMode: ExtractionDepthMode;
+  promptModified: boolean;
 }
 
 const DOMAIN_TERMS_FOR_POSITION = /\b(linc|cabinet|cabinets|paie|payroll|dsn|hcr|ccn|dpae|bulletin|fiche|solde|regularisation|régularisation|migration|conformit|compliance)\b/i;
@@ -881,6 +899,8 @@ export async function decideCreateOrEnrich(params: {
   doctrineMarkdown: string;
   userDescriptions: string;
   gtmFoundationMarkdown: string;
+  extractionDepthBlock?: string;
+  speakerLine?: string;
 }): Promise<{ decision: CreateEnrichDecision; usage: LlmUsage }> {
   const candidateDescriptions = params.candidates.length > 0
     ? params.candidates.map((c) => [
@@ -901,6 +921,7 @@ export async function decideCreateOrEnrich(params: {
     "## Available owners",
     params.userDescriptions,
     "",
+    ...(params.extractionDepthBlock ? [params.extractionDepthBlock, ""] : []),
     ...(params.gtmFoundationMarkdown ? [
       "## GTM Foundation",
       params.gtmFoundationMarkdown,
@@ -963,6 +984,7 @@ export async function decideCreateOrEnrich(params: {
   const prompt = [
     `## Source item`,
     `Title: ${params.item.title}`,
+    ...(params.speakerLine ? [params.speakerLine] : []),
     `Summary: ${params.item.summary}`,
     `Text (first 1000 chars): ${params.item.text.slice(0, 1000)}`,
     `Source: ${params.item.source}`,
@@ -1196,6 +1218,7 @@ export interface IntelligencePipelineParams {
   layer2Defaults: string[];
   layer3Defaults: string[];
   gtmFoundationMarkdown: string;
+  extractionProfilesMarkdown: string;
   recentOpportunities: ContentOpportunity[];
   /** DB-backed origin dedupe. When provided, called before every create decision. */
   checkOriginDedupe?: OriginDedupeCheck;
@@ -1232,6 +1255,7 @@ export interface IntelligencePipelineResult {
   usageEvents: Array<{ step: string; usage: LlmUsage }>;
   dedupEvents: DedupEvent[];
   angleQualityEvents: AngleQualityEvent[];
+  speakerContextEvents: SpeakerContextEvent[];
   processedSourceItemIds: string[];
   linearReviewItems: Array<{
     item: NormalizedSourceItem;
@@ -1251,6 +1275,7 @@ export async function runIntelligencePipeline(
     usageEvents: [],
     dedupEvents: [],
     angleQualityEvents: [],
+    speakerContextEvents: [],
     processedSourceItemIds: [],
     linearReviewItems: [],
     linearClassifications: new Map()
@@ -1382,6 +1407,21 @@ export async function runIntelligencePipeline(
   const workingOpportunities = [...params.recentOpportunities];
 
   for (const { item, screening: sr } of itemsForCreateEnrich) {
+    // --- Speaker context: resolve once per item, emit before any branch ---
+    const speakerCtx = resolveSpeakerContext({ item, users: params.users });
+    const depthMode = getExtractionDepthMode();
+    const isDepthActive = depthMode === "enabled"
+      && speakerCtx !== undefined
+      && params.extractionProfilesMarkdown.length > 0;
+    result.speakerContextEvents.push({
+      sourceItemId: item.externalId,
+      speakerName: item.speakerName,
+      profileHint: typeof item.metadata?.profileHint === "string" ? item.metadata.profileHint : undefined,
+      resolved: speakerCtx ? { profileId: speakerCtx.profileId, role: speakerCtx.role, source: speakerCtx.source } : undefined,
+      depthMode,
+      promptModified: isDepthActive,
+    });
+
     if (isBlockedByPublishability(item)) {
       result.skipped.push({ sourceItemId: item.externalId, reason: `Blocked by publishability risk: ${item.metadata?.publishabilityRisk}` });
       result.processedSourceItemIds.push(item.externalId);
@@ -1433,7 +1473,9 @@ export async function runIntelligencePipeline(
         llmClient: params.llmClient,
         doctrineMarkdown: params.doctrineMarkdown,
         userDescriptions: params.userDescriptions,
-        gtmFoundationMarkdown: params.gtmFoundationMarkdown
+        gtmFoundationMarkdown: params.gtmFoundationMarkdown,
+        extractionDepthBlock: isDepthActive ? buildExtractionDepthBlock(speakerCtx!, params.extractionProfilesMarkdown) : undefined,
+        speakerLine: isDepthActive ? `Speaker: ${speakerCtx!.speakerName}` : undefined,
       });
       result.usageEvents.push({ step: "create-enrich", usage });
       const { decision: gatedDecision, contractResult } = enforceCreateQualityGate({

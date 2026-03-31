@@ -54,6 +54,8 @@ export async function ensureConvergenceFoundation(
       type: profile.profileId === "linc-corporate" ? "corporate" : "human",
       language: profile.languagePreference,
       baseProfile: {
+        role: profile.role,
+        speakerAliases: profile.speakerAliases,
         toneSummary: profile.toneSummary,
         preferredStructure: profile.preferredStructure,
         typicalPhrases: profile.typicalPhrases,

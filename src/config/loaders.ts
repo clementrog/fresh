@@ -72,6 +72,11 @@ export async function loadGtmFoundationMarkdown() {
   return fs.readFile(gtmPath, "utf8").catch(() => "");
 }
 
+export async function loadExtractionProfilesMarkdown() {
+  const epPath = path.join(projectRoot, "editorial", "extraction-profiles.md");
+  return fs.readFile(epPath, "utf8").catch(() => "");
+}
+
 export async function loadProfileBases(): Promise<ProfileBase[]> {
   const profilesDirectory = path.join(projectRoot, "editorial", "profiles");
   const files = await listFilesRecursive(profilesDirectory);
@@ -95,6 +100,7 @@ export async function loadProfileBases(): Promise<ProfileBase[]> {
         avoidRules: ensureStringArray(parsed.data.avoidRules),
         contentTerritories: ensureStringArray(parsed.data.contentTerritories),
         weakFitTerritories: ensureStringArray(parsed.data.weakFitTerritories),
+        speakerAliases: ensureStringArray(parsed.data.speakerAliases),
         sampleExcerpts: extractBulletList(parsed.content),
         sourcePath: file,
         notionPageFingerprint: hashParts(["profile", profileId, file])

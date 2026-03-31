@@ -298,6 +298,7 @@ describe("runIntelligencePipeline — Linear enrichment policy", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -339,6 +340,7 @@ describe("runIntelligencePipeline — Linear enrichment policy", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -374,6 +376,7 @@ describe("runIntelligencePipeline — Linear enrichment policy", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -432,6 +435,7 @@ describe("runIntelligencePipeline — Linear enrichment policy", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [opp]
     });
 
@@ -475,6 +479,7 @@ describe("runIntelligencePipeline — Linear enrichment policy", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -626,6 +631,7 @@ describe("Notion: syncLinearReviewItem archived on reclassification", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -655,6 +661,7 @@ describe("Notion: syncLinearReviewItem archived on reclassification", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -720,6 +727,7 @@ describe("Linear classification persistence failure excludes item from processed
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -788,6 +796,7 @@ describe("Linear classification persistence failure excludes item from processed
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -1268,6 +1277,7 @@ describe("editorial-lead — create-capable with no candidates", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [] // no existing opportunities
     });
 

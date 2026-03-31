@@ -33,6 +33,7 @@ weakFitTerritories:
   - personal operating reflections
   - founder narratives
   - opinion pieces that need a named author
+speakerAliases: []
 sampleExcerpts: []
 ---
 LinkedIn voice: Company voice that speaks as "nous" or "on", never "je". Sounds like a team that does the work, not a person sharing takes. Grounded, factual, slightly dry. Shows its work rather than telling you how great it is. Not corporate BS — just a company that knows its subject and talks straight.

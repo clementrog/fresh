@@ -205,7 +205,8 @@ export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
             summary: extraction.summary,
             hookCandidate: extraction.hookCandidate,
             whyItMatters: extraction.whyItMatters,
-            excerpts: extraction.excerpts
+            excerpts: extraction.excerpts,
+            speakerContext: payload.speaker ?? undefined
           });
 
           const text = [

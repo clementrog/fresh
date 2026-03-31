@@ -18,6 +18,9 @@ contentTerritories:
   - arbitrages et decisions produit
 weakFitTerritories:
   - corporate amplification
+speakerAliases:
+  - "Virginie Bastien"
+  - "Virginie"
 sampleExcerpts: []
 ---
 LinkedIn voice: Product builder's honesty. Talks about what users actually do vs what the team expected. Shares product decisions with the reasoning behind them: the constraint, the tradeoff, what won and why. Not afraid to say "on s'est trompes" or "c'est pas encore assez bien."

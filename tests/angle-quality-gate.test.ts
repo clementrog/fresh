@@ -174,6 +174,7 @@ describe("observe mode telemetry", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -208,6 +209,7 @@ describe("observe mode telemetry", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -268,6 +270,7 @@ describe("v2 gate pipeline decisions", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -299,6 +302,7 @@ describe("v2 gate pipeline decisions", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -338,6 +342,7 @@ describe("v2 gate pipeline decisions", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -388,6 +393,7 @@ describe("v2 gate pipeline decisions", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -420,6 +426,7 @@ describe("v2 gate pipeline decisions", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -532,6 +539,7 @@ describe("enrich empty-string sanitization", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -619,6 +627,7 @@ describe("origin-dedup enrich substance guard", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existingOpp],
       checkOriginDedupe: async () => null // no DB hit, but in-memory will find it
     });
@@ -675,6 +684,7 @@ describe("origin-dedup enrich substance guard", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existingOpp],
       checkOriginDedupe: async () => null
     });

@@ -74,7 +74,8 @@ describe("doctrine refresh → intelligence:run end-to-end", () => {
     mockedPipeline.mockResolvedValue({
       screeningResults: new Map(), created: [], enriched: [], skipped: [],
       usageEvents: [], dedupEvents: [], processedSourceItemIds: [],
-      linearReviewItems: [], linearClassifications: new Map(), angleQualityEvents: []
+      linearReviewItems: [], linearClassifications: new Map(), angleQualityEvents: [],
+      speakerContextEvents: []
     });
     const app = new EditorialSignalEngineApp(buildEnv(), { info: vi.fn(), error: vi.fn(), warn: vi.fn() }, {
       prisma: { $transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})), $queryRawUnsafe: vi.fn(async () => [{ count: BigInt(0) }]) } as any,

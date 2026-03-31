@@ -451,6 +451,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -478,6 +479,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -521,6 +523,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -566,6 +569,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [strongestMatch, weakerMatch]
     });
 
@@ -604,6 +608,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -642,6 +647,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -674,6 +680,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -706,6 +713,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -746,6 +754,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -780,6 +789,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -822,6 +832,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -859,6 +870,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -898,6 +910,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -933,6 +946,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -964,6 +978,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -1002,6 +1017,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -1049,6 +1065,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -1094,6 +1111,7 @@ describe("runIntelligencePipeline", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -1152,6 +1170,7 @@ describe("editorial-lead curated behavior", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -1191,6 +1210,7 @@ describe("editorial-lead curated behavior", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existing]
     });
 
@@ -1225,6 +1245,7 @@ describe("editorial-lead curated behavior", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -1265,6 +1286,7 @@ describe("editorial-lead curated behavior", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -1301,6 +1323,7 @@ describe("editorial-lead curated behavior", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -1387,6 +1410,7 @@ describe("duplicate prevention across batch items", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [],
       checkOriginDedupe
     });
@@ -1449,6 +1473,7 @@ describe("duplicate prevention across batch items", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existingOpp],
       checkOriginDedupe
     });
@@ -1500,6 +1525,7 @@ describe("duplicate prevention across batch items", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [],  // <-- empty snapshot, opp is NOT loaded
       checkOriginDedupe
     });
@@ -1578,6 +1604,7 @@ describe("duplicate prevention across batch items", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [],
       checkOriginDedupe
     });
@@ -1650,6 +1677,7 @@ describe("duplicate prevention across batch items", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [],
       checkOriginDedupe
     });
@@ -2015,6 +2043,7 @@ describe("runIntelligencePipeline — dedup warnings and events", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2086,6 +2115,7 @@ describe("runIntelligencePipeline — dedup warnings and events", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2131,6 +2161,7 @@ describe("runIntelligencePipeline — dedup warnings and events", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2164,6 +2195,7 @@ describe("runIntelligencePipeline — dedup warnings and events", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -2191,6 +2223,7 @@ describe("runIntelligencePipeline — dedup warnings and events", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -2237,6 +2270,7 @@ describe("runIntelligencePipeline — dedup warnings and events", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2281,6 +2315,7 @@ describe("runIntelligencePipeline — dedup warnings and events", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2374,6 +2409,7 @@ describe("runIntelligencePipeline — regression: same owner does not cause fals
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -2515,6 +2551,7 @@ describe("runIntelligencePipeline — boost-reordered candidate uses topical mat
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [oppA, oppB]
     });
 
@@ -2586,6 +2623,7 @@ describe("DedupEvent — topicalScore and boostedScore are always distinct field
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2619,6 +2657,7 @@ describe("DedupEvent — topicalScore and boostedScore are always distinct field
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -2666,6 +2705,7 @@ describe("DedupEvent — topicalScore and boostedScore are always distinct field
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2718,6 +2758,7 @@ describe("dedupFlag persistence", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [existingOpp]
     });
 
@@ -2765,6 +2806,7 @@ describe("dedupFlag persistence", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -3060,6 +3102,7 @@ describe("runIntelligencePipeline — displacement rescue end-to-end", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [...ownerOpps, rescuedOpp]
     });
 
@@ -3137,6 +3180,7 @@ describe("runIntelligencePipeline — displacement rescue end-to-end", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: [...ownerOpps, rescuedOpp]
     });
 
@@ -3171,6 +3215,7 @@ describe("LLM request payload assertions", () => {
       layer2Defaults: ["Specific", "Evidence-backed"],
       layer3Defaults: ["Max 250 words"],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -3202,6 +3247,7 @@ describe("LLM request payload assertions", () => {
       layer2Defaults: [],
       layer3Defaults: ["Max 250 words"],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -3242,6 +3288,7 @@ describe("LLM request payload assertions", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -3285,6 +3332,7 @@ describe("screening fail-closed behavior", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -3339,6 +3387,7 @@ describe("screening fail-closed behavior", () => {
       layer2Defaults: [],
       layer3Defaults: [],
       gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
       recentOpportunities: []
     });
 
@@ -3606,3 +3655,6 @@ describe("normalizeGtmFieldsForOperatorEdit", () => {
     expect(result.contentMotion).toBeUndefined();
   });
 });
+
+// "name and detail preservation" tests removed — the ungated prompt additions
+// they tested were reverted as out-of-scope for the speaker-context rollout.

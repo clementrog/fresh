@@ -18,6 +18,9 @@ contentTerritories:
   - objections et signaux d'achat
 weakFitTerritories:
   - deep product internals
+speakerAliases:
+  - "Quentin Lallemand"
+  - "Quentin"
 sampleExcerpts:
   - "Il y a un truc que personne ne dit dans le marche de la paie : le vrai probleme, ce n'est pas le logiciel. C'est la confiance. J'ai rejoint Linc il y a 6 mois. Mon premier reflexe n'a pas ete d'ouvrir le CRM. Ca a ete d'aller voir des cabinets, physiquement, partout en France."
 ---
