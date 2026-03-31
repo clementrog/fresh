@@ -9,6 +9,7 @@ export interface AppEnv {
   TAVILY_API_KEY?: string;
   CLAAP_API_KEY?: string;
   LINEAR_API_KEY?: string;
+  GITHUB_TOKEN?: string;
   DEFAULT_TIMEZONE?: string;
   DEFAULT_COMPANY_SLUG?: string;
   DEFAULT_COMPANY_NAME?: string;

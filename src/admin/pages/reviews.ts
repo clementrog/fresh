@@ -102,6 +102,57 @@ export function registerReviewPages(
     );
     return reply.type("text/html").send(html);
   });
+
+  server.get("/admin/reviews/github", async (request, reply) => {
+    const query = request.query as Record<string, string>;
+    const company = await resolveCompany(query);
+    if (!company) {
+      return reply.code(404).type("text/html").send(layout("Not Found", `<p>Company not found.</p>`));
+    }
+
+    const companySlug = query.company || undefined;
+    const page = Math.max(1, parseInt(query.page ?? "1", 10) || 1);
+    const returnTo = request.url;
+
+    const [total, items] = await Promise.all([
+      queries.countGitHubReviewItems(company.id),
+      queries.listGitHubReviewItems(company.id, { page, pageSize: 50 })
+    ]);
+
+    const totalPages = Math.ceil(total / 50);
+
+    const rows = items.map((item) => {
+      const meta = item.metadataJson as Record<string, unknown>;
+      const cls = String(meta.githubEnrichmentClassification ?? "unknown");
+      const clsColor = cls === "shipped-feature" ? "purple"
+        : cls === "customer-fix" || cls === "proof-point" ? "green"
+        : cls === "internal-only" ? "gray"
+        : "orange";
+      return [
+        linkTo(buildDetailUrl(`/admin/source-items/${item.id}`, companySlug, returnTo), truncate(item.title, 60)),
+        badge(cls, clsColor as "purple" | "green" | "gray" | "orange"),
+        meta.githubCustomerVisibility ? String(meta.githubCustomerVisibility) : "—",
+        meta.githubSensitivityLevel ? String(meta.githubSensitivityLevel) : "—",
+        typeof meta.repoName === "string" ? meta.repoName : "—",
+        item.processedAt ? badge("yes", "green") : badge("no", "gray"),
+        formatDate(item.occurredAt)
+      ];
+    });
+
+    const tableHtml = table(
+      ["Title", "Classification", "Visibility", "Sensitivity", "Repo", "Processed", "Occurred"],
+      rows
+    );
+    const paginationHtml = pagination(page, totalPages, withCompany("/admin/reviews/github", companySlug));
+
+    const html = layout(
+      `GitHub Review (${total})`,
+      tableHtml + paginationHtml,
+      company.name,
+      companySlug
+    );
+    return reply.type("text/html").send(html);
+  });
 }
 
 function truncate(str: string, max: number): string {

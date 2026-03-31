@@ -173,13 +173,17 @@ export class EditorialSignalEngineApp {
       const sourceMaxCursor = new Map<string, string | null>();
 
       for (const config of staticInputs.configs.filter((entry) => entry.enabled)) {
-        const rawItems = await this.fetchSourceItems(config, registry[config.source], context, company.id);
-        run.counters.fetched += rawItems.length;
-        const sortedItems = [...rawItems].sort((left, right) => compareCursors(left.cursor, right.cursor));
-        const maxCursor = sortedItems.reduce<string | null>(
-          (current, item) => maxCursorValue(current, item.cursor),
-          await this.repositories.getCursor(config.source, company.id)
-        );
+        const fetchResult = await this.fetchSourceItems(config, registry[config.source], context, company.id);
+        run.counters.fetched += fetchResult.items.length;
+
+        for (const w of fetchResult.warnings) {
+          run.warnings.push(`[${config.source}] ${w}`);
+        }
+        if (fetchResult.partialCompletion) {
+          run.warnings.push(`[${config.source}] Partial completion: not all items were fetched (cap hit, partition failure, or rate-limit exhaustion)`);
+        }
+
+        const sortedItems = [...fetchResult.items].sort((left, right) => compareCursors(left.cursor, right.cursor));
 
         for (const rawItem of sortedItems) {
           const normalized = await registry[config.source].normalize(rawItem, config as never, context);
@@ -195,7 +199,18 @@ export class EditorialSignalEngineApp {
           }
         }
 
-        sourceMaxCursor.set(config.source, maxCursor);
+        // Cursor advancement: use connector's authoritative cursor if provided,
+        // otherwise fall back to deriving from items (legacy behavior).
+        if (fetchResult.nextCursor !== null) {
+          sourceMaxCursor.set(config.source, fetchResult.nextCursor);
+        } else {
+          const existingCursor = await this.repositories.getCursor(config.source, company.id);
+          const derivedCursor = sortedItems.reduce<string | null>(
+            (current, item) => maxCursorValue(current, item.cursor),
+            existingCursor
+          );
+          sourceMaxCursor.set(config.source, derivedCursor);
+        }
       }
 
       if (!context.dryRun) {
@@ -521,6 +536,70 @@ export class EditorialSignalEngineApp {
           run.warnings.push(`Linear classification persistence failed for ${linearPersistFailedIds.size} item(s): ${[...linearPersistFailedIds].join(", ")}`);
         }
 
+        // Persist GitHub enrichment classifications to DB + sync review items to Notion
+        const githubPersistFailedIds = new Set<string>();
+        for (const [externalId, classification] of pipelineResult.githubClassifications) {
+          const dbId = sourceItemDbId(company.id, externalId);
+          try {
+            const storedItem = await this.prisma.sourceItem.findUnique({ where: { id: dbId } });
+            if (storedItem) {
+              const existingMeta = isRecord(storedItem.metadataJson) ? storedItem.metadataJson : {};
+              await this.prisma.sourceItem.update({
+                where: { id: dbId },
+                data: {
+                  metadataJson: {
+                    ...existingMeta,
+                    githubEnrichmentClassification: classification.classification,
+                    githubEnrichmentRationale: classification.rationale,
+                    githubCustomerVisibility: classification.customerVisibility,
+                    githubSensitivityLevel: classification.sensitivityLevel,
+                    githubEvidenceStrength: classification.evidenceStrength,
+                    githubReviewNote: classification.reviewNote
+                  }
+                }
+              });
+
+              if (classification.classification === "manual-review") {
+                const reviewFingerprint = hashParts(["github-review", company.id, dbId]);
+                const syncResult = await this.notion.syncGitHubReviewItem({
+                  itemTitle: storedItem.title,
+                  classification: "manual-review",
+                  rationale: classification.rationale,
+                  customerVisibility: classification.customerVisibility,
+                  sensitivityLevel: classification.sensitivityLevel,
+                  evidenceStrength: classification.evidenceStrength,
+                  reviewNote: classification.reviewNote,
+                  githubLink: storedItem.sourceUrl,
+                  itemType: typeof existingMeta.itemType === "string" ? existingMeta.itemType : "unknown",
+                  repo: typeof existingMeta.repoName === "string" ? existingMeta.repoName : undefined,
+                  labels: Array.isArray(existingMeta.labels) ? (existingMeta.labels as string[]).join(", ") : undefined,
+                  occurredAt: storedItem.occurredAt.toISOString(),
+                  reviewFingerprint,
+                  githubSourceItemId: dbId,
+                  notionPageId: storedItem.notionPageId ?? undefined
+                });
+                if (syncResult) {
+                  await this.repositories.updateSourceItemNotionSync(dbId, syncResult.notionPageId, reviewFingerprint);
+                }
+              } else if (storedItem.notionPageId) {
+                await this.notion.archiveGitHubReviewItem(storedItem.notionPageId);
+                await this.repositories.updateSourceItemNotionSync(dbId, null, null);
+              }
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Unknown error";
+            this.logger.error({ externalId, error: message }, "Failed to persist GitHub classification");
+            githubPersistFailedIds.add(externalId);
+          }
+        }
+
+        if (githubPersistFailedIds.size > 0) {
+          pipelineResult.processedSourceItemIds = pipelineResult.processedSourceItemIds.filter(
+            (id) => !githubPersistFailedIds.has(id)
+          );
+          run.warnings.push(`GitHub classification persistence failed for ${githubPersistFailedIds.size} item(s): ${[...githubPersistFailedIds].join(", ")}`);
+        }
+
         // Persist created opportunities + evidence-pack enrichment
         for (const opp of pipelineResult.created) {
           await this.prisma.$transaction(async (tx) => {
@@ -649,6 +728,12 @@ export class EditorialSignalEngineApp {
             && (enrichSourceItem.metadata?.linearEnrichmentClassification === "enrich-worthy"
               || enrichSourceItem.metadata?.linearEnrichmentClassification === "editorial-lead")) {
             enriched.logEntry.provenanceType = "linear-enrichment-policy";
+          }
+          if (enrichSourceItem?.source === "github"
+            && (enrichSourceItem.metadata?.githubEnrichmentClassification === "shipped-feature"
+              || enrichSourceItem.metadata?.githubEnrichmentClassification === "customer-fix"
+              || enrichSourceItem.metadata?.githubEnrichmentClassification === "proof-point")) {
+            enriched.logEntry.provenanceType = "github-enrichment-policy";
           }
 
           await this.repositories.enrichOpportunity({
@@ -1501,9 +1586,13 @@ Provide a rationale explaining your assessment.`,
     connector: ReturnType<typeof createConnectorRegistry>[ConnectorConfig["source"]],
     context: RunContext,
     companyId?: string
-  ) {
+  ): Promise<import("./domain/types.js").FetchResult> {
     const cursor = await this.repositories.getCursor(config.source, companyId);
-    return connector.fetchSince(cursor, config as never, context);
+    if (connector.fetchSinceV2) {
+      return connector.fetchSinceV2(cursor, config as never, context);
+    }
+    const items = await connector.fetchSince(cursor, config as never, context);
+    return { items, nextCursor: null, warnings: [], partialCompletion: false };
   }
 
   private async getActiveCompany(context: RunContext) {

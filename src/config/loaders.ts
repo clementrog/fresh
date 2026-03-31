@@ -6,6 +6,7 @@ import matter from "gray-matter";
 import type {
   ClaapSourceConfig,
   ConnectorConfig,
+  GitHubSourceConfig,
   LinearSourceConfig,
   MarketFindingsSourceConfig,
   MarketResearchRuntimeConfig,
@@ -17,6 +18,7 @@ import { listFilesRecursive, readJsonFile } from "../lib/fs.js";
 import { hashParts } from "../lib/ids.js";
 import {
   claapSourceConfigSchema,
+  githubSourceConfigSchema,
   linearSourceConfigSchema,
   marketResearchRuntimeConfigSchema,
   marketFindingsSourceConfigSchema,
@@ -42,6 +44,8 @@ export async function loadConnectorConfigs(): Promise<ConnectorConfig[]> {
           return linearSourceConfigSchema.parse(value) as LinearSourceConfig;
         case "market-findings":
           return marketFindingsSourceConfigSchema.parse(value) as MarketFindingsSourceConfig;
+        case "github":
+          return githubSourceConfigSchema.parse(value) as GitHubSourceConfig;
         default:
           throw new Error(`Unsupported source config in ${file}`);
       }

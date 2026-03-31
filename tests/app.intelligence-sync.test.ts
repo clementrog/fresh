@@ -257,6 +257,8 @@ describe("intelligence sync — created opportunities", () => {
       processedSourceItemIds: ["ext-origin"],
       linearReviewItems: [],
       linearClassifications: new Map(),
+      githubReviewItems: [],
+      githubClassifications: new Map(),
       angleQualityEvents: [],
       speakerContextEvents: []
     });
@@ -337,6 +339,8 @@ describe("intelligence sync — created opportunities", () => {
       processedSourceItemIds: ["ext-origin"],
       linearReviewItems: [],
       linearClassifications: new Map(),
+      githubReviewItems: [],
+      githubClassifications: new Map(),
       angleQualityEvents: [],
       speakerContextEvents: []
     });
@@ -418,6 +422,8 @@ describe("intelligence sync — enriched opportunities", () => {
       processedSourceItemIds: ["mr-current"],
       linearReviewItems: [],
       linearClassifications: new Map(),
+      githubReviewItems: [],
+      githubClassifications: new Map(),
       angleQualityEvents: [],
       speakerContextEvents: []
     });
@@ -492,6 +498,8 @@ describe("intelligence sync — claim-aware downgrade reaches Notion", () => {
       processedSourceItemIds: ["ext-origin"],
       linearReviewItems: [],
       linearClassifications: new Map(),
+      githubReviewItems: [],
+      githubClassifications: new Map(),
       angleQualityEvents: [],
       speakerContextEvents: []
     });
@@ -584,6 +592,8 @@ describe("intelligence sync — Linear archive path", () => {
         evidenceStrength: 0.8,
         reviewNote: ""
       }]]),
+      githubReviewItems: [],
+      githubClassifications: new Map(),
       angleQualityEvents: [],
       speakerContextEvents: []
     });
@@ -650,6 +660,8 @@ describe("intelligence sync — Linear archive path", () => {
         evidenceStrength: 0.2,
         reviewNote: ""
       }]]),
+      githubReviewItems: [],
+      githubClassifications: new Map(),
       angleQualityEvents: [],
       speakerContextEvents: []
     });
@@ -690,6 +702,8 @@ describe("intelligence sync — screening-write warnings", () => {
       processedSourceItemIds: [externalId],
       linearReviewItems: [],
       linearClassifications: new Map(),
+      githubReviewItems: [],
+      githubClassifications: new Map(),
       angleQualityEvents: [],
       speakerContextEvents: []
     });

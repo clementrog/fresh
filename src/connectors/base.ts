@@ -1,4 +1,4 @@
-import type { ConnectorConfig, HealthcheckResult, RunContext, SourceConnector } from "../domain/types.js";
+import type { ConnectorConfig, FetchResult, HealthcheckResult, RunContext, SourceConnector } from "../domain/types.js";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -50,6 +50,16 @@ export abstract class BaseConnector<TConfig extends ConnectorConfig> implements 
   }
 
   abstract fetchSince(cursor: string | null, config: TConfig, context: RunContext): Promise<import("../domain/types.js").RawSourceItem[]>;
+
+  async fetchSinceV2(
+    cursor: string | null,
+    config: TConfig,
+    context: RunContext
+  ): Promise<FetchResult> {
+    const items = await this.fetchSince(cursor, config, context);
+    return { items, nextCursor: null, warnings: [], partialCompletion: false };
+  }
+
   abstract normalize(
     rawItem: import("../domain/types.js").RawSourceItem,
     config: TConfig,

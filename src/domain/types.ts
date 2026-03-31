@@ -19,7 +19,7 @@ export const SENSITIVITY_CATEGORIES = [
 
 export type SensitivityCategory = (typeof SENSITIVITY_CATEGORIES)[number];
 
-export const SOURCE_KINDS = ["notion", "claap", "linear", "market-findings", "market-research", "hubspot"] as const;
+export const SOURCE_KINDS = ["notion", "claap", "linear", "market-findings", "market-research", "hubspot", "github"] as const;
 
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 
@@ -204,6 +204,17 @@ export interface MarketFindingsSourceConfig extends SourceSyncConfig {
   directory: string;
 }
 
+export interface GitHubSourceConfig extends SourceSyncConfig {
+  source: "github";
+  orgSlug: string;
+  repos: string[];
+  includeMergedPRs: boolean;
+  includeClosedIssues: boolean;
+  includeReleases: boolean;
+  labelFilters?: { include?: string[]; exclude?: string[] };
+  maxItemsPerRun?: number;
+}
+
 export interface MarketResearchRuntimeConfig {
   enabled: boolean;
   storeRawText: boolean;
@@ -216,12 +227,28 @@ export type ConnectorConfig =
   | NotionSourceConfig
   | ClaapSourceConfig
   | LinearSourceConfig
-  | MarketFindingsSourceConfig;
+  | MarketFindingsSourceConfig
+  | GitHubSourceConfig;
 
 export interface RawSourceItem {
   id: string;
   cursor: string;
   payload: Record<string, unknown>;
+}
+
+export interface FetchResult {
+  items: RawSourceItem[];
+  /**
+   * Authoritative resume cursor set by the connector.
+   * - Non-null: caller MUST persist this value as-is (no derivation).
+   * - Null: connector does not manage its own cursor; caller falls back
+   *   to deriving cursor from items via maxCursorValue().
+   */
+  nextCursor: string | null;
+  /** Per-partition warnings (e.g., repo-level failures). */
+  warnings: string[];
+  /** True if not all available items were returned (cap hit, partition failure, budget exhaustion). */
+  partialCompletion: boolean;
 }
 
 export interface NormalizedSourceItem {
@@ -571,6 +598,8 @@ export interface SourceConnector<TConfig extends ConnectorConfig = ConnectorConf
   readonly source: SourceKind;
   healthcheck(config: TConfig): Promise<HealthcheckResult>;
   fetchSince(cursor: string | null, config: TConfig, context: RunContext): Promise<RawSourceItem[]>;
+  /** Optional: return structured result with authoritative cursor. */
+  fetchSinceV2?(cursor: string | null, config: TConfig, context: RunContext): Promise<FetchResult>;
   normalize(rawItem: RawSourceItem, config: TConfig, context: RunContext): Promise<NormalizedSourceItem>;
   backfill(range: { from: Date; to: Date }, config: TConfig, context: RunContext): Promise<RawSourceItem[]>;
   cleanup(retentionPolicy: { retentionDays: number }, context: RunContext): Promise<number>;

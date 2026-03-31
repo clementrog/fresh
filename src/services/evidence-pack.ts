@@ -73,6 +73,20 @@ function getSourcePolicy(item: NormalizedSourceItem): SourcePolicyEntry {
       }
       return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.20, priority: 4 };
     }
+    case "github": {
+      const ghClass = typeof item.metadata?.githubEnrichmentClassification === "string"
+        ? item.metadata.githubEnrichmentClassification : undefined;
+      if (ghClass === "shipped-feature") {
+        return { canBeOrigin: true, canBeSupport: true, minJaccardForSupport: 0.10, priority: 2 };
+      }
+      if (ghClass === "proof-point" || ghClass === "customer-fix") {
+        return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.15, priority: 3 };
+      }
+      if (ghClass === "manual-review" || ghClass === "internal-only") {
+        return { canBeOrigin: false, canBeSupport: false, minJaccardForSupport: 1.0, priority: 99 };
+      }
+      return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.20, priority: 4 };
+    }
     default:
       return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.20, priority: 5 };
   }
@@ -107,6 +121,14 @@ export function deriveProvenanceType(item: NormalizedSourceItem): string {
       if (linearEnrichClass === "editorial-lead") return "linear:editorial-lead";
       if (linearEnrichClass === "enrich-worthy") return "linear:enrich-worthy";
       return "linear";
+    }
+    case "github": {
+      const ghClass = typeof item.metadata?.githubEnrichmentClassification === "string"
+        ? item.metadata.githubEnrichmentClassification : undefined;
+      if (ghClass === "shipped-feature") return "github:shipped-feature";
+      if (ghClass === "proof-point") return "github:proof-point";
+      if (ghClass === "customer-fix") return "github:customer-fix";
+      return "github";
     }
     default:
       return item.source;
@@ -334,6 +356,16 @@ export function classifyProductBacking(
     // Layer 1: Evidence source type
     if (evidence.source === "linear") {
       hasInProgress = true;
+      continue;
+    }
+    if (evidence.source === "github") {
+      const sourceItem = sourceItemMap.get(evidence.sourceItemId);
+      if (!sourceItem) continue;
+      const ghClass = typeof sourceItem.metadata?.githubEnrichmentClassification === "string"
+        ? sourceItem.metadata.githubEnrichmentClassification : undefined;
+      if (ghClass === "shipped-feature" || ghClass === "proof-point" || ghClass === "customer-fix") {
+        hasLive = true;
+      }
       continue;
     }
     if (evidence.source === "market-research" || evidence.source === "market-findings") {

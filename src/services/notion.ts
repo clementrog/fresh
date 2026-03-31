@@ -17,6 +17,7 @@ export const REQUIRED_DATABASES = [
   "Content Opportunities",
   "Claap Review",
   "Linear Review",
+  "GitHub Review",
   "Profiles",
   "Sync Runs"
 ] as const;
@@ -362,6 +363,97 @@ export class NotionService {
         page_id: notionPageId,
         archived: true
       } as any);
+    } catch (error: unknown) {
+      if (isNotionArchivedError(error) || isNotionObjectNotFoundError(error)) return;
+      throw error;
+    }
+  }
+
+  async syncGitHubReviewItem(item: {
+    itemTitle: string;
+    classification: "manual-review";
+    rationale: string;
+    customerVisibility: string;
+    sensitivityLevel: string;
+    evidenceStrength: number;
+    reviewNote?: string;
+    githubLink: string;
+    itemType: string;
+    repo?: string;
+    labels?: string;
+    occurredAt: string;
+    reviewFingerprint: string;
+    githubSourceItemId: string;
+    notionPageId?: string;
+  }): Promise<NotionSyncResult | null> {
+    if (!this.client) return null;
+
+    const databaseId = await this.ensureDatabase("GitHub Review");
+    let existingPage = item.notionPageId
+      ? await this.retrievePage(item.notionPageId)
+      : null;
+
+    if (!existingPage) {
+      existingPage = await this.findPageByFingerprintWithProperties(databaseId, "Review fingerprint", item.reviewFingerprint);
+    }
+
+    const existingDecision = existingPage ? getSelectPropertyName(existingPage, "Decision") : "";
+    const existingTitle = existingPage ? getTitlePropertyText(existingPage, "Item title") : "";
+    const existingClassification = existingPage ? getSelectPropertyName(existingPage, "Classification") : "";
+    const existingRationale = existingPage ? getRichTextPropertyText(existingPage, "Rationale") : "";
+    const existingCustomerVisibility = existingPage ? getSelectPropertyName(existingPage, "Customer visibility") : "";
+    const existingSensitivityLevel = existingPage ? getSelectPropertyName(existingPage, "Sensitivity level") : "";
+
+    const materialChange = Boolean(
+      existingPage && (
+        existingTitle !== item.itemTitle
+        || existingClassification !== item.classification
+        || existingRationale !== item.rationale
+        || existingCustomerVisibility !== item.customerVisibility
+        || existingSensitivityLevel !== item.sensitivityLevel
+      )
+    );
+
+    const properties = compactProperties({
+      "Item title": titleProperty(item.itemTitle),
+      Classification: selectProperty(item.classification),
+      Rationale: richTextProperty(item.rationale),
+      "Customer visibility": selectProperty(item.customerVisibility),
+      "Sensitivity level": selectProperty(item.sensitivityLevel),
+      "Evidence strength": numberProperty(item.evidenceStrength),
+      "Review note": richTextProperty(item.reviewNote ?? ""),
+      "GitHub link": urlProperty(item.githubLink),
+      "Item type": richTextProperty(item.itemType),
+      Repo: richTextProperty(item.repo ?? ""),
+      Labels: richTextProperty(item.labels ?? ""),
+      "Occurred at": dateProperty(item.occurredAt),
+      Decision: materialChange
+        ? emptySelectProperty()
+        : existingDecision
+          ? selectProperty(existingDecision)
+          : existingPage ? undefined : emptySelectProperty(),
+      "Review fingerprint": richTextProperty(item.reviewFingerprint),
+      "GitHub source item id": richTextProperty(item.githubSourceItemId)
+    });
+
+    if (existingPage) {
+      const pageId = getPageId(existingPage);
+      if (!pageId) throw new Error("GitHub review page is missing an id");
+      await this.client.pages.update({ page_id: pageId, archived: false, properties: properties as any });
+      return { notionPageId: pageId, action: "updated" };
+    }
+
+    const created = await this.client.pages.create({
+      parent: { database_id: databaseId },
+      properties: properties as any
+    });
+    return { notionPageId: created.id, action: "created" };
+  }
+
+  async archiveGitHubReviewItem(notionPageId: string): Promise<void> {
+    if (!this.client) return;
+    try {
+      await this.client.pages.update({ page_id: notionPageId, archived: true } as any);
     } catch (error: unknown) {
       if (isNotionArchivedError(error) || isNotionObjectNotFoundError(error)) return;
       throw error;
@@ -1066,6 +1158,9 @@ export function manualReviewViewSpecs() {
     { name: "Linear Review / Needs review", description: "Filter where Decision is empty" },
     { name: "Linear Review / Approved", description: "Filter where Decision = approve" },
     { name: "Linear Review / Rejected", description: "Filter where Decision = reject" },
+    { name: "GitHub Review / Needs review", description: "Filter where Decision is empty" },
+    { name: "GitHub Review / Approved", description: "Filter where Decision = approve" },
+    { name: "GitHub Review / Rejected", description: "Filter where Decision = reject" },
     { name: "Sync Runs / Recent", description: "Sort by Started at descending" }
   ];
 }
@@ -1145,6 +1240,24 @@ export function getDatabaseProperties(name: RequiredDatabase) {
         Decision: { select: {} },
         "Review fingerprint": { rich_text: {} },
         "Linear source item id": { rich_text: {} }
+      };
+    case "GitHub Review":
+      return {
+        "Item title": { title: {} },
+        Classification: { select: {} },
+        Rationale: { rich_text: {} },
+        "Customer visibility": { select: {} },
+        "Sensitivity level": { select: {} },
+        "Evidence strength": { number: { format: "number" } },
+        "Review note": { rich_text: {} },
+        "GitHub link": { url: {} },
+        "Item type": { rich_text: {} },
+        Repo: { rich_text: {} },
+        Labels: { rich_text: {} },
+        "Occurred at": { date: {} },
+        Decision: { select: {} },
+        "Review fingerprint": { rich_text: {} },
+        "GitHub source item id": { rich_text: {} }
       };
     case "Profiles":
       return {
@@ -1247,7 +1360,7 @@ function formatEvidenceExcerpts(evidence: EvidenceReference[]): string {
   if (evidence.length === 0) return "";
   return evidence.map((e) => {
     const date = e.timestamp.slice(0, 10);
-    const sourceLabel = e.source === "claap" ? "Claap" : e.source === "notion" ? "Notion" : e.source === "linear" ? "Linear" : e.source;
+    const sourceLabel = e.source === "claap" ? "Claap" : e.source === "notion" ? "Notion" : e.source === "linear" ? "Linear" : e.source === "github" ? "GitHub" : e.source;
     const attribution = e.speakerOrAuthor ? ` — ${e.speakerOrAuthor}` : "";
     const link = e.sourceUrl ? ` (${e.sourceUrl})` : "";
     return `[${sourceLabel}, ${date}${attribution}]${link}\n${e.excerpt}`;

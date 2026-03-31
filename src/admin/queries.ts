@@ -323,6 +323,39 @@ export class AdminQueries {
     });
   }
 
+  async listGitHubReviewItems(
+    companyId: string,
+    { page, pageSize }: AdminPagination = { page: 1, pageSize: 50 }
+  ) {
+    return this.prisma.sourceItem.findMany({
+      where: {
+        companyId,
+        source: "github",
+        metadataJson: { path: ["githubEnrichmentClassification"], equals: "manual-review" }
+      },
+      orderBy: { occurredAt: "desc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id: true,
+        title: true,
+        occurredAt: true,
+        metadataJson: true,
+        processedAt: true
+      }
+    });
+  }
+
+  async countGitHubReviewItems(companyId: string): Promise<number> {
+    return this.prisma.sourceItem.count({
+      where: {
+        companyId,
+        source: "github",
+        metadataJson: { path: ["githubEnrichmentClassification"], equals: "manual-review" }
+      }
+    });
+  }
+
   async listRuns(
     companyId: string,
     filters: AdminRunFilters = {},

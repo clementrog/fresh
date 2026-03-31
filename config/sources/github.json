@@ -1,0 +1,20 @@
+{
+  "source": "github",
+  "enabled": false,
+  "storeRawText": false,
+  "retentionDays": 30,
+  "rateLimit": {
+    "requestsPerMinute": 20,
+    "maxRetries": 3,
+    "initialDelayMs": 2000
+  },
+  "orgSlug": "linc-fr",
+  "repos": ["*"],
+  "includeMergedPRs": true,
+  "includeClosedIssues": true,
+  "includeReleases": true,
+  "labelFilters": {
+    "exclude": ["dependencies", "ci", "chore"]
+  },
+  "maxItemsPerRun": 500
+}

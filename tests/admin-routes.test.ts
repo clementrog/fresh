@@ -660,6 +660,61 @@ describe("GET /admin/reviews/linear", () => {
   });
 });
 
+describe("GET /admin/reviews/github", () => {
+  it("returns 200 with GitHub review items", async () => {
+    const server = buildServer();
+    const res = await server.inject({
+      method: "GET",
+      url: "/admin/reviews/github",
+      headers: { authorization: basicAuth("admin", "secret") }
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/html");
+    expect(res.body).toContain("GitHub Review");
+  });
+
+  it("only shows manual-review items, not other classifications", async () => {
+    const server = Fastify({ logger: false });
+    const prisma = mockPrisma();
+    // Override sourceItem.findMany to return a manual-review item
+    prisma.sourceItem.findMany = vi.fn(async () => [
+      {
+        id: "si_gh_manual",
+        title: "Ambiguous PR about customer migration",
+        occurredAt: new Date("2026-03-30"),
+        processedAt: null,
+        metadataJson: {
+          githubEnrichmentClassification: "manual-review",
+          githubCustomerVisibility: "ambiguous",
+          githubSensitivityLevel: "safe",
+          repoName: "app"
+        }
+      }
+    ]);
+    prisma.sourceItem.count = vi.fn(async () => 1);
+    registerAdminPlugin(server, prisma, { ...DEFAULT_OPTIONS });
+
+    const res = await server.inject({
+      method: "GET",
+      url: "/admin/reviews/github",
+      headers: { authorization: basicAuth("admin", "secret") }
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain("manual-review");
+    expect(res.body).toContain("Ambiguous PR about customer migration");
+    expect(res.body).toContain("app");
+
+    // Verify the query was called with manual-review filter
+    const findManyCall = (prisma.sourceItem.findMany as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(findManyCall.where.source).toBe("github");
+    expect(findManyCall.where.metadataJson).toEqual({
+      path: ["githubEnrichmentClassification"],
+      equals: "manual-review"
+    });
+  });
+});
+
 describe("GET /admin/runs", () => {
   it("returns 200 with runs table", async () => {
     const server = buildServer();

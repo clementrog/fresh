@@ -17,8 +17,8 @@ import {
   evidenceSignature,
   selectPrimaryEvidence
 } from "./evidence.js";
-import { screeningBatchSchema, createEnrichDecisionSchema, linearEnrichmentPolicySchema } from "../config/schema.js";
-import type { LinearEnrichmentClassification } from "../config/schema.js";
+import { screeningBatchSchema, createEnrichDecisionSchema, linearEnrichmentPolicySchema, githubEnrichmentPolicySchema } from "../config/schema.js";
+import type { LinearEnrichmentClassification, GitHubEnrichmentClassification } from "../config/schema.js";
 import type { LlmClient, LlmUsage } from "./llm.js";
 import { sourceItemDbId } from "../db/repositories.js";
 import { isBlockedByPublishability } from "./evidence-pack.js";
@@ -281,6 +281,123 @@ export async function evaluateLinearEnrichmentPolicy(params: {
   return { results, usageEvents };
 }
 
+// --- GitHub Enrichment Policy ---
+
+const GITHUB_ENRICHMENT_FALLBACK: GitHubEnrichmentClassification = {
+  classification: "manual-review",
+  rationale: "LLM evaluation failed — held for operator review",
+  customerVisibility: "ambiguous",
+  sensitivityLevel: "safe",
+  evidenceStrength: 0,
+  reviewNote: "Automatic hold: LLM unavailable"
+};
+
+export async function evaluateGitHubEnrichmentPolicy(params: {
+  items: NormalizedSourceItem[];
+  llmClient: LlmClient;
+  doctrineMarkdown: string;
+  sensitivityMarkdown: string;
+}): Promise<{
+  results: Map<string, GitHubEnrichmentClassification>;
+  usageEvents: Array<{ step: string; usage: LlmUsage }>;
+}> {
+  const results = new Map<string, GitHubEnrichmentClassification>();
+  const usageEvents: Array<{ step: string; usage: LlmUsage }> = [];
+
+  const system = [
+    "You are an editorial policy evaluator for a content pipeline. Your job is to classify GitHub items (merged PRs, closed issues, releases) for enrichment eligibility.",
+    "",
+    "## Company Doctrine",
+    params.doctrineMarkdown,
+    "",
+    "## Sensitivity Rules",
+    params.sensitivityMarkdown,
+    "",
+    "## Classification rules",
+    "",
+    "Classify each GitHub item into one of five categories:",
+    "",
+    "### shipped-feature",
+    "A major user-facing capability that has been shipped to production. Standalone editorial potential — can anchor a new content opportunity.",
+    "Requirements: (1) clear user/customer benefit, (2) enough substance for a 500+ word article, (3) merged/released to production.",
+    "Strong signals: release notes describing new capabilities, milestone PRs for convention support, major workflow improvements.",
+    "Examples: 'Release v2.5: Convention HCR fully supported', 'PR: Clickable PDF bulletins for all clients', 'Release: DSN filing automation'",
+    "",
+    "### customer-fix",
+    "A merged PR or closed issue that resolves a customer-facing problem, but is too narrow for a standalone article.",
+    "Good for enriching existing opportunities with concrete proof.",
+    "Examples: 'Fix: DSN validation edge case for multi-establishment companies', 'Resolve: Timeout on bulletin generation for large cabinets'",
+    "",
+    "### proof-point",
+    "Concrete evidence that a feature works or was shipped. Not editorial on its own, but excellent supporting evidence.",
+    "Examples: 'Add 150+ unit tests for HCR engine', 'Performance benchmark: 3x speedup on bulletin generation', 'Migration tool handles 500+ employees'",
+    "",
+    "### internal-only",
+    "Refactors, CI/CD improvements, dependency bumps, test infra, code cleanup. No editorial value.",
+    "Examples: 'Upgrade to Node 22', 'Fix flaky test', 'Refactor auth middleware', 'Bump eslint to v9'",
+    "",
+    "### manual-review",
+    "Ambiguous items, pre-release artifacts, items mentioning unreleased features. Needs human judgment.",
+    "Examples: 'Beta: AI suggestions for payroll', 'Release v3.0-rc1', 'WIP: New compliance engine'",
+    "",
+    "## customerVisibility",
+    "- shipped: merged/released and available to customers",
+    "- in-progress: not yet merged or part of an ongoing effort",
+    "- internal-only: internal tooling, infra, or process",
+    "- ambiguous: unclear from the item text",
+    "",
+    "## sensitivityLevel",
+    "- safe: no risk in referencing publicly",
+    "- roadmap-sensitive: reveals future plans not yet announced",
+    "- pre-shipping: work in progress that might not ship as described",
+    "",
+    "## Tie-breaking rules",
+    "- Between shipped-feature and customer-fix: choose shipped-feature only when the item has enough scope for a standalone article.",
+    "- Between customer-fix and proof-point: choose customer-fix when it resolves a specific customer problem; proof-point when it provides evidence without fixing a problem.",
+    "- When genuinely unsure, choose manual-review. It is always safer to hold an item for review than to auto-promote.",
+    "",
+    "Return JSON matching the githubEnrichmentPolicy schema."
+  ].join("\n");
+
+  for (const item of params.items) {
+    const meta = item.metadata ?? {};
+    const prompt = [
+      "## GitHub item to classify",
+      `Title: ${item.title}`,
+      `Summary: ${item.summary}`,
+      `Text (first 1000 chars): ${item.text.slice(0, 1000)}`,
+      `Item type: ${meta.itemType ?? "unknown"}`,
+      `Repo: ${meta.repoName ?? "unknown"}`,
+      `Labels: ${Array.isArray(meta.labels) ? (meta.labels as string[]).join(", ") : "none"}`,
+      `Author: ${meta.authorLogin ?? "unknown"}`,
+      `Milestone: ${meta.milestoneName ?? "none"}`,
+      meta.additions != null ? `Additions: ${meta.additions}` : "",
+      meta.deletions != null ? `Deletions: ${meta.deletions}` : "",
+      meta.releaseTagName ? `Release tag: ${meta.releaseTagName}` : "",
+      meta.linkedIssueNumbers && Array.isArray(meta.linkedIssueNumbers) && (meta.linkedIssueNumbers as number[]).length > 0
+        ? `Linked issues: ${(meta.linkedIssueNumbers as number[]).join(", ")}` : ""
+    ].filter(Boolean).join("\n");
+
+    try {
+      const response = await params.llmClient.generateStructured({
+        step: "github-enrichment-policy",
+        system,
+        prompt,
+        schema: githubEnrichmentPolicySchema,
+        allowFallback: true,
+        fallback: () => GITHUB_ENRICHMENT_FALLBACK
+      });
+
+      usageEvents.push({ step: "github-enrichment-policy", usage: response.usage });
+      results.set(item.externalId, response.output);
+    } catch {
+      results.set(item.externalId, GITHUB_ENRICHMENT_FALLBACK);
+    }
+  }
+
+  return { results, usageEvents };
+}
+
 // --- Dedup configuration (env-var rollback switches) ---
 // Thresholds below are TEMPORARY UNCALIBRATED DEFAULTS chosen by inspection,
 // not by replay against labeled real data.  They must be validated via Phase 0
@@ -440,6 +557,11 @@ export function getSourceCreationMode(item: NormalizedSourceItem): SourceCreatio
     }
     case "hubspot":
       return "enrich-only";
+    case "github": {
+      const ghClass = typeof item.metadata?.githubEnrichmentClassification === "string"
+        ? item.metadata.githubEnrichmentClassification : undefined;
+      return ghClass === "shipped-feature" ? "create-capable" : "enrich-only";
+    }
     default:
       return "enrich-only";
   }
@@ -470,6 +592,11 @@ function isCuratedSource(item: NormalizedSourceItem): boolean {
     }
     case "hubspot":
       return false;
+    case "github": {
+      const ghItemType = typeof item.metadata?.itemType === "string"
+        ? item.metadata.itemType : undefined;
+      return ghItemType === "release";
+    }
     default:
       return false;
   }
@@ -1262,6 +1389,11 @@ export interface IntelligencePipelineResult {
     classification: LinearEnrichmentClassification;
   }>;
   linearClassifications: Map<string, LinearEnrichmentClassification>;
+  githubReviewItems: Array<{
+    item: NormalizedSourceItem;
+    classification: GitHubEnrichmentClassification;
+  }>;
+  githubClassifications: Map<string, GitHubEnrichmentClassification>;
 }
 
 export async function runIntelligencePipeline(
@@ -1278,7 +1410,9 @@ export async function runIntelligencePipeline(
     speakerContextEvents: [],
     processedSourceItemIds: [],
     linearReviewItems: [],
-    linearClassifications: new Map()
+    linearClassifications: new Map(),
+    githubReviewItems: [],
+    githubClassifications: new Map()
   };
 
   // 1. Prefilter
@@ -1330,7 +1464,8 @@ export async function runIntelligencePipeline(
 
   // 4. Linear enrichment policy — triage Linear items before create/enrich
   const linearItems = retainedAfterScreening.filter(({ item }) => item.source === "linear");
-  const nonLinearItems = retainedAfterScreening.filter(({ item }) => item.source !== "linear");
+  const githubItems = retainedAfterScreening.filter(({ item }) => item.source === "github");
+  const nonLinearNonGithubItems = retainedAfterScreening.filter(({ item }) => item.source !== "linear" && item.source !== "github");
 
   let linearEnrichWorthy: Array<{ item: NormalizedSourceItem; screening: ScreeningResult }> = [];
 
@@ -1398,7 +1533,74 @@ export async function runIntelligencePipeline(
     }
   }
 
-  const itemsForCreateEnrich = [...nonLinearItems, ...linearEnrichWorthy];
+  // 4b. GitHub enrichment policy — triage GitHub items before create/enrich
+  let githubEnrichWorthy: Array<{ item: NormalizedSourceItem; screening: ScreeningResult }> = [];
+
+  if (githubItems.length > 0) {
+    try {
+      const githubEval = await evaluateGitHubEnrichmentPolicy({
+        items: githubItems.map(({ item }) => item),
+        llmClient: params.llmClient,
+        doctrineMarkdown: params.doctrineMarkdown,
+        sensitivityMarkdown: params.sensitivityMarkdown
+      });
+      result.usageEvents.push(...githubEval.usageEvents);
+
+      for (const { item, screening: sr } of githubItems) {
+        const classification = githubEval.results.get(item.externalId) ?? GITHUB_ENRICHMENT_FALLBACK;
+        result.githubClassifications.set(item.externalId, classification);
+
+        if (classification.classification === "internal-only") {
+          result.skipped.push({
+            sourceItemId: item.externalId,
+            reason: `GitHub enrichment policy: internal-only — ${classification.rationale}`
+          });
+          result.processedSourceItemIds.push(item.externalId);
+        } else if (classification.classification === "manual-review") {
+          result.githubReviewItems.push({ item, classification });
+          result.skipped.push({
+            sourceItemId: item.externalId,
+            reason: `GitHub enrichment policy: held for manual review — ${classification.rationale}`
+          });
+          result.processedSourceItemIds.push(item.externalId);
+        } else {
+          // shipped-feature, customer-fix, or proof-point — stamp classification onto in-memory item metadata
+          item.metadata = {
+            ...item.metadata,
+            githubEnrichmentClassification: classification.classification,
+            githubEnrichmentRationale: classification.rationale,
+            githubCustomerVisibility: classification.customerVisibility,
+            githubSensitivityLevel: classification.sensitivityLevel,
+            githubEvidenceStrength: classification.evidenceStrength,
+            githubReviewNote: classification.reviewNote
+          };
+          githubEnrichWorthy.push({ item, screening: sr });
+        }
+      }
+    } catch (error) {
+      // Fail-closed: classify ALL GitHub items as manual-review
+      const failReason = "GitHub enrichment policy evaluation failed; all items held for review";
+      for (const { item } of githubItems) {
+        const failClassification: GitHubEnrichmentClassification = {
+          classification: "manual-review",
+          rationale: failReason,
+          customerVisibility: "ambiguous",
+          sensitivityLevel: "safe",
+          evidenceStrength: 0,
+          reviewNote: failReason
+        };
+        result.githubClassifications.set(item.externalId, failClassification);
+        result.githubReviewItems.push({ item, classification: failClassification });
+        result.skipped.push({
+          sourceItemId: item.externalId,
+          reason: `GitHub enrichment policy: held for manual review — ${failReason}`
+        });
+        result.processedSourceItemIds.push(item.externalId);
+      }
+    }
+  }
+
+  const itemsForCreateEnrich = [...nonLinearNonGithubItems, ...linearEnrichWorthy, ...githubEnrichWorthy];
 
   // 5. Create/enrich per retained item
   // Mutable candidate pool: opportunities created/enriched within this run become

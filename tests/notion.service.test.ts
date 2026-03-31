@@ -100,8 +100,8 @@ describe("notion service", () => {
 
     const result = await service.ensureSchema();
 
-    expect(result.databases).toHaveLength(5);
-    expect(REQUIRED_DATABASES).toEqual(["Content Opportunities", "Claap Review", "Linear Review", "Profiles", "Sync Runs"]);
+    expect(result.databases).toHaveLength(6);
+    expect(REQUIRED_DATABASES).toEqual(["Content Opportunities", "Claap Review", "Linear Review", "GitHub Review", "Profiles", "Sync Runs"]);
   });
 
   it("ensureDatabase lazily patches missing properties on existing required databases", async () => {
@@ -524,7 +524,7 @@ describe("notion service", () => {
 
     const result = await service.ensureSchema();
 
-    expect(result.databases).toHaveLength(5);
+    expect(result.databases).toHaveLength(6);
     expect(onWarning).toHaveBeenCalledWith(
       "Skipping Operations Guide creation because the configured Notion parent cannot accept child pages."
     );

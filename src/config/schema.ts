@@ -19,6 +19,7 @@ export const envSchema = z.object({
   TAVILY_API_KEY: z.string().default(""),
   CLAAP_API_KEY: z.string().default(""),
   LINEAR_API_KEY: z.string().default(""),
+  GITHUB_TOKEN: z.string().default(""),
   DEFAULT_TIMEZONE: z.string().default("Europe/Paris"),
   DEFAULT_COMPANY_SLUG: z.string().default("default"),
   DEFAULT_COMPANY_NAME: z.string().default("Default Company"),
@@ -100,6 +101,17 @@ export const linearEnrichmentPolicySchema = z.object({
 
 export type LinearEnrichmentClassification = z.infer<typeof linearEnrichmentPolicySchema>;
 
+export const githubEnrichmentPolicySchema = z.object({
+  classification: z.enum(["shipped-feature", "customer-fix", "proof-point", "internal-only", "manual-review"]),
+  rationale: z.string(),
+  customerVisibility: z.enum(["shipped", "in-progress", "internal-only", "ambiguous"]),
+  sensitivityLevel: z.enum(["safe", "roadmap-sensitive", "pre-shipping"]),
+  evidenceStrength: z.number().min(0).max(1),
+  reviewNote: z.string().optional()
+});
+
+export type GitHubEnrichmentClassification = z.infer<typeof githubEnrichmentPolicySchema>;
+
 export const linearSourceConfigSchema = sourceBaseSchema.extend({
   source: z.literal("linear"),
   workspaceIds: z.array(z.string()),
@@ -113,11 +125,26 @@ export const marketFindingsSourceConfigSchema = sourceBaseSchema.extend({
   directory: z.string().min(1)
 });
 
+export const githubSourceConfigSchema = sourceBaseSchema.extend({
+  source: z.literal("github"),
+  orgSlug: z.string().min(1),
+  repos: z.array(z.string()).min(1),
+  includeMergedPRs: z.boolean(),
+  includeClosedIssues: z.boolean(),
+  includeReleases: z.boolean(),
+  labelFilters: z.object({
+    include: z.array(z.string()).optional(),
+    exclude: z.array(z.string()).optional()
+  }).optional(),
+  maxItemsPerRun: z.number().int().positive().optional()
+});
+
 export const sourceConfigSchema = z.discriminatedUnion("source", [
   notionSourceConfigSchema,
   claapSourceConfigSchema,
   linearSourceConfigSchema,
-  marketFindingsSourceConfigSchema
+  marketFindingsSourceConfigSchema,
+  githubSourceConfigSchema
 ]);
 
 export const marketResearchRuntimeConfigSchema = z.object({
@@ -165,6 +192,7 @@ export const notionDatabaseNameSchema = z.enum([
   "Content Opportunities",
   "Claap Review",
   "Linear Review",
+  "GitHub Review",
   "Profiles",
   "Sync Runs"
 ]);
