@@ -298,6 +298,7 @@ export interface EnrichmentLogEntry {
   contextComment: string;
   suggestedAngleUpdate?: string;
   suggestedWhyNowUpdate?: string;
+  suggestedEditorialClaimUpdate?: string;
   ownerSuggestionUpdate?: string;
   confidence: number;
   reason: string;
@@ -324,6 +325,14 @@ export interface DraftReadinessAssessment {
   productBacking: ProductBackingState;
 }
 
+export interface AngleQualitySignals {
+  specificity: string;
+  consequence: string;
+  tensionOrContrast: string;
+  traceableEvidence: string;
+  positionSharpening: string;
+}
+
 export interface CreateEnrichDecision {
   action: "create" | "enrich" | "skip";
   targetOpportunityId?: string;
@@ -337,6 +346,9 @@ export interface CreateEnrichDecision {
   whatItIsNotAbout: string;
   suggestedFormat: string;
   confidence: number;
+  editorialClaim?: string;
+  angleQualitySignals?: AngleQualitySignals;
+  skipReasons?: string[];
   targetSegment?: string;
   editorialPillar?: string;
   awarenessTarget?: string;
@@ -358,6 +370,7 @@ export interface ContentOpportunity {
   buyerFriction?: string;
   contentMotion?: string;
   angle: string;
+  editorialClaim?: string;
   whyNow: string;
   whatItIsAbout: string;
   whatItIsNotAbout: string;

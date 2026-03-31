@@ -90,6 +90,95 @@ export function extractBigrams(tokens: string[]): Set<string> {
   return bigrams;
 }
 
+// --- Angle sharpness assessment ---
+
+export interface AngleSharpnessResult {
+  isSharp: boolean;
+  checks: {
+    notGenericSubject: boolean;
+    notQuestionOnly: boolean;
+    hasStake: boolean;
+    notTopicLabel: boolean;
+    notTitleDuplicate: boolean;
+  };
+  failedChecks: string[];
+}
+
+const GENERIC_SUBJECT_STARTERS = [
+  "the importance of", "the role of", "the impact of", "the benefits of",
+  "an overview of", "a look at", "the state of", "trends in",
+  "exploring ", "understanding ",
+  // French equivalents
+  "l'importance de", "le role de", "le rôle de", "les tendances",
+  "un apercu", "un aperçu", "comprendre ", "decouvrir ", "découvrir "
+];
+
+const QUESTION_STARTERS = ["how ", "what ", "why ", "when ", "where ", "who "];
+
+// Tension/contrast markers — checked on raw string, NOT tokenized (STOP_WORDS strips many of these)
+// French stems use \w* suffix to match conjugations (risque→risquent, bloqu→bloquent, etc.)
+const TENSION_MARKER_REGEX = /\b(despite|because|yet|even though|fail\w*|risk\w*|miss\w*|wrong|block\w*|break\w*|cost\w*|force\w*|trap\w*|hide|reveal\w*|prove\w*|shift\w*|instead|actually|unlike|although|however|whereas|contradict\w*|paradox\w*|assume\w*|myth|misconception|surprising|overlooked|underestimate\w*|mais|malgre|malgré|pourtant|contrairement|risqu\w*|echec|échec|bloqu\w*|cout|coût|piege|piège|cach\w*|prouv\w*)\b/i;
+// "but" needs word-boundary care to avoid matching inside words like "contribution"
+const BUT_REGEX = /\bbut\b/i;
+const CONTRACTION_REGEX = /n't\b/i;
+
+// Consequence language — alternative pass path for angles without explicit contrast
+// Stems (eliminat, enabl, etc.) use \w* suffix to match conjugations (eliminates, enabling, etc.)
+const CONSEQUENCE_REGEX = /\b(eliminat\w*|enabl\w*|reduc\w*|sav\w*|prevent\w*|replac\w*|demonstrates?)\b|for the first time|finally\b|can now\b|gives?\s+.+\s+proof/i;
+
+// Domain terms for Path C specificity check
+const DOMAIN_TERMS = /\b(dsn|hcr|ccn|dpae|paie|payroll|cabinet|cabinets|bulletin|fiche|solde|regularisation|régularisation|migration|conformit|compliance|onboarding)\b/i;
+
+export function assessAngleSharpness(angle: string, title: string): AngleSharpnessResult {
+  const failedChecks: string[] = [];
+  const normalized = normalizeAccents(angle).toLowerCase().trim();
+
+  // 1. notGenericSubject
+  const notGenericSubject = !GENERIC_SUBJECT_STARTERS.some(
+    (starter) => normalizeAccents(starter).toLowerCase() === starter
+      ? normalized.startsWith(starter)
+      : normalized.startsWith(normalizeAccents(starter).toLowerCase())
+  );
+  if (!notGenericSubject) failedChecks.push("generic subject framing");
+
+  // 2. notQuestionOnly
+  const startsWithQuestion = QUESTION_STARTERS.some((q) => normalized.startsWith(q));
+  const endsWithQuestion = normalized.endsWith("?");
+  const notQuestionOnly = !(startsWithQuestion && endsWithQuestion);
+  if (!notQuestionOnly) failedChecks.push("question without a claim");
+
+  // 3. hasStake — three alternative pass paths
+  const rawLower = angle.toLowerCase();
+  const pathA = TENSION_MARKER_REGEX.test(rawLower) || BUT_REGEX.test(rawLower) || CONTRACTION_REGEX.test(rawLower);
+  const pathB = CONSEQUENCE_REGEX.test(rawLower);
+  const angleTokens = removeStopWords(tokenizeV2(angle));
+  const pathC = angleTokens.length >= 8 && (/\d+/.test(angle) || DOMAIN_TERMS.test(rawLower));
+  const hasStake = pathA || pathB || pathC;
+  if (!hasStake) failedChecks.push("no stake — no tension, consequence, or position marker");
+
+  // 4. notTopicLabel — short + no stake = label
+  const notTopicLabel = !(angleTokens.length <= 5 && !hasStake);
+  if (!notTopicLabel) failedChecks.push("topic label — too short with no tension");
+
+  // 5. notTitleDuplicate
+  const titleTokens = removeStopWords(tokenizeV2(title));
+  const angleSet = new Set(angleTokens);
+  const titleSet = new Set(titleTokens);
+  const similarity = jaccardSimilarity(angleSet, titleSet);
+  const notTitleDuplicate = similarity <= 0.8;
+  if (!notTitleDuplicate) failedChecks.push("angle duplicates source title");
+
+  const isSharp = notGenericSubject && notQuestionOnly && hasStake && notTopicLabel && notTitleDuplicate;
+
+  return {
+    isSharp,
+    checks: { notGenericSubject, notQuestionOnly, hasStake, notTopicLabel, notTitleDuplicate },
+    failedChecks
+  };
+}
+
+// --- Overlap detection ---
+
 export function hasMeaningfulOverlap(oppTokens: string[], itemTokens: string[]): boolean {
   const oppClean = removeStopWords(oppTokens);
   const itemClean = removeStopWords(itemTokens);

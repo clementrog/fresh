@@ -13,7 +13,8 @@ import {
   tokenizeV2 as tokenize,
   removeStopWords,
   jaccardSimilarity,
-  hasMeaningfulOverlap
+  hasMeaningfulOverlap,
+  assessAngleSharpness
 } from "../lib/text.js";
 
 // --- Publishability guard ---
@@ -371,8 +372,12 @@ export function classifyProductBacking(
 
 // --- Draft readiness ---
 
-const GENERIC_ANGLE_STARTERS = [
-  "about", "regarding", "general", "overview", "introduction", "misc", "various"
+export const GENERIC_ANGLE_STARTERS = [
+  "about", "regarding", "general", "overview", "introduction", "misc", "various",
+  "the importance of", "the role of", "the impact of", "the benefits of",
+  "an overview of", "a look at", "the state of", "trends in",
+  "exploring", "understanding",
+  "l'importance de", "le role de", "les tendances", "un apercu", "comprendre", "decouvrir"
 ];
 
 export function assessDraftReadiness(
@@ -425,6 +430,15 @@ export function assessDraftReadiness(
     missingElements.push("Angle is too generic or vague");
   }
 
+  // Additional sharpness check — if basic check passes, verify editorial substance
+  let angleSharpnessNote: string | undefined;
+  if (hasConcreteAngle) {
+    const sharpness = assessAngleSharpness(opportunity.angle, opportunity.title);
+    if (!sharpness.isSharp) {
+      angleSharpnessNote = sharpness.failedChecks.join("; ");
+    }
+  }
+
   // 4. Has draftable material — at least 2 evidence items with substantive excerpts
   const substantiveExcerpts = allEvidence.filter(
     (e) => e.excerpt && e.excerpt.trim().length > 30
@@ -443,7 +457,7 @@ export function assessDraftReadiness(
 
   const checks = {
     hasOriginatingSource, hasSupportingEvidence, hasConcreteAngle, hasDraftableMaterial,
-    claimPosture, productBacking
+    claimPosture, productBacking, angleSharpnessNote
   };
   const readinessTier = computeReadinessTier(checks);
   const operatorGuidance = generateOperatorGuidance(checks);
@@ -471,10 +485,15 @@ export function computeReadinessTier(checks: {
   hasDraftableMaterial: boolean;
   claimPosture?: ClaimPosture;
   productBacking?: ProductBackingState;
+  angleSharpnessNote?: string;
 }): ReadinessTier {
   const { hasOriginatingSource, hasSupportingEvidence, hasConcreteAngle, hasDraftableMaterial } = checks;
 
   if (hasOriginatingSource && hasSupportingEvidence && hasConcreteAngle && hasDraftableMaterial) {
+    // Angle sharpness downgrade: basic angle check passed but sharpness assessment failed
+    if (checks.angleSharpnessNote) {
+      return "promising";
+    }
     // Claim-aware downgrade: product-claim or mixed with unbacked/in-progress → promising
     const posture = checks.claimPosture;
     const backing = checks.productBacking;
@@ -504,6 +523,7 @@ export function generateOperatorGuidance(checks: {
   hasDraftableMaterial: boolean;
   claimPosture?: ClaimPosture;
   productBacking?: ProductBackingState;
+  angleSharpnessNote?: string;
 }): string[] {
   const guidance: string[] = [];
 
@@ -515,6 +535,9 @@ export function generateOperatorGuidance(checks: {
   }
   if (!checks.hasConcreteAngle) {
     guidance.push("Angle is too vague to draft well — edit it to include a specific claim or contrast");
+  }
+  if (checks.angleSharpnessNote) {
+    guidance.push("Angle may lack editorial sharpness — consider adding a specific claim, tension, or consequence");
   }
   if (!checks.hasDraftableMaterial) {
     guidance.push("Not enough concrete material — add evidence with specific facts, quotes, or numbers to give the draft substance");
