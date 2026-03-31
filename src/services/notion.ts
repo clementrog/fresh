@@ -11,7 +11,7 @@ import type {
   NotionSyncResult,
   SyncRun
 } from "../domain/types.js";
-import { normalizeGtmFields } from "../domain/types.js";
+import { normalizeGtmFieldsForOperatorEdit } from "../domain/types.js";
 
 export const REQUIRED_DATABASES = [
   "Content Opportunities",
@@ -121,6 +121,7 @@ export class NotionService {
     const editableProperties = {
       Title: titleProperty(opportunity.title),
       Angle: richTextProperty(opportunity.angle),
+      "Editorial claim": richTextProperty(opportunity.editorialClaim ?? ""),
       "Why now": richTextProperty(opportunity.whyNow),
       "What it is about": richTextProperty(opportunity.whatItIsAbout),
       "What it is not about": richTextProperty(opportunity.whatItIsNotAbout),
@@ -666,12 +667,16 @@ export class NotionService {
           whatItIsNotAbout: getRichTextPropertyText(page, "What it is not about"),
           sourceUrl: getRichTextPropertyText(page, "Source URL"),
           editorialNotes: getRichTextPropertyText(page, "Editorial notes"),
-          ...normalizeGtmFields({
-            targetSegment: getSelectPropertyName(page, "Target segment") || undefined,
-            editorialPillar: getSelectPropertyName(page, "Editorial pillar") || undefined,
-            awarenessTarget: getSelectPropertyName(page, "Awareness target") || undefined,
-            buyerFriction: getRichTextPropertyText(page, "Buyer friction") || undefined,
-            contentMotion: getSelectPropertyName(page, "Content motion") || undefined,
+          // GTM operator-edit normalization: three-way behavior:
+          //   empty/null select → "" (explicit clear, persists to DB)
+          //   valid enum        → normalized value (persists to DB)
+          //   invalid non-empty → undefined (skip write, preserve existing DB value)
+          ...normalizeGtmFieldsForOperatorEdit({
+            targetSegment: getSelectPropertyName(page, "Target segment"),
+            editorialPillar: getSelectPropertyName(page, "Editorial pillar"),
+            awarenessTarget: getSelectPropertyName(page, "Awareness target"),
+            buyerFriction: getRichTextPropertyText(page, "Buyer friction"),
+            contentMotion: getSelectPropertyName(page, "Content motion"),
           }),
         });
       }

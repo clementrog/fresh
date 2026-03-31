@@ -195,7 +195,12 @@ function makeEditRequest(overrides: Partial<{
     whatItIsAbout: "Edited About",
     whatItIsNotAbout: "Edited Not about",
     sourceUrl: overrides.sourceUrl ?? "https://edited.com/source",
-    editorialNotes: overrides.editorialNotes ?? "User notes"
+    editorialNotes: overrides.editorialNotes ?? "User notes",
+    targetSegment: "",
+    editorialPillar: "",
+    awarenessTarget: "",
+    buyerFriction: "",
+    contentMotion: ""
   };
 }
 
@@ -217,7 +222,12 @@ describe("opportunity:pull-notion-edits command", () => {
       whyNow: "Edited Why now",
       whatItIsAbout: "Edited About",
       whatItIsNotAbout: "Edited Not about",
-      editorialNotes: "User notes"
+      editorialNotes: "User notes",
+      targetSegment: "",
+      editorialPillar: "",
+      awarenessTarget: "",
+      buyerFriction: "",
+      contentMotion: ""
     });
     expect(repositories.markEditsPending).toHaveBeenCalledWith(["opp-1"], COMPANY_ID);
     expect(notion.syncOpportunity).toHaveBeenCalledTimes(1);
@@ -478,5 +488,113 @@ describe("opportunity:pull-notion-edits command", () => {
     expect(repositories.updateOpportunityEditableFields).not.toHaveBeenCalled();
     expect(notion.syncOpportunity).not.toHaveBeenCalled();
     expect(repositories.clearEditsPending).not.toHaveBeenCalled();
+  });
+
+  it("operator clearing a GTM field in Notion persists empty string to DB", async () => {
+    const oppRow = makeOpportunityRow({
+      notionPageId: "np-1",
+      notionPageFingerprint: "npf-1",
+      editorialNotes: "original notes"
+    });
+    // Simulate: opportunity had GTM values from LLM
+    (oppRow as any).targetSegment = "production-manager";
+    (oppRow as any).editorialPillar = "proof";
+
+    const editRequest = {
+      ...makeEditRequest(),
+      // Operator cleared these fields in Notion → pull-edits returns ""
+      targetSegment: "",
+      editorialPillar: "",
+      // Operator set a valid new value for this one
+      awarenessTarget: "solution-aware",
+      buyerFriction: "",
+      contentMotion: ""
+    };
+
+    const { app, repositories, notion } = buildApp();
+    repositories.findOpportunityByNotionPageId.mockResolvedValue(oppRow as any);
+    repositories.findOpportunityByNotionPageFingerprint.mockResolvedValue(null);
+    repositories.findOpportunityById.mockResolvedValue(oppRow as any);
+    notion.listReEvaluationRequests.mockResolvedValue([editRequest]);
+
+    await app.run("opportunity:pull-notion-edits");
+
+    expect(repositories.updateOpportunityEditableFields).toHaveBeenCalledTimes(1);
+    const call = (repositories.updateOpportunityEditableFields.mock.calls[0] as any[])[0];
+    // Cleared fields should be written as "" (not skipped)
+    expect(call.targetSegment).toBe("");
+    expect(call.editorialPillar).toBe("");
+    // Valid operator override preserved
+    expect(call.awarenessTarget).toBe("solution-aware");
+    expect(call.buyerFriction).toBe("");
+    expect(call.contentMotion).toBe("");
+  });
+
+  it("operator GTM override persists through pull-edits", async () => {
+    const oppRow = makeOpportunityRow({
+      notionPageId: "np-1",
+      notionPageFingerprint: "npf-1"
+    });
+
+    const editRequest = {
+      ...makeEditRequest(),
+      targetSegment: "production-manager",
+      editorialPillar: "insight",
+      awarenessTarget: "",
+      buyerFriction: "Migration risk too high",
+      contentMotion: "demand-capture"
+    };
+
+    const { app, repositories, notion } = buildApp();
+    repositories.findOpportunityByNotionPageId.mockResolvedValue(oppRow as any);
+    repositories.findOpportunityById.mockResolvedValue(oppRow as any);
+    notion.listReEvaluationRequests.mockResolvedValue([editRequest]);
+
+    await app.run("opportunity:pull-notion-edits");
+
+    const call = (repositories.updateOpportunityEditableFields.mock.calls[0] as any[])[0];
+    expect(call.targetSegment).toBe("production-manager");
+    expect(call.editorialPillar).toBe("insight");
+    expect(call.awarenessTarget).toBe("");
+    expect(call.buyerFriction).toBe("Migration risk too high");
+    expect(call.contentMotion).toBe("demand-capture");
+  });
+
+  it("unsupported non-empty Notion GTM value does not clear existing DB field", async () => {
+    const oppRow = makeOpportunityRow({
+      notionPageId: "np-1",
+      notionPageFingerprint: "npf-1"
+    });
+    // DB has valid GTM values from LLM
+    (oppRow as any).targetSegment = "production-manager";
+    (oppRow as any).editorialPillar = "proof";
+
+    const editRequest = {
+      ...makeEditRequest(),
+      // Operator typed an unsupported value in Notion (not in enum)
+      // normalizeGtmFieldsForOperatorEdit returns undefined → conditional spread skips
+      targetSegment: undefined, // simulates invalid "ceo" being normalized to undefined
+      editorialPillar: undefined, // simulates invalid "hot-take" being normalized to undefined
+      // Operator explicitly cleared this one (empty select)
+      awarenessTarget: "",
+      // Operator set a valid value
+      contentMotion: "trust"
+    };
+
+    const { app, repositories, notion } = buildApp();
+    repositories.findOpportunityByNotionPageId.mockResolvedValue(oppRow as any);
+    repositories.findOpportunityById.mockResolvedValue(oppRow as any);
+    notion.listReEvaluationRequests.mockResolvedValue([editRequest]);
+
+    await app.run("opportunity:pull-notion-edits");
+
+    const call = (repositories.updateOpportunityEditableFields.mock.calls[0] as any[])[0];
+    // Invalid values → undefined → conditional spread skips → DB value preserved
+    expect(call.targetSegment).toBeUndefined();
+    expect(call.editorialPillar).toBeUndefined();
+    // Explicit clear → "" → persisted
+    expect(call.awarenessTarget).toBe("");
+    // Valid operator choice → persisted
+    expect(call.contentMotion).toBe("trust");
   });
 });

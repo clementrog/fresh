@@ -74,6 +74,53 @@ function normalizeGtmFreeform(value: string | null | undefined): string | undefi
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/**
+ * Normalize a GTM field for operator-edit persistence.
+ *
+ * Input semantics:
+ *  - undefined → field absent from source → undefined (skip write, preserve existing DB value)
+ *  - null      → operator explicitly cleared → "" (persists clear to DB)
+ *  - ""        → operator explicitly cleared → "" (persists clear to DB)
+ *  - valid enum string → normalized lowercase (persists to DB)
+ *  - non-empty invalid string → undefined (skip write, preserve existing DB value)
+ */
+function operatorEditGtmEnum<T extends string>(value: string | null | undefined, allowed: readonly T[]): string | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return "";
+  const trimmed = value.trim();
+  if (trimmed === "") return "";
+  const lower = trimmed.toLowerCase();
+  return (allowed as readonly string[]).includes(lower) ? lower : undefined;
+}
+
+function operatorEditGtmFreeform(value: string | null | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return "";
+  return value.trim();
+}
+
+export function normalizeGtmFieldsForOperatorEdit(raw: {
+  targetSegment?: string | null;
+  editorialPillar?: string | null;
+  awarenessTarget?: string | null;
+  buyerFriction?: string | null;
+  contentMotion?: string | null;
+}): {
+  targetSegment?: string;
+  editorialPillar?: string;
+  awarenessTarget?: string;
+  buyerFriction?: string;
+  contentMotion?: string;
+} {
+  return {
+    targetSegment: operatorEditGtmEnum(raw.targetSegment, TARGET_SEGMENTS),
+    editorialPillar: operatorEditGtmEnum(raw.editorialPillar, EDITORIAL_PILLARS),
+    awarenessTarget: operatorEditGtmEnum(raw.awarenessTarget, AWARENESS_TARGETS),
+    buyerFriction: operatorEditGtmFreeform(raw.buyerFriction),
+    contentMotion: operatorEditGtmEnum(raw.contentMotion, CONTENT_MOTIONS),
+  };
+}
+
 export function normalizeGtmFields(raw: {
   targetSegment?: string | null;
   editorialPillar?: string | null;
@@ -251,6 +298,7 @@ export interface EnrichmentLogEntry {
   contextComment: string;
   suggestedAngleUpdate?: string;
   suggestedWhyNowUpdate?: string;
+  suggestedEditorialClaimUpdate?: string;
   ownerSuggestionUpdate?: string;
   confidence: number;
   reason: string;
@@ -277,6 +325,14 @@ export interface DraftReadinessAssessment {
   productBacking: ProductBackingState;
 }
 
+export interface AngleQualitySignals {
+  specificity: string;
+  consequence: string;
+  tensionOrContrast: string;
+  traceableEvidence: string;
+  positionSharpening: string;
+}
+
 export interface CreateEnrichDecision {
   action: "create" | "enrich" | "skip";
   targetOpportunityId?: string;
@@ -290,6 +346,9 @@ export interface CreateEnrichDecision {
   whatItIsNotAbout: string;
   suggestedFormat: string;
   confidence: number;
+  editorialClaim?: string;
+  angleQualitySignals?: AngleQualitySignals;
+  skipReasons?: string[];
   targetSegment?: string;
   editorialPillar?: string;
   awarenessTarget?: string;
@@ -311,6 +370,7 @@ export interface ContentOpportunity {
   buyerFriction?: string;
   contentMotion?: string;
   angle: string;
+  editorialClaim?: string;
   whyNow: string;
   whatItIsAbout: string;
   whatItIsNotAbout: string;
@@ -485,6 +545,7 @@ export interface NotionEditRequest {
   whatItIsNotAbout: string;
   sourceUrl: string;
   editorialNotes: string;
+  /** "" = operator cleared, valid enum = operator set, undefined = absent or invalid (preserve DB) */
   targetSegment?: string;
   editorialPillar?: string;
   awarenessTarget?: string;

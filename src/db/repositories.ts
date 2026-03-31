@@ -416,6 +416,7 @@ export class RepositoryBundle {
         buyerFriction: opportunity.buyerFriction ?? "",
         contentMotion: opportunity.contentMotion ?? "",
         angle: opportunity.angle,
+        editorialClaim: opportunity.editorialClaim ?? "",
         whyNow: opportunity.whyNow,
         whatItIsAbout: opportunity.whatItIsAbout,
         whatItIsNotAbout: opportunity.whatItIsNotAbout,
@@ -447,6 +448,7 @@ export class RepositoryBundle {
         buyerFriction: opportunity.buyerFriction ?? "",
         contentMotion: opportunity.contentMotion ?? "",
         angle: opportunity.angle,
+        editorialClaim: opportunity.editorialClaim ?? "",
         whyNow: opportunity.whyNow,
         whatItIsAbout: opportunity.whatItIsAbout,
         whatItIsNotAbout: opportunity.whatItIsNotAbout,
@@ -740,6 +742,7 @@ export class RepositoryBundle {
     opportunityId: string;
     title: string;
     angle: string;
+    editorialClaim?: string;
     whyNow: string;
     whatItIsAbout: string;
     whatItIsNotAbout: string;
@@ -755,6 +758,7 @@ export class RepositoryBundle {
       data: {
         title: params.title,
         angle: params.angle,
+        ...(params.editorialClaim !== undefined && { editorialClaim: params.editorialClaim }),
         whyNow: params.whyNow,
         whatItIsAbout: params.whatItIsAbout,
         whatItIsNotAbout: params.whatItIsNotAbout,
@@ -862,6 +866,7 @@ export class RepositoryBundle {
         ownerUserId: opportunity.ownerUserId,
         narrativePillar: opportunity.narrativePillar,
         angle: opportunity.angle,
+        editorialClaim: opportunity.editorialClaim ?? "",
         whyNow: opportunity.whyNow,
         whatItIsAbout: opportunity.whatItIsAbout,
         whatItIsNotAbout: opportunity.whatItIsNotAbout,

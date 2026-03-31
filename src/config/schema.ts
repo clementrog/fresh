@@ -185,19 +185,34 @@ export const screeningBatchSchema = z.object({
   items: z.array(screeningItemSchema)
 });
 
+export const angleQualitySignalsSchema = z.object({
+  specificity: z.string(),
+  consequence: z.string(),
+  tensionOrContrast: z.string(),
+  traceableEvidence: z.string(),
+  positionSharpening: z.string()
+});
+
 export const createEnrichDecisionSchema = z.object({
   action: z.enum(["create", "enrich", "skip"]),
   targetOpportunityId: z.string().optional(),
   rationale: z.string(),
-  title: z.string().min(1),
+  // Opportunity fields — required for create/enrich, allowed empty on skip.
+  // Policy enforcement is in the quality gate, not the schema.
+  title: z.string(),
   ownerDisplayName: z.string().optional(),
-  territory: z.string().min(1),
-  angle: z.string().min(1),
-  whyNow: z.string().min(1),
-  whatItIsAbout: z.string().min(1),
-  whatItIsNotAbout: z.string().min(1),
-  suggestedFormat: z.string().min(1),
+  territory: z.string(),
+  angle: z.string(),
+  whyNow: z.string(),
+  whatItIsAbout: z.string(),
+  whatItIsNotAbout: z.string(),
+  suggestedFormat: z.string(),
   confidence: z.number().min(0).max(1),
+  // Editorial angle contract
+  editorialClaim: z.string().optional(),
+  angleQualitySignals: angleQualitySignalsSchema.optional(),
+  skipReasons: z.array(z.string()).optional(),
+  // GTM fields
   targetSegment: z.string().optional(),
   editorialPillar: z.string().optional(),
   awarenessTarget: z.string().optional(),
