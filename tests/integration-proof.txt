@@ -1,44 +1,45 @@
 
  RUN  v3.2.4 /Users/clement/projects/fresh
 
- ✓ tests/repositories.integration.test.ts > repository DB integrity > rejects duplicate fingerprints within the same company 44ms
- ✓ tests/repositories.integration.test.ts > repository DB integrity > cascades evidence deletion when a source item is removed 12ms
- ✓ tests/selection-scan.integration.test.ts > selection:scan editorialOwner preservation > preserves existing editorialOwner when called with undefined 24ms
- ✓ tests/selection-scan.integration.test.ts > selection:scan editorialOwner preservation > overwrites editorialOwner when a non-empty value is provided 9ms
- ✓ tests/admin-dispositions.integration.test.ts > disposition filter integration > seeds fixtures and validates disposition filters against real DB 65ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listEditorialConfigs returns only configs for seeded company ordered by version DESC 41ms
+ ✓ tests/gtm-operator-edit.integration.test.ts > GTM operator-edit persistence > empty string clears a stored GTM field; undefined preserves existing DB value 26ms
+ ✓ tests/repositories.integration.test.ts > repository DB integrity > rejects duplicate fingerprints within the same company 51ms
+ ✓ tests/repositories.integration.test.ts > repository DB integrity > cascades evidence deletion when a source item is removed 13ms
+ ✓ tests/selection-scan.integration.test.ts > selection:scan editorialOwner preservation > preserves existing editorialOwner when called with undefined 27ms
+ ✓ tests/selection-scan.integration.test.ts > selection:scan editorialOwner preservation > overwrites editorialOwner when a non-empty value is provided 5ms
+ ✓ tests/admin-dispositions.integration.test.ts > disposition filter integration > seeds fixtures and validates disposition filters against real DB 54ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > seeds test company 9ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > acquires a lease when no running run exists 10ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > blocks a second lease while the first is live 7ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > takes over an expired lease 5ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > renewLease returns true when run is still running 4ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > renewLease returns false when run was taken over 8ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > allows concurrent leases for different runTypes 7ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > atomic lease acquisition serializes concurrent starters 15ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listEditorialConfigs returns only configs for seeded company ordered by version DESC 37ms
  ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getEditorialConfig returns full layer JSON and returns null for wrong-company ID 9ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getUser returns full baseProfile JSON and _count.ownedOpportunities 19ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listSourceConfigs returns both enabled and disabled configs for seeded company 25ms
- ✓ tests/sales-lease.integration.test.ts > sales lease integration > seeds test company 6ms
- ✓ tests/sales-lease.integration.test.ts > sales lease integration > acquires a lease when no running run exists 13ms
- ✓ tests/sales-lease.integration.test.ts > sales lease integration > blocks a second lease while the first is live 6ms
- ✓ tests/sales-lease.integration.test.ts > sales lease integration > takes over an expired lease 8ms
- ✓ tests/sales-lease.integration.test.ts > sales lease integration > renewLease returns true when run is still running 5ms
- ✓ tests/sales-lease.integration.test.ts > sales lease integration > renewLease returns false when run was taken over 9ms
- ✓ tests/sales-lease.integration.test.ts > sales lease integration > allows concurrent leases for different runTypes 13ms
- ✓ tests/sales-lease.integration.test.ts > sales lease integration > atomic lease acquisition serializes concurrent starters 19ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listMarketQueries with enabled yes returns only enabled 27ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > countMarketQueries matches list count 33ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDraftProfileIds returns distinct profileIds for seeded company 17ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDrafts returns drafts with opportunity relation and respects filters 41ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getRun returns run with costEntries ordered by createdAt 10ms
- ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getDraft returns draft with included opportunity and evidence relations 7ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates companies for the tests 6ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getUser returns full baseProfile JSON and _count.ownedOpportunities 12ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listSourceConfigs returns both enabled and disabled configs for seeded company 17ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listMarketQueries with enabled yes returns only enabled 12ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > countMarketQueries matches list count 26ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDraftProfileIds returns distinct profileIds for seeded company 16ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDrafts returns drafts with opportunity relation and respects filters 44ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getRun returns run with costEntries ordered by createdAt 12ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getDraft returns draft with included opportunity and evidence relations 10ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates companies for the tests 8ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > upserts a deal and retrieves it by company-scoped lookup 6ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > upsert is idempotent — same deal twice produces one row 4ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates a signal 4ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates a signal 5ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates a recommendation with deal and signal FKs 7ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > tracks recommendation actions as discrete events 5ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > tracks recommendation actions as discrete events 4ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > updates recommendation status 3ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > upserts and retrieves doctrine 2ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates and retrieves a sync run 3ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates and retrieves a sync run 2ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > manages cursors for incremental sync 4ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates an activity and cleans up raw text 10ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates extracted facts for a deal 5ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > two companies with the same HubSpot external IDs stay isolated 12ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > links a deal to a HubSpot company using the internal row ID 5ms
- ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > linkDealCompany is idempotent 2ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > two companies with the same HubSpot external IDs stay isolated 14ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > links a deal to a HubSpot company using the internal row ID 3ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > linkDealCompany is idempotent 1ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig passes when DB, schema, HubSpot token, and LLM key are present 1ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig verifies Sales tables exist 0ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig fails when HUBSPOT_ACCESS_TOKEN is missing 0ms
@@ -46,8 +47,8 @@
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig validates openai key when SALES_LLM_PROVIDER is openai 1ms
  ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig does not call any external API (token is not validated) 0ms
 
- Test Files  6 passed (6)
-      Tests  44 passed (44)
-   Start at  14:20:33
-   Duration  1.03s (transform 298ms, setup 0ms, collect 1.16s, tests 682ms, environment 0ms, prepare 387ms)
+ Test Files  7 passed (7)
+      Tests  45 passed (45)
+   Start at  08:31:33
+   Duration  948ms (transform 308ms, setup 0ms, collect 1.19s, tests 641ms, environment 1ms, prepare 443ms)
 
