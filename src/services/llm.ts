@@ -542,6 +542,16 @@ function normalizeStructuredOutput(schema: ZodTypeAny, value: unknown): unknown 
     return value.map((entry) => normalizeStructuredOutput(schema.element, entry));
   }
 
+  // Clamp numbers to min/max bounds declared in the schema
+  if (schema instanceof z.ZodNumber && typeof value === "number") {
+    let clamped = value;
+    for (const check of (schema._def.checks ?? []) as Array<{ kind: string; value: number }>) {
+      if (check.kind === "min" && clamped < check.value) clamped = check.value;
+      if (check.kind === "max" && clamped > check.value) clamped = check.value;
+    }
+    return clamped;
+  }
+
   return value;
 }
 
