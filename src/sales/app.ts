@@ -200,7 +200,7 @@ export class SalesApp {
 
     const llmClient = new LlmClient(this.env, logger);
     const provider = this.env.SALES_LLM_PROVIDER ?? "openai";
-    const model = this.env.SALES_LLM_MODEL ?? "gpt-4.1-mini";
+    const model = this.env.SALES_LLM_MODEL ?? "gpt-5.4-nano";
     const batchSize = opts?.batchSize ?? (opts?.drain ? 200 : undefined);
 
     if (opts?.activityIds) {

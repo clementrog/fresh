@@ -30,7 +30,9 @@ function buildEnv() {
     INTELLIGENCE_LLM_MODEL: "gpt-4.1-mini",
     DRAFT_LLM_PROVIDER: "openai" as const,
     DRAFT_LLM_MODEL: "gpt-5",
-    LLM_MODEL: "gpt-4.1-mini",
+    LLM_MODEL: "gpt-5.4-mini",
+    NANO_LLM_PROVIDER: "openai" as const,
+    NANO_LLM_MODEL: "gpt-5.4-nano",
     LLM_TIMEOUT_MS: 100,
     HTTP_PORT: 3000,
     LOG_LEVEL: "info"

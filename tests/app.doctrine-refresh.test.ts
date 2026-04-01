@@ -32,7 +32,10 @@ function buildEnv() {
     DEFAULT_TIMEZONE: "Europe/Paris", DEFAULT_COMPANY_SLUG: "default", DEFAULT_COMPANY_NAME: "Default Company",
     INTELLIGENCE_LLM_PROVIDER: "openai" as const, INTELLIGENCE_LLM_MODEL: "gpt-4.1-mini",
     DRAFT_LLM_PROVIDER: "openai" as const, DRAFT_LLM_MODEL: "gpt-5",
-    LLM_MODEL: "gpt-4.1-mini", LLM_TIMEOUT_MS: 100, HTTP_PORT: 3000, LOG_LEVEL: "info"
+    LLM_MODEL: "gpt-5.4-mini",
+    NANO_LLM_PROVIDER: "openai" as const,
+    NANO_LLM_MODEL: "gpt-5.4-nano",
+    LLM_TIMEOUT_MS: 100, HTTP_PORT: 3000, LOG_LEVEL: "info"
   };
 }
 

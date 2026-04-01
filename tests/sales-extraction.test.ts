@@ -1613,7 +1613,7 @@ describe("SalesApp drain loop", () => {
     const env = {
       LOG_LEVEL: "silent",
       SALES_LLM_PROVIDER: "openai",
-      SALES_LLM_MODEL: "gpt-4.1-mini",
+      SALES_LLM_MODEL: "gpt-5.4-nano",
     } as any;
     return new SalesApp(mockPrisma, env);
   }
@@ -1840,7 +1840,7 @@ describe("SalesApp.runExtract targeted mode", () => {
     const env = {
       LOG_LEVEL: "silent",
       SALES_LLM_PROVIDER: "openai",
-      SALES_LLM_MODEL: "gpt-4.1-mini",
+      SALES_LLM_MODEL: "gpt-5.4-nano",
     } as any;
     return new SalesApp(mockPrisma, env);
   }

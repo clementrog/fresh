@@ -233,8 +233,17 @@ export class LlmClient {
   }
 
   private resolveProvider(step: string): LlmProvider {
-    if (step.includes("draft")) {
+    if (step === "draft-generation") {
       return this.env.DRAFT_LLM_PROVIDER ?? "openai";
+    }
+
+    if (isNanoStep(step)) {
+      return this.env.NANO_LLM_PROVIDER ?? "openai";
+    }
+
+    // Tier 2: screening/signal are always OpenAI fast-reasoning models
+    if (step.includes("screening") || step.includes("signal")) {
+      return "openai";
     }
 
     if (this.env.INTELLIGENCE_LLM_PROVIDER) {
@@ -245,19 +254,30 @@ export class LlmClient {
   }
 
   private resolveModel(step: string, provider: LlmProvider) {
-    if (step.includes("draft")) {
-      return this.env.DRAFT_LLM_MODEL ?? "gpt-5";
+    // Tier 1a: Draft generation — creative writing
+    if (step === "draft-generation") {
+      return this.env.DRAFT_LLM_MODEL ?? "gpt-5.4";
     }
 
-    if (step.includes("signal") || step.includes("territory") || step.includes("sensitivity")
-        || step.includes("screening") || step.includes("create-enrich") || step.includes("market-research")
-        || step.includes("linear-enrichment")) {
-      return this.env.INTELLIGENCE_LLM_MODEL ?? "claude-3-7-sonnet-latest";
+    // Tier 3: Nano — classification, enrichment policies, sensitivity
+    if (isNanoStep(step)) {
+      return this.env.NANO_LLM_MODEL ?? "gpt-5.4-nano";
     }
 
+    // Tier 1b: High reasoning — editorial judgment & synthesis
+    if (step.includes("create-enrich") || step.includes("market-research")) {
+      return this.env.INTELLIGENCE_LLM_MODEL ?? "gpt-5.4";
+    }
+
+    // Tier 2: Fast reasoning — screening, signal extraction
+    if (step.includes("screening") || step.includes("signal")) {
+      return this.env.LLM_MODEL ?? "gpt-5.4-mini";
+    }
+
+    // Fallback
     return provider === "anthropic"
-      ? this.env.INTELLIGENCE_LLM_MODEL ?? "claude-3-7-sonnet-latest"
-      : this.env.LLM_MODEL ?? "gpt-4.1-mini";
+      ? this.env.INTELLIGENCE_LLM_MODEL ?? "gpt-5.4"
+      : this.env.LLM_MODEL ?? "gpt-5.4-mini";
   }
 
   private buildFallback<T>(
@@ -283,6 +303,11 @@ export class LlmClient {
   }
 }
 
+function isNanoStep(step: string): boolean {
+  return step.includes("sensitivity") || step.includes("enrichment-policy")
+    || step.includes("publishability");
+}
+
 function estimateCostUsd(provider: LlmProvider, model: string, promptTokens: number, completionTokens: number) {
   const rates = provider === "anthropic"
     ? inferAnthropicRates(model)
@@ -293,6 +318,20 @@ function estimateCostUsd(provider: LlmProvider, model: string, promptTokens: num
 }
 
 function inferOpenAiRates(model: string) {
+  if (model.includes("gpt-5.4-nano")) {
+    return {
+      promptRate: 0.0000001,
+      completionRate: 0.0000004
+    };
+  }
+
+  if (model.includes("gpt-5.4-mini")) {
+    return {
+      promptRate: 0.0000004,
+      completionRate: 0.0000016
+    };
+  }
+
   if (model.includes("gpt-5.4")) {
     return {
       promptRate: 0.0000025,

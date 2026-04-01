@@ -30,6 +30,8 @@ export interface AppEnv {
   HUBSPOT_PORTAL_ID?: string;
   SALES_LLM_PROVIDER?: "openai" | "anthropic";
   SALES_LLM_MODEL?: string;
+  NANO_LLM_PROVIDER?: "openai" | "anthropic";
+  NANO_LLM_MODEL?: string;
 }
 
 export function loadEnv() {

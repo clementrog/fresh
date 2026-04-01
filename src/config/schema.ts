@@ -26,8 +26,8 @@ export const envSchema = z.object({
   INTELLIGENCE_LLM_PROVIDER: llmProviderSchema.default("openai"),
   INTELLIGENCE_LLM_MODEL: z.string().default("gpt-5.4"),
   DRAFT_LLM_PROVIDER: llmProviderSchema.default("openai"),
-  DRAFT_LLM_MODEL: z.string().default("gpt-5"),
-  LLM_MODEL: z.string().default("gpt-4.1-mini"),
+  DRAFT_LLM_MODEL: z.string().default("gpt-5.4"),
+  LLM_MODEL: z.string().default("gpt-5.4-mini"),
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(45000),
   HTTP_PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.string().default("info"),
@@ -39,7 +39,9 @@ export const envSchema = z.object({
   HUBSPOT_ACCESS_TOKEN: z.string().default(""),
   HUBSPOT_PORTAL_ID: z.string().default(""),
   SALES_LLM_PROVIDER: llmProviderSchema.default("openai"),
-  SALES_LLM_MODEL: z.string().default("gpt-4.1-mini")
+  SALES_LLM_MODEL: z.string().default("gpt-5.4-nano"),
+  NANO_LLM_PROVIDER: llmProviderSchema.default("openai"),
+  NANO_LLM_MODEL: z.string().default("gpt-5.4-nano")
 });
 
 export const rateLimitSchema = z.object({
