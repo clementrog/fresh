@@ -20,7 +20,7 @@ export async function generateDraft(params: {
   blockRationale?: string;
   usageEvents: Array<{ step: string; usage: LlmUsage }>;
 }> {
-  const { opportunity, user, llmClient, sensitivityRulesMarkdown, doctrineMarkdown, editorialNotes, layer3Defaults } = params;
+  const { opportunity, user, llmClient, sensitivityRulesMarkdown, doctrineMarkdown, editorialNotes, layer3Defaults, gtmFoundationMarkdown } = params;
   const bp = user.baseProfile;
   const str = (key: string) => typeof bp[key] === "string" ? bp[key] as string : "";
   const arr = (key: string) => Array.isArray(bp[key]) ? (bp[key] as string[]) : [];
@@ -56,6 +56,7 @@ export async function generateDraft(params: {
     `## Doctrine\n${doctrineMarkdown || "Prefer concrete proof over generic advice."}`,
     `## Author voice\nTone: ${str("toneSummary")}\nPreferred structure: ${str("preferredStructure")}\nVoice markers (channel the flavor, never copy verbatim): ${arr("typicalPhrases").join(", ")}\nAvoid rules: ${arr("avoidRules").join(", ")}\nContent territories: ${arr("contentTerritories").join(", ")}`,
     layer3Section ? `## Layer 3 — LinkedIn craft defaults\n${layer3Section}` : "",
+    gtmFoundationMarkdown ? `## GTM Foundation\n${gtmFoundationMarkdown}` : "",
     `## Opportunity\nTitle: ${opportunity.title}\nAngle: ${opportunity.angle}\nWhy now: ${opportunity.whyNow}\nAbout: ${opportunity.whatItIsAbout}\nNot about: ${opportunity.whatItIsNotAbout}\nSuggested format: ${opportunity.suggestedFormat}`,
     gtmParts.length > 0 ? `## GTM context\n${gtmParts.join("\n")}` : "",
     `## Evidence\n${evidenceSection}`,
@@ -76,7 +77,8 @@ export async function generateDraft(params: {
       "- No numbered methodology sections. No bullet-point checklists.",
       "",
       "## Length",
-      "150-280 words. One idea per post. If you need more words, the idea is too big: split it.",
+      "Hard limit: 150-280 words. One idea per post. If you need more words, the idea is too big: split it.",
+      "If the LinkedIn craft defaults specify a tighter word-count target, prefer that range within these bounds.",
       "",
       "## Anti-pattern kill list (phrases that instantly reveal AI — NEVER use these)",
       "- 'Preuve avant opinion', 'Signal consolide', 'Synthese strategique 2026'",

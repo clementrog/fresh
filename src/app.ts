@@ -35,7 +35,7 @@ import { LlmClient } from "./services/llm.js";
 import { buildSpikeWarnings, createCostEntry, createRun, finalizeRun } from "./services/observability.js";
 import { NotionService } from "./services/notion.js";
 import { computeRawTextExpiry } from "./services/retention.js";
-import { ensureConvergenceFoundation, resolveProfileId } from "./services/convergence.js";
+import { ensureConvergenceFoundation, normalizeLayer3Defaults, resolveProfileId } from "./services/convergence.js";
 import { runIntelligencePipeline, DEDUP_CANDIDATE_WINDOW } from "./services/intelligence.js";
 import { runMarketResearch } from "./services/market-research.js";
 import { findSupportingEvidence, assessDraftReadiness, deriveProvenanceType, computeReadinessTier, generateOperatorGuidance } from "./services/evidence-pack.js";
@@ -1556,7 +1556,7 @@ Provide a rationale explaining your assessment.`,
       doctrineMarkdown: layer1.doctrineMarkdown ?? "",
       sensitivityMarkdown: layer1.sensitivityMarkdown ?? "",
       layer2Defaults: layer2.defaults ?? [],
-      layer3Defaults: layer3.defaults ?? [],
+      layer3Defaults: normalizeLayer3Defaults(layer3.defaults ?? []),
       gtmFoundationMarkdown,
       extractionProfilesMarkdown,
       userDescriptions,

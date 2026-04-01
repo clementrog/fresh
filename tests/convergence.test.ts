@@ -8,7 +8,7 @@ vi.mock("../src/config/loaders.js", () => ({
   loadConnectorConfigs: vi.fn().mockResolvedValue([])
 }));
 
-import { ensureConvergenceFoundation } from "../src/services/convergence.js";
+import { ensureConvergenceFoundation, normalizeLayer3Defaults } from "../src/services/convergence.js";
 import { loadDoctrineMarkdown, loadSensitivityMarkdown } from "../src/config/loaders.js";
 
 const DOCTRINE_V1 = "# Fresh Editorial Doctrine v1\nOriginal doctrine content.";
@@ -104,5 +104,49 @@ describe("doctrine refresh in ensureConvergenceFoundation", () => {
     const hashA = hashParts(["layer1", DOCTRINE_V1, SENSITIVITY_V1]);
     const hashB = hashParts(["layer1", DOCTRINE_V2, SENSITIVITY_V1]);
     expect(hashA).not.toBe(hashB);
+  });
+});
+
+describe("normalizeLayer3Defaults", () => {
+  it("strips conflicting rules and normalizes word count", () => {
+    const legacy = [
+      "Max 250 words. One idea per post.",
+      "First 2 lines must create a reason to click voir plus. No descriptive openings.",
+      "Write like a person, not a framework. First person mandatory.",
+      "End with something worth reacting to. Not a summary.",
+      "Never cite internal source systems. Transform evidence into personal observation.",
+      "Vary structure across posts. Never repeat the same skeleton."
+    ];
+    const result = normalizeLayer3Defaults(legacy);
+    expect(result).toHaveLength(4);
+    expect(result[0]).toBe("Target 200-250 words. One idea per post.");
+    expect(result).toContain("First 2 lines must create a reason to click voir plus. No descriptive openings.");
+    expect(result).toContain("End with something worth reacting to. Not a summary.");
+    expect(result).toContain("Vary structure across posts. Never repeat the same skeleton.");
+    expect(result.join(" ")).not.toMatch(/first\s+person\s+mandatory/i);
+    expect(result.join(" ")).not.toMatch(/never\s+cite\s+internal\s+source/i);
+  });
+
+  it("preserves operator-custom rules", () => {
+    const custom = ["Max 150 words.", "Always mention data privacy.", "First person mandatory."];
+    const result = normalizeLayer3Defaults(custom);
+    expect(result).toEqual(["Max 150 words.", "Always mention data privacy."]);
+  });
+
+  it("is idempotent", () => {
+    const legacy = [
+      "Max 250 words. One idea per post.",
+      "Write like a person, not a framework. First person mandatory.",
+      "End with something worth reacting to. Not a summary.",
+      "Never cite internal source systems. Transform evidence into personal observation.",
+      "Vary structure across posts."
+    ];
+    const first = normalizeLayer3Defaults(legacy);
+    const second = normalizeLayer3Defaults(first);
+    expect(second).toEqual(first);
+  });
+
+  it("handles empty array", () => {
+    expect(normalizeLayer3Defaults([])).toEqual([]);
   });
 });

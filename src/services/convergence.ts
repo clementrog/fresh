@@ -130,6 +130,26 @@ export async function ensureConvergenceFoundation(
   return company;
 }
 
+const LAYER3_CONFLICT_PATTERNS: RegExp[] = [
+  /first\s+person\s+mandatory/i,
+  /never\s+cite\s+internal\s+source/i,
+];
+
+/**
+ * Strip Layer 3 rules that conflict with system-prompt invariants.
+ * Applied at read time — does not mutate stored config.
+ * Idempotent: normalizing already-normalized input returns the same output.
+ */
+export function normalizeLayer3Defaults(defaults: string[]): string[] {
+  return defaults
+    .filter(d => !LAYER3_CONFLICT_PATTERNS.some(p => p.test(d)))
+    .map(d =>
+      /^max\s+250\s+words/i.test(d)
+        ? d.replace(/^max\s+250\s+words/i, "Target 200-250 words")
+        : d
+    );
+}
+
 type ToneOverride = {
   toneSummary: string;
   preferredStructure: string;

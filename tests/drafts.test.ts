@@ -388,6 +388,162 @@ describe("generateDraft", () => {
     expect(capturedPrompt).toContain("Punchy and provocative");
     expect(capturedPrompt).toContain("La vérité terrain");
   });
+
+  it("includes GTM Foundation section when provided", async () => {
+    let capturedPrompt = "";
+    let callIndex = 0;
+    const llm = new LlmClient({
+      DATABASE_URL: "",
+      NOTION_TOKEN: "",
+      NOTION_PARENT_PAGE_ID: "",
+      OPENAI_API_KEY: "test-key",
+      CLAAP_API_KEY: "",
+      LINEAR_API_KEY: "",
+      DEFAULT_TIMEZONE: "Europe/Paris",
+      LLM_MODEL: "test",
+      LLM_TIMEOUT_MS: 100,
+      LOG_LEVEL: "info"
+    }, undefined, async (_url, options) => {
+      const body = JSON.parse((options as any).body);
+      if (callIndex === 0) {
+        capturedPrompt = body.messages?.[1]?.content ?? body.messages?.[0]?.content ?? "";
+      }
+      callIndex += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify(callIndex === 1 ? safeDraftOutput : clearSafety)
+              }
+            }
+          ]
+        })
+      } as Response;
+    });
+
+    await generateDraft({
+      opportunity: makeTestOpportunity({ targetSegment: "cabinet-owner" }),
+      user: makeTestUser(),
+      llmClient: llm,
+      sensitivityRulesMarkdown: "",
+      doctrineMarkdown: "",
+      editorialNotes: "",
+      layer3Defaults: [],
+      gtmFoundationMarkdown: "## Target segments\ncabinet-owner, production-manager\n## Core market frictions\nMigration fear, calculation opacity"
+    });
+
+    expect(capturedPrompt).toContain("## GTM Foundation");
+    expect(capturedPrompt).toContain("Migration fear");
+    expect(capturedPrompt).toContain("cabinet-owner");
+    // GTM Foundation should appear before Opportunity
+    const gtmIdx = capturedPrompt.indexOf("## GTM Foundation");
+    const oppIdx = capturedPrompt.indexOf("## Opportunity");
+    expect(gtmIdx).toBeLessThan(oppIdx);
+  });
+
+  it("omits GTM Foundation section when empty", async () => {
+    let capturedPrompt = "";
+    let callIndex = 0;
+    const llm = new LlmClient({
+      DATABASE_URL: "",
+      NOTION_TOKEN: "",
+      NOTION_PARENT_PAGE_ID: "",
+      OPENAI_API_KEY: "test-key",
+      CLAAP_API_KEY: "",
+      LINEAR_API_KEY: "",
+      DEFAULT_TIMEZONE: "Europe/Paris",
+      LLM_MODEL: "test",
+      LLM_TIMEOUT_MS: 100,
+      LOG_LEVEL: "info"
+    }, undefined, async (_url, options) => {
+      const body = JSON.parse((options as any).body);
+      if (callIndex === 0) {
+        capturedPrompt = body.messages?.[1]?.content ?? body.messages?.[0]?.content ?? "";
+      }
+      callIndex += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify(callIndex === 1 ? safeDraftOutput : clearSafety)
+              }
+            }
+          ]
+        })
+      } as Response;
+    });
+
+    await generateDraft({
+      opportunity: makeTestOpportunity(),
+      user: makeTestUser(),
+      llmClient: llm,
+      sensitivityRulesMarkdown: "",
+      doctrineMarkdown: "",
+      editorialNotes: "",
+      layer3Defaults: [],
+      gtmFoundationMarkdown: ""
+    });
+
+    expect(capturedPrompt).not.toContain("## GTM Foundation");
+  });
+
+  it("conflict case: corporate profile sees Layer 3 first-person rule alongside system invariant", async () => {
+    let capturedSystem = "";
+    let capturedUser = "";
+    let callIndex = 0;
+    const llm = new LlmClient({
+      DATABASE_URL: "",
+      NOTION_TOKEN: "",
+      NOTION_PARENT_PAGE_ID: "",
+      OPENAI_API_KEY: "test-key",
+      CLAAP_API_KEY: "",
+      LINEAR_API_KEY: "",
+      DEFAULT_TIMEZONE: "Europe/Paris",
+      LLM_MODEL: "test",
+      LLM_TIMEOUT_MS: 100,
+      LOG_LEVEL: "info"
+    }, undefined, async (_url, options) => {
+      const body = JSON.parse((options as any).body);
+      if (callIndex === 0) {
+        capturedSystem = body.messages?.[0]?.content ?? "";
+        capturedUser = body.messages?.[1]?.content ?? "";
+      }
+      callIndex += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify(callIndex === 1 ? safeDraftOutput : clearSafety)
+              }
+            }
+          ]
+        })
+      } as Response;
+    });
+
+    await generateDraft({
+      opportunity: makeTestOpportunity({ ownerProfile: "linc-corporate" }),
+      user: makeTestUser({ baseProfile: { profileId: "linc-corporate", toneSummary: "Corporate", preferredStructure: "Team voice", typicalPhrases: [], avoidRules: [], contentTerritories: [] } }),
+      llmClient: llm,
+      sensitivityRulesMarkdown: "",
+      doctrineMarkdown: "",
+      editorialNotes: "",
+      layer3Defaults: ["First person mandatory.", "End with a question."],
+      gtmFoundationMarkdown: ""
+    });
+
+    // System prompt must carry the corporate voice invariant
+    expect(capturedSystem).toContain("NEVER use 'je'");
+    // Layer 3 section in user prompt contains the conflicting rule
+    expect(capturedUser).toContain("First person mandatory.");
+    expect(capturedUser).toContain("End with a question.");
+  });
 });
 
 describe("draft evidence company scoping", () => {

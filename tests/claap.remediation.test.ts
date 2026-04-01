@@ -2,13 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 
 import { EditorialSignalEngineApp } from "../src/app.js";
 
-vi.mock("../src/services/convergence.js", () => ({
-  ensureConvergenceFoundation: vi.fn(async () => ({
-    id: "company-1",
-    slug: "default",
-    name: "Default Company"
-  }))
-}));
+vi.mock("../src/services/convergence.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/services/convergence.js")>();
+  return {
+    ...actual,
+    ensureConvergenceFoundation: vi.fn(async () => ({
+      id: "company-1",
+      slug: "default",
+      name: "Default Company"
+    }))
+  };
+});
 
 const COMPANY_ID = "company-1";
 
