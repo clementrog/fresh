@@ -8,7 +8,7 @@ import {
   SOURCE_KINDS
 } from "../domain/types.js";
 
-const llmProviderSchema = z.enum(["openai", "anthropic"]);
+const llmProviderSchema = z.enum(["openai", "anthropic", "claude-cli"]);
 
 export const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
@@ -41,7 +41,10 @@ export const envSchema = z.object({
   SALES_LLM_PROVIDER: llmProviderSchema.default("openai"),
   SALES_LLM_MODEL: z.string().default("gpt-5.4-nano"),
   NANO_LLM_PROVIDER: llmProviderSchema.default("openai"),
-  NANO_LLM_MODEL: z.string().default("gpt-5.4-nano")
+  NANO_LLM_MODEL: z.string().default("gpt-5.4-nano"),
+  CLAUDE_CLI_PATH: z.string().default("claude"),
+  CLAUDE_CLI_MAX_BUDGET_USD: z.coerce.number().positive().default(0.50),
+  CLAUDE_CLI_TIMEOUT_MS: z.coerce.number().int().positive().default(120000)
 });
 
 export const rateLimitSchema = z.object({

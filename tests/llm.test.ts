@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { EventEmitter } from "node:events";
 
 import { LlmClient } from "../src/services/llm.js";
 
@@ -224,5 +225,300 @@ describe("llm client", () => {
     expect(result.mode).toBe("fallback");
     expect(result.output.value).toBe("fallback");
     expect(result.usage.error?.toLowerCase()).toContain("timeout");
+  });
+});
+
+// --- claude-cli provider tests ---
+
+function makeCliEnv(overrides: Record<string, unknown> = {}) {
+  return {
+    DATABASE_URL: "",
+    OPENAI_API_KEY: "",
+    DRAFT_LLM_PROVIDER: "claude-cli" as const,
+    DRAFT_LLM_MODEL: "claude-opus-4-6",
+    CLAUDE_CLI_PATH: "/fake/claude",
+    CLAUDE_CLI_TIMEOUT_MS: 5000,
+    LLM_TIMEOUT_MS: 100,
+    LOG_LEVEL: "info",
+    ...overrides
+  };
+}
+
+function makeFakeChild(opts: {
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  signal?: string;
+  error?: NodeJS.ErrnoException;
+}) {
+  const child = new EventEmitter();
+  const stdoutEmitter = new EventEmitter();
+  const stderrEmitter = new EventEmitter();
+  (child as unknown as Record<string, unknown>).stdout = stdoutEmitter;
+  (child as unknown as Record<string, unknown>).stderr = stderrEmitter;
+  (child as unknown as Record<string, unknown>).stdin = { write() {}, end() {} };
+
+  process.nextTick(() => {
+    if (opts.error) {
+      child.emit("error", opts.error);
+      return;
+    }
+    if (opts.stdout) stdoutEmitter.emit("data", Buffer.from(opts.stdout));
+    if (opts.stderr) stderrEmitter.emit("data", Buffer.from(opts.stderr));
+    process.nextTick(() => child.emit("close", opts.exitCode ?? 0, opts.signal ?? null));
+  });
+
+  return child as unknown as ReturnType<typeof import("node:child_process").spawn>;
+}
+
+const cliJsonResponse = (structured: unknown, overrides: Record<string, unknown> = {}) =>
+  JSON.stringify({
+    type: "result",
+    is_error: false,
+    total_cost_usd: 0.05,
+    usage: {
+      input_tokens: 100,
+      cache_creation_input_tokens: 200,
+      cache_read_input_tokens: 50,
+      output_tokens: 300,
+    },
+    modelUsage: { "claude-opus-4-6": { inputTokens: 100, outputTokens: 300 } },
+    structured_output: structured,
+    result: "",
+    ...overrides,
+  });
+
+const cliTestSchema = z.object({ value: z.string() });
+
+function makeCountingSpawn(schedule: Array<Parameters<typeof makeFakeChild>[0]>) {
+  let callCount = 0;
+  const spawnFn = (() => {
+    const opts = schedule[callCount] ?? schedule[schedule.length - 1];
+    callCount++;
+    return makeFakeChild(opts);
+  }) as unknown as typeof import("node:child_process").spawn;
+  return { spawnFn, getCount: () => callCount };
+}
+
+describe("claude-cli provider", () => {
+  // Preflight schedule: [0] = version check, [1] = probe, [2+] = actual calls
+  const PREFLIGHT_OK: Array<Parameters<typeof makeFakeChild>[0]> = [
+    { stdout: "2.1.90\n", exitCode: 0 },
+    { stdout: cliJsonResponse({ ok: true }), exitCode: 0 },
+  ];
+
+  it("rejects non-draft steps with a configuration error", async () => {
+    const { spawnFn } = makeCountingSpawn([
+      ...PREFLIGHT_OK,
+      { stdout: cliJsonResponse({ value: "test" }), exitCode: 0 },
+    ]);
+    const client = new LlmClient(makeCliEnv(), undefined, fetch, spawnFn);
+
+    await expect(
+      client.generateStructured({
+        step: "screening",
+        system: "test",
+        prompt: "test",
+        provider: "claude-cli",
+        schema: cliTestSchema,
+        allowFallback: false,
+        fallback: () => ({ value: "fb" }),
+      })
+    ).rejects.toThrow(/claude-cli provider is only supported for the "draft-generation" step/);
+  });
+
+  it("extracts structured_output and usage from CLI response", async () => {
+    const { spawnFn } = makeCountingSpawn([
+      ...PREFLIGHT_OK,
+      { stdout: cliJsonResponse({ value: "opus-draft" }), exitCode: 0 },
+    ]);
+    const client = new LlmClient(makeCliEnv(), undefined, fetch, spawnFn);
+    const result = await client.generateStructured({
+      step: "draft-generation",
+      system: "test",
+      prompt: "test",
+      schema: cliTestSchema,
+      allowFallback: false,
+      fallback: () => ({ value: "fb" }),
+    });
+
+    expect(result.mode).toBe("provider");
+    expect(result.output.value).toBe("opus-draft");
+    expect(result.usage.promptTokens).toBe(350); // 100 + 200 + 50
+    expect(result.usage.completionTokens).toBe(300);
+    expect(result.usage.estimatedCostUsd).toBe(0.05); // actual cost from CLI, not rate-based
+    expect(result.usage.model).toBe("claude-opus-4-6"); // runtime model from modelUsage
+  });
+
+  it("prefers requested model when modelUsage has multiple keys", async () => {
+    const multiModelResponse = JSON.stringify({
+      type: "result",
+      is_error: false,
+      total_cost_usd: 0.08,
+      usage: { input_tokens: 50, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 100 },
+      modelUsage: {
+        "claude-sonnet-4-6": { inputTokens: 10, outputTokens: 5 },
+        "claude-opus-4-6": { inputTokens: 50, outputTokens: 100 },
+      },
+      structured_output: { value: "multi" },
+      result: "",
+    });
+    const { spawnFn } = makeCountingSpawn([
+      ...PREFLIGHT_OK,
+      { stdout: multiModelResponse, exitCode: 0 },
+    ]);
+    const client = new LlmClient(makeCliEnv(), undefined, fetch, spawnFn);
+    const result = await client.generateStructured({
+      step: "draft-generation",
+      system: "test",
+      prompt: "test",
+      schema: cliTestSchema,
+      allowFallback: false,
+      fallback: () => ({ value: "fb" }),
+    });
+
+    expect(result.usage.model).toBe("claude-opus-4-6");
+  });
+
+  it("throws when CLI binary is not found (ENOENT)", async () => {
+    const enoent = new Error("spawn ENOENT") as NodeJS.ErrnoException;
+    enoent.code = "ENOENT";
+    const { spawnFn } = makeCountingSpawn([{ error: enoent }]);
+    const client = new LlmClient(makeCliEnv(), undefined, fetch, spawnFn);
+
+    await expect(
+      client.generateStructured({
+        step: "draft-generation",
+        system: "test",
+        prompt: "test",
+        schema: cliTestSchema,
+        allowFallback: false,
+        fallback: () => ({ value: "fb" }),
+      })
+    ).rejects.toThrow(/preflight failed.*not found/i);
+  });
+
+  it("throws when CLI returns is_error: true", async () => {
+    const { spawnFn } = makeCountingSpawn([
+      ...PREFLIGHT_OK,
+      { stdout: JSON.stringify({ is_error: true, result: "model overloaded" }), exitCode: 0 },
+    ]);
+    const client = new LlmClient(makeCliEnv(), undefined, fetch, spawnFn);
+
+    await expect(
+      client.generateStructured({
+        step: "draft-generation",
+        system: "test",
+        prompt: "test",
+        schema: cliTestSchema,
+        allowFallback: false,
+        fallback: () => ({ value: "fb" }),
+      })
+    ).rejects.toThrow(/Claude CLI returned error.*model overloaded/);
+  });
+
+  it("throws when CLI response is missing structured_output", async () => {
+    const { spawnFn } = makeCountingSpawn([
+      ...PREFLIGHT_OK,
+      { stdout: JSON.stringify({ is_error: false, result: "some text" }), exitCode: 0 },
+    ]);
+    const client = new LlmClient(makeCliEnv(), undefined, fetch, spawnFn);
+
+    await expect(
+      client.generateStructured({
+        step: "draft-generation",
+        system: "test",
+        prompt: "test",
+        schema: cliTestSchema,
+        allowFallback: false,
+        fallback: () => ({ value: "fb" }),
+      })
+    ).rejects.toThrow(/missing structured_output/);
+  });
+
+  it("throws when CLI exits with non-zero code", async () => {
+    const { spawnFn } = makeCountingSpawn([
+      ...PREFLIGHT_OK,
+      { stderr: "something went wrong", exitCode: 1 },
+    ]);
+    const client = new LlmClient(makeCliEnv(), undefined, fetch, spawnFn);
+
+    await expect(
+      client.generateStructured({
+        step: "draft-generation",
+        system: "test",
+        prompt: "test",
+        schema: cliTestSchema,
+        allowFallback: false,
+        fallback: () => ({ value: "fb" }),
+      })
+    ).rejects.toThrow(/exited with code 1/);
+  });
+
+  it("preflight failure surfaces on first draft call", async () => {
+    const { spawnFn } = makeCountingSpawn([
+      { stdout: "2.1.90\n", exitCode: 0 },
+      { stderr: "unknown flag --json-schema", exitCode: 2 },
+    ]);
+    const client = new LlmClient(makeCliEnv(), undefined, fetch, spawnFn);
+
+    await expect(
+      client.generateStructured({
+        step: "draft-generation",
+        system: "test",
+        prompt: "test",
+        schema: cliTestSchema,
+        allowFallback: false,
+        fallback: () => ({ value: "fb" }),
+      })
+    ).rejects.toThrow(/preflight probe failed/);
+  });
+
+  it("preflight runs only once across multiple draft calls", async () => {
+    const { spawnFn, getCount } = makeCountingSpawn([
+      ...PREFLIGHT_OK,
+      { stdout: cliJsonResponse({ value: "draft" }), exitCode: 0 },
+    ]);
+    const client = new LlmClient(makeCliEnv(), undefined, fetch, spawnFn);
+
+    await client.generateStructured({
+      step: "draft-generation",
+      system: "test",
+      prompt: "test",
+      schema: cliTestSchema,
+      allowFallback: false,
+      fallback: () => ({ value: "fb" }),
+    });
+
+    await client.generateStructured({
+      step: "draft-generation",
+      system: "test",
+      prompt: "test2",
+      schema: cliTestSchema,
+      allowFallback: false,
+      fallback: () => ({ value: "fb" }),
+    });
+
+    // 2 preflight + 2 draft calls = 4 total
+    expect(getCount()).toBe(4);
+  });
+
+  it("surfaces timeout as a clear error when CLI is killed by SIGTERM", async () => {
+    const { spawnFn } = makeCountingSpawn([
+      ...PREFLIGHT_OK,
+      { exitCode: 0, signal: "SIGTERM" },
+    ]);
+    const client = new LlmClient(makeCliEnv(), undefined, fetch, spawnFn);
+
+    await expect(
+      client.generateStructured({
+        step: "draft-generation",
+        system: "test",
+        prompt: "test",
+        schema: cliTestSchema,
+        allowFallback: false,
+        fallback: () => ({ value: "fb" }),
+      })
+    ).rejects.toThrow(/timed out.*SIGTERM/);
   });
 });

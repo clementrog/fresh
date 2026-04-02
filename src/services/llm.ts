@@ -1,3 +1,4 @@
+import { spawn as defaultSpawn, type ChildProcess } from "node:child_process";
 import {
   z,
   type ZodObject,
@@ -13,6 +14,7 @@ export interface LlmUsage {
   promptTokens: number;
   completionTokens: number;
   estimatedCostUsd: number;
+  model?: string;
   skipped?: boolean;
   error?: string;
 }
@@ -28,12 +30,20 @@ type LoggerLike = {
   error: (...args: unknown[]) => void;
 };
 
+type SpawnFn = typeof defaultSpawn;
+
 export class LlmClient {
+  private cliPreflightPromise: Promise<void> | null = null;
+  private readonly spawnImpl: SpawnFn;
+
   constructor(
     private readonly env: AppEnv,
     private readonly logger?: LoggerLike,
-    private readonly fetchImpl: typeof fetch = fetch
-  ) {}
+    private readonly fetchImpl: typeof fetch = fetch,
+    spawnImpl?: SpawnFn
+  ) {
+    this.spawnImpl = spawnImpl ?? defaultSpawn;
+  }
 
   async generateStructured<T>(params: {
     step: string;
@@ -47,17 +57,31 @@ export class LlmClient {
   }): Promise<LlmStructuredResponse<T>> {
     const provider = params.provider ?? this.resolveProvider(params.step);
     const model = params.model ?? this.resolveModel(params.step, provider);
-    const providerKey = provider === "anthropic" ? this.env.ANTHROPIC_API_KEY : this.env.OPENAI_API_KEY;
 
-    if (!providerKey) {
-      if (!params.allowFallback) {
-        throw new Error(`Missing API key for ${provider}`);
+    if (provider === "claude-cli") {
+      if (params.step !== "draft-generation") {
+        throw new Error(
+          `claude-cli provider is only supported for the "draft-generation" step (got "${params.step}"). Check your LLM provider configuration.`
+        );
       }
-      return this.buildFallback(params, `Missing API key for ${provider}`);
+      if (!this.cliPreflightPromise) {
+        this.cliPreflightPromise = this.verifyClaudeCliPreflight();
+      }
+      await this.cliPreflightPromise;
+    }
+
+    if (provider !== "claude-cli") {
+      const providerKey = provider === "anthropic" ? this.env.ANTHROPIC_API_KEY : this.env.OPENAI_API_KEY;
+      if (!providerKey) {
+        if (!params.allowFallback) {
+          throw new Error(`Missing API key for ${provider}`);
+        }
+        return this.buildFallback(params, `Missing API key for ${provider}`);
+      }
     }
 
     try {
-      const { content, promptTokens, completionTokens } = await this.requestStructuredContent({
+      const result = await this.requestStructuredContent({
         provider,
         model,
         step: params.step,
@@ -66,19 +90,21 @@ export class LlmClient {
         schema: params.schema
       });
 
-      const parsedJson = JSON.parse(content) as unknown;
+      const parsedJson = JSON.parse(result.content) as unknown;
       const normalizedJson = normalizeStructuredOutput(params.schema, parsedJson);
       const validated = params.schema.parse(normalizedJson);
+      const resolvedModel = result.runtimeModel ?? model;
       const usage: LlmUsage = {
         mode: "provider",
-        promptTokens,
-        completionTokens,
-        estimatedCostUsd: estimateCostUsd(
+        promptTokens: result.promptTokens,
+        completionTokens: result.completionTokens,
+        estimatedCostUsd: result.actualCostUsd ?? estimateCostUsd(
           provider,
           model,
-          promptTokens,
-          completionTokens
-        )
+          result.promptTokens,
+          result.completionTokens
+        ),
+        model: resolvedModel
       };
 
       return {
@@ -104,7 +130,10 @@ export class LlmClient {
     system: string;
     prompt: string;
     schema: ZodSchema<T>;
-  }) {
+  }): Promise<{ content: string; promptTokens: number; completionTokens: number; actualCostUsd?: number; runtimeModel?: string }> {
+    if (params.provider === "claude-cli") {
+      return this.requestClaudeCliStructuredContent(params);
+    }
     return params.provider === "anthropic"
       ? this.requestAnthropicStructuredContent(params)
       : this.requestOpenAiStructuredContent(params);
@@ -232,6 +261,192 @@ export class LlmClient {
     };
   }
 
+  private requestClaudeCliStructuredContent<T>(params: {
+    model: string;
+    step: string;
+    system: string;
+    prompt: string;
+    schema: ZodSchema<T>;
+  }): Promise<{ content: string; promptTokens: number; completionTokens: number; actualCostUsd?: number; runtimeModel?: string }> {
+    const cliPath = this.env.CLAUDE_CLI_PATH ?? "claude";
+    const budget = String(this.env.CLAUDE_CLI_MAX_BUDGET_USD ?? 0.5);
+    const timeoutMs = this.env.CLAUDE_CLI_TIMEOUT_MS ?? 120_000;
+    const jsonSchema = JSON.stringify(zodToJsonSchema(params.schema));
+
+    return new Promise((resolve, reject) => {
+      const args = [
+        "-p",
+        "--output-format", "json",
+        "--no-session-persistence",
+        "--tools", "",
+        "--model", params.model,
+        "--system-prompt", params.system,
+        "--json-schema", jsonSchema,
+        "--max-budget-usd", budget,
+      ];
+
+      const child = this.spawnImpl(cliPath, args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        timeout: timeoutMs,
+        env: process.env,
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+
+      child.on("error", (err: NodeJS.ErrnoException) => {
+        if (err.code === "ENOENT") {
+          reject(new Error(`Claude CLI not found at "${cliPath}". Install it or set CLAUDE_CLI_PATH.`));
+        } else {
+          reject(new Error(`Claude CLI spawn error: ${err.message}`));
+        }
+      });
+
+      child.on("close", (code, signal) => {
+        if (signal === "SIGTERM" || signal === "SIGKILL") {
+          reject(new Error(`Claude CLI timed out after ${timeoutMs}ms (killed by ${signal})`));
+          return;
+        }
+
+        try {
+          const response = JSON.parse(stdout) as {
+            is_error?: boolean;
+            result?: string;
+            errors?: string[];
+            structured_output?: unknown;
+            total_cost_usd?: number;
+            usage?: {
+              input_tokens?: number;
+              cache_creation_input_tokens?: number;
+              cache_read_input_tokens?: number;
+              output_tokens?: number;
+            };
+            modelUsage?: Record<string, unknown>;
+          };
+
+          if (response.is_error) {
+            const detail = response.errors?.join("; ") ?? response.result ?? "unknown";
+            reject(new Error(`Claude CLI returned error: ${detail}`));
+            return;
+          }
+
+          if (response.structured_output === undefined || response.structured_output === null) {
+            reject(new Error("Claude CLI response missing structured_output field"));
+            return;
+          }
+
+          const cliUsage = response.usage ?? {};
+          const promptTokens = (cliUsage.input_tokens ?? 0)
+            + (cliUsage.cache_creation_input_tokens ?? 0)
+            + (cliUsage.cache_read_input_tokens ?? 0);
+          const completionTokens = cliUsage.output_tokens ?? 0;
+
+          // Extract the actual runtime model from modelUsage keys (e.g. "claude-opus-4-6").
+          // If multiple models appear (retries, routing), use the one matching the requested model,
+          // or fall back to the single key if there's exactly one.
+          const modelKeys = response.modelUsage ? Object.keys(response.modelUsage) : [];
+          const runtimeModel = modelKeys.length === 1
+            ? modelKeys[0]
+            : modelKeys.find((k) => k === params.model) ?? modelKeys[0];
+
+          resolve({
+            content: JSON.stringify(response.structured_output),
+            promptTokens,
+            completionTokens,
+            actualCostUsd: response.total_cost_usd,
+            runtimeModel,
+          });
+        } catch {
+          if (code !== 0) {
+            reject(new Error(`Claude CLI exited with code ${code}. stderr: ${stderr.slice(0, 500)}`));
+            return;
+          }
+          reject(new Error(`Claude CLI output is not valid JSON: ${stdout.slice(0, 200)}`));
+        }
+      });
+
+      child.stdin.write(params.prompt);
+      child.stdin.end();
+    });
+  }
+
+  private verifyClaudeCliPreflight(): Promise<void> {
+    const cliPath = this.env.CLAUDE_CLI_PATH ?? "claude";
+    const model = this.resolveModel("draft-generation", "claude-cli");
+
+    return new Promise((resolve, reject) => {
+      const versionChild = this.spawnImpl(cliPath, ["--version"], { stdio: ["pipe", "pipe", "pipe"], timeout: 10_000 });
+      let versionOut = "";
+      let versionErr = "";
+      versionChild.stdout.on("data", (chunk: Buffer) => { versionOut += chunk.toString(); });
+      versionChild.stderr.on("data", (chunk: Buffer) => { versionErr += chunk.toString(); });
+
+      versionChild.on("error", (err: NodeJS.ErrnoException) => {
+        reject(new Error(
+          `Claude CLI preflight failed: binary not found at "${cliPath}". ` +
+          `Install Claude Code CLI or set CLAUDE_CLI_PATH. (${err.code ?? err.message})`
+        ));
+      });
+
+      versionChild.on("close", (code) => {
+        if (code !== 0) {
+          reject(new Error(`Claude CLI preflight failed: "${cliPath} --version" exited with code ${code}. stderr: ${versionErr.slice(0, 300)}`));
+          return;
+        }
+
+        // Step 2: minimal structured-output round-trip with target model
+        const probeSchema = '{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}';
+        const probeChild = this.spawnImpl(cliPath, [
+          "-p", "--output-format", "json", "--no-session-persistence",
+          "--tools", "", "--model", model,
+          "--json-schema", probeSchema,
+          "--max-budget-usd", "0.15",
+        ], { stdio: ["pipe", "pipe", "pipe"], timeout: 30_000, env: process.env });
+
+        let probeOut = "";
+        let probeErr = "";
+        probeChild.stdout.on("data", (chunk: Buffer) => { probeOut += chunk.toString(); });
+        probeChild.stderr.on("data", (chunk: Buffer) => { probeErr += chunk.toString(); });
+
+        probeChild.on("error", (err: Error) => {
+          reject(new Error(`Claude CLI preflight probe failed: ${err.message}`));
+        });
+
+        probeChild.on("close", (probeCode) => {
+          try {
+            const probeResponse = JSON.parse(probeOut) as { is_error?: boolean; structured_output?: unknown; errors?: string[] };
+            if (probeResponse.is_error) {
+              const detail = probeResponse.errors?.join("; ") ?? "unknown reason";
+              reject(new Error(`Claude CLI preflight probe failed: ${detail}. Model "${model}" may need a higher CLAUDE_CLI_MAX_BUDGET_USD or may not be available.`));
+              return;
+            }
+            if (probeResponse.structured_output === undefined || probeResponse.structured_output === null) {
+              reject(new Error(`Claude CLI preflight probe missing structured_output. --json-schema may not be supported by this CLI version.`));
+              return;
+            }
+            resolve();
+          } catch {
+            // stdout wasn't valid JSON — fall through to exit-code diagnostics
+            if (probeCode !== 0) {
+              reject(new Error(
+                `Claude CLI preflight probe failed: model "${model}" may not be supported or flags are incompatible. ` +
+                `Exit code ${probeCode}. stderr: ${probeErr.slice(0, 300)}`
+              ));
+              return;
+            }
+            reject(new Error(`Claude CLI preflight probe output is not valid JSON: ${probeOut.slice(0, 200)}`));
+          }
+        });
+
+        probeChild.stdin.write('Return {"ok":true}');
+        probeChild.stdin.end();
+      });
+    });
+  }
+
   private resolveProvider(step: string): LlmProvider {
     if (step === "draft-generation") {
       return this.env.DRAFT_LLM_PROVIDER ?? "openai";
@@ -256,6 +471,13 @@ export class LlmClient {
   private resolveModel(step: string, provider: LlmProvider) {
     // Tier 1a: Draft generation — creative writing
     if (step === "draft-generation") {
+      if (provider === "claude-cli") {
+        // The env schema defaults DRAFT_LLM_MODEL to "gpt-5.4" (OpenAI).
+        // When the operator chose claude-cli, use the Claude default unless
+        // they explicitly set a Claude model name.
+        const envModel = this.env.DRAFT_LLM_MODEL;
+        return envModel && !envModel.startsWith("gpt-") ? envModel : "claude-opus-4-6";
+      }
       return this.env.DRAFT_LLM_MODEL ?? "gpt-5.4";
     }
 
@@ -309,9 +531,11 @@ function isNanoStep(step: string): boolean {
 }
 
 function estimateCostUsd(provider: LlmProvider, model: string, promptTokens: number, completionTokens: number) {
-  const rates = provider === "anthropic"
-    ? inferAnthropicRates(model)
-    : inferOpenAiRates(model);
+  const rates = provider === "claude-cli"
+    ? inferClaudeCliRates(model)
+    : provider === "anthropic"
+      ? inferAnthropicRates(model)
+      : inferOpenAiRates(model);
   const promptRate = rates.promptRate;
   const completionRate = rates.completionRate;
   return Number((promptTokens * promptRate + completionTokens * completionRate).toFixed(6));
@@ -363,6 +587,25 @@ function inferAnthropicRates(model: string) {
   return {
     promptRate: 0.000003,
     completionRate: 0.000015
+  };
+}
+
+function inferClaudeCliRates(model: string) {
+  if (model.includes("opus")) {
+    return {
+      promptRate: 0.000015,
+      completionRate: 0.000075
+    };
+  }
+  if (model.includes("sonnet")) {
+    return {
+      promptRate: 0.000003,
+      completionRate: 0.000015
+    };
+  }
+  return {
+    promptRate: 0.000015,
+    completionRate: 0.000075
   };
 }
 

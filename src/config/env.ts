@@ -15,8 +15,11 @@ export interface AppEnv {
   DEFAULT_COMPANY_NAME?: string;
   INTELLIGENCE_LLM_PROVIDER?: "openai" | "anthropic";
   INTELLIGENCE_LLM_MODEL?: string;
-  DRAFT_LLM_PROVIDER?: "openai" | "anthropic";
+  DRAFT_LLM_PROVIDER?: "openai" | "anthropic" | "claude-cli";
   DRAFT_LLM_MODEL?: string;
+  CLAUDE_CLI_PATH?: string;
+  CLAUDE_CLI_MAX_BUDGET_USD?: number;
+  CLAUDE_CLI_TIMEOUT_MS?: number;
   LLM_MODEL?: string;
   LLM_TIMEOUT_MS?: number;
   HTTP_PORT?: number;

@@ -502,7 +502,7 @@ export interface RunContext {
   port?: number;
 }
 
-export type LlmProvider = "openai" | "anthropic";
+export type LlmProvider = "openai" | "anthropic" | "claude-cli";
 
 export interface CompanyRecord {
   id: string;

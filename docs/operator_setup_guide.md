@@ -36,10 +36,40 @@ Ce guide documente la configuration Notion, les variables d'environnement, les c
 | `ANTHROPIC_API_KEY` | `""` | Clé API Anthropic |
 | `INTELLIGENCE_LLM_PROVIDER` | `"openai"` | Provider pour le pipeline intelligence |
 | `INTELLIGENCE_LLM_MODEL` | `"gpt-5.4"` | Modèle pour screening/routing |
-| `DRAFT_LLM_PROVIDER` | `"openai"` | Provider pour la génération de drafts |
-| `DRAFT_LLM_MODEL` | `"gpt-5"` | Modèle pour les drafts |
-| `LLM_MODEL` | `"gpt-4.1-mini"` | Modèle fallback |
+| `DRAFT_LLM_PROVIDER` | `"openai"` | Provider pour la génération de drafts (`"openai"`, `"anthropic"`, ou `"claude-cli"`) |
+| `DRAFT_LLM_MODEL` | `"gpt-5.4"` / `"claude-opus-4-6"` (cli) | Modèle pour les drafts |
+| `CLAUDE_CLI_PATH` | `"claude"` | Chemin vers le binaire Claude Code CLI |
+| `CLAUDE_CLI_MAX_BUDGET_USD` | `0.50` | Budget max par appel CLI (USD) |
+| `CLAUDE_CLI_TIMEOUT_MS` | `120000` | Timeout du process CLI en ms |
+| `LLM_MODEL` | `"gpt-5.4-mini"` | Modèle fallback |
 | `LLM_TIMEOUT_MS` | `45000` | Timeout LLM en ms |
+
+### Claude CLI pour les drafts
+
+Draft generation peut utiliser Claude Opus 4.6 via le CLI local au lieu de l'API OpenAI. C'est opt-in — le backend par défaut reste OpenAI.
+
+**Activer :**
+
+```bash
+DRAFT_LLM_PROVIDER=claude-cli
+# Optionnel — ces défauts conviennent dans la plupart des cas :
+# DRAFT_LLM_MODEL=claude-opus-4-6
+# CLAUDE_CLI_PATH=claude
+# CLAUDE_CLI_MAX_BUDGET_USD=0.50
+```
+
+**Prérequis :** le binaire `claude` (Claude Code CLI) doit être installé et authentifié. Au premier appel de draft (pas au démarrage), un preflight vérifie que le binaire existe et que le modèle cible répond. L'app peut donc démarrer normalement et échouer plus tard lors du premier draft. Si le preflight échoue, l'erreur est explicite :
+
+```
+Error: Claude CLI preflight failed: binary not found at "claude". Install Claude Code CLI or set CLAUDE_CLI_PATH.
+Error: Claude CLI preflight probe failed: model "claude-opus-4-6" may not be supported or flags are incompatible.
+```
+
+**Vérifier qu'un draft a bien utilisé Opus 4.6 :** dans le cost ledger, le champ `model` affiche le modèle runtime exact reporté par le CLI (ex. `claude-opus-4-6`) et `mode` affiche `provider`. Le coût enregistré est le coût réel facturé par le CLI, pas une estimation.
+
+**Revenir à OpenAI :** supprimer `DRAFT_LLM_PROVIDER` ou le remettre à `"openai"`. Aucun autre changement nécessaire.
+
+**Scope :** le backend `claude-cli` est strictement limité au step `draft-generation`. Si un autre step tente de l'utiliser (mauvaise config), une erreur de configuration est levée immédiatement.
 
 ### Connecteurs
 

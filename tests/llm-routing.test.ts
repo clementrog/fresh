@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { EventEmitter } from "node:events";
 
 import { LlmClient } from "../src/services/llm.js";
 import type { AppEnv } from "../src/config/env.js";
@@ -119,6 +120,87 @@ describe("LLM routing", () => {
       expect(calls).toHaveLength(1);
       expect(calls[0].url).toBe(OPENAI_URL);
       expect(calls[0].model).toBe(expectedModel);
+    });
+  });
+
+  describe("claude-cli provider routing", () => {
+    function makeFakeCliChild(stdout: string, exitCode = 0) {
+      const child = new EventEmitter();
+      const stdoutEmitter = new EventEmitter();
+      const stderrEmitter = new EventEmitter();
+      (child as unknown as Record<string, unknown>).stdout = stdoutEmitter;
+      (child as unknown as Record<string, unknown>).stderr = stderrEmitter;
+      (child as unknown as Record<string, unknown>).stdin = { write() {}, end() {} };
+      process.nextTick(() => {
+        stdoutEmitter.emit("data", Buffer.from(stdout));
+        process.nextTick(() => child.emit("close", exitCode));
+      });
+      return child as unknown as ReturnType<typeof import("node:child_process").spawn>;
+    }
+
+    const cliOk = (structured: unknown) => JSON.stringify({
+      is_error: false, total_cost_usd: 0.01,
+      usage: { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 10 },
+      structured_output: structured, result: "",
+    });
+
+    function makeCountingSpawn(schedule: string[]) {
+      let callCount = 0;
+      const spawnFn = (() => {
+        const stdout = schedule[callCount] ?? schedule[schedule.length - 1];
+        callCount++;
+        return makeFakeCliChild(stdout);
+      }) as unknown as typeof import("node:child_process").spawn;
+      return { spawnFn, getCount: () => callCount };
+    }
+
+    it("draft-generation routes to CLI, not fetch, when DRAFT_LLM_PROVIDER=claude-cli", async () => {
+      const { spawnFn, getCount } = makeCountingSpawn([
+        "2.1.90\n",
+        cliOk({ ok: true }),
+        cliOk({ ok: true }),
+      ]);
+
+      const { fetch: mockFn, calls } = mockFetch();
+      const client = new LlmClient(
+        buildDefaultEnv({
+          DRAFT_LLM_PROVIDER: "claude-cli" as const,
+          DRAFT_LLM_MODEL: "claude-opus-4-6",
+          CLAUDE_CLI_PATH: "/fake/claude",
+          CLAUDE_CLI_TIMEOUT_MS: 5000,
+        }),
+        undefined,
+        mockFn,
+        spawnFn
+      );
+
+      await callStep(client, "draft-generation");
+
+      expect(calls).toHaveLength(0);
+      expect(getCount()).toBeGreaterThanOrEqual(3);
+    });
+
+    it("non-draft steps still route to fetch even when DRAFT_LLM_PROVIDER=claude-cli", async () => {
+      const { spawnFn } = makeCountingSpawn([
+        "2.1.90\n",
+        cliOk({ ok: true }),
+      ]);
+
+      const { fetch: mockFn, calls } = mockFetch();
+      const client = new LlmClient(
+        buildDefaultEnv({
+          DRAFT_LLM_PROVIDER: "claude-cli" as const,
+          CLAUDE_CLI_PATH: "/fake/claude",
+          CLAUDE_CLI_TIMEOUT_MS: 5000,
+        }),
+        undefined,
+        mockFn,
+        spawnFn
+      );
+
+      await callStep(client, "screening");
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toBe(OPENAI_URL);
     });
   });
 });

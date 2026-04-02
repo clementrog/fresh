@@ -1676,7 +1676,7 @@ Provide a rationale explaining your assessment.`,
     costs.push(
       createCostEntry({
         step,
-        model: this.env.LLM_MODEL ?? "unknown",
+        model: usage.model ?? this.env.LLM_MODEL ?? "unknown",
         mode: usage.mode,
         promptTokens: usage.promptTokens,
         completionTokens: usage.completionTokens,
