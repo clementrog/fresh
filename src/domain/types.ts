@@ -197,6 +197,9 @@ export interface LinearSourceConfig extends SourceSyncConfig {
   includeIssues: boolean;
   includeProjectUpdates: boolean;
   includeIssueComments: boolean;
+  teamKeys?: string[];
+  includeProjects?: boolean;
+  projectStateFilter?: string[];
 }
 
 export interface MarketFindingsSourceConfig extends SourceSyncConfig {

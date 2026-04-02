@@ -44,7 +44,7 @@ export class GitHubConnector extends BaseConnector<GitHubSourceConfig> {
     }
 
     const maxItems = config.maxItemsPerRun ?? DEFAULT_MAX_ITEMS_PER_RUN;
-    const queryCursor = cursor ? subtractSeconds(cursor, CURSOR_OVERLAP_SECONDS) : null;
+    const { perRepo, legacyFallback } = parsePerRepoCursors(cursor);
 
     let repos: string[];
     try {
@@ -59,10 +59,15 @@ export class GitHubConnector extends BaseConnector<GitHubSourceConfig> {
       };
     }
 
+    // Per-repo cursors: preserve existing, default new repos to legacy fallback (or null)
+    const updatedCursors: Record<string, string | null> = {};
+    for (const repo of repos) {
+      updatedCursors[repo] = perRepo[repo] ?? legacyFallback;
+    }
+
     const items: RawSourceItem[] = [];
     const warnings: string[] = [];
     let partialCompletion = false;
-    const repoMaxCursors: string[] = [];
 
     for (const repo of repos) {
       if (items.length >= maxItems) {
@@ -70,41 +75,35 @@ export class GitHubConnector extends BaseConnector<GitHubSourceConfig> {
         break;
       }
 
+      const repoCursor = updatedCursors[repo];
+      const queryCursor = repoCursor ? subtractSeconds(repoCursor, CURSOR_OVERLAP_SECONDS) : null;
+
       try {
         const remaining = maxItems - items.length;
         const repoItems = await this.fetchRepoItems(config, repo, queryCursor, remaining);
         items.push(...repoItems);
 
+        // Advance only this repo's cursor to the max of its fetched items
         for (const item of repoItems) {
-          if (item.cursor) repoMaxCursors.push(item.cursor);
+          if (item.cursor && (!updatedCursors[repo] || item.cursor > updatedCursors[repo]!)) {
+            updatedCursors[repo] = item.cursor;
+          }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         warnings.push(`Failed to fetch ${config.orgSlug}/${repo}: ${message}`);
         partialCompletion = true;
+        // Failed repo keeps its existing cursor — will be retried next run
       }
     }
 
-    // Cursor advancement logic
-    let nextCursor: string | null;
-    if (partialCompletion && warnings.length > 0) {
-      // Repo-level failures: don't advance cursor at all
-      nextCursor = cursor;
-    } else if (items.length >= maxItems) {
-      // Cap hit: advance to last processed item
-      const sorted = [...items].sort((a, b) => a.cursor.localeCompare(b.cursor));
-      nextCursor = sorted[sorted.length - 1]?.cursor ?? cursor;
+    if (items.length >= maxItems) {
       partialCompletion = true;
-    } else if (repoMaxCursors.length > 0) {
-      // Full success: advance to max of all items
-      nextCursor = repoMaxCursors.reduce((max, c) => c > max ? c : max, repoMaxCursors[0]);
-    } else {
-      nextCursor = cursor;
     }
 
     return {
       items: items.sort((a, b) => a.cursor.localeCompare(b.cursor)),
-      nextCursor,
+      nextCursor: serializePerRepoCursors(updatedCursors),
       warnings,
       partialCompletion
     };
@@ -552,4 +551,25 @@ function subtractSeconds(isoDate: string, seconds: number): string {
   const date = new Date(isoDate);
   date.setTime(date.getTime() - seconds * 1000);
   return date.toISOString();
+}
+
+// --- Per-repo cursor helpers ---
+// Stores one cursor per repo in a JSON map so active repos cannot
+// shadow quiet repos by advancing a single global watermark.
+
+function parsePerRepoCursors(raw: string | null): { perRepo: Record<string, string | null>; legacyFallback: string | null } {
+  if (!raw) return { perRepo: {}, legacyFallback: null };
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return { perRepo: parsed as Record<string, string | null>, legacyFallback: null };
+    }
+  } catch {
+    // Not JSON — legacy plain ISO-string cursor
+  }
+  return { perRepo: {}, legacyFallback: raw };
+}
+
+function serializePerRepoCursors(repos: Record<string, string | null>): string {
+  return JSON.stringify(repos);
 }

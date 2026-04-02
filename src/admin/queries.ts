@@ -298,7 +298,7 @@ export class AdminQueries {
       where: {
         companyId,
         source: "linear",
-        metadataJson: { path: ["linearEnrichmentClassification"], not: Prisma.DbNull }
+        metadataJson: { path: ["linearEnrichmentClassification"], equals: "manual-review-needed" }
       },
       orderBy: { occurredAt: "desc" },
       skip: (page - 1) * pageSize,
@@ -318,7 +318,7 @@ export class AdminQueries {
       where: {
         companyId,
         source: "linear",
-        metadataJson: { path: ["linearEnrichmentClassification"], not: Prisma.DbNull }
+        metadataJson: { path: ["linearEnrichmentClassification"], equals: "manual-review-needed" }
       }
     });
   }
@@ -331,7 +331,10 @@ export class AdminQueries {
       where: {
         companyId,
         source: "github",
-        metadataJson: { path: ["githubEnrichmentClassification"], equals: "manual-review" }
+        AND: [
+          { metadataJson: { path: ["githubEnrichmentClassification"], equals: "manual-review" } },
+          { NOT: { metadataJson: { path: ["scopeExcluded"], equals: true } } }
+        ]
       },
       orderBy: { occurredAt: "desc" },
       skip: (page - 1) * pageSize,
@@ -351,7 +354,10 @@ export class AdminQueries {
       where: {
         companyId,
         source: "github",
-        metadataJson: { path: ["githubEnrichmentClassification"], equals: "manual-review" }
+        AND: [
+          { metadataJson: { path: ["githubEnrichmentClassification"], equals: "manual-review" } },
+          { NOT: { metadataJson: { path: ["scopeExcluded"], equals: true } } }
+        ]
       }
     });
   }

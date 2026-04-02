@@ -11,5 +11,8 @@
   "workspaceIds": [],
   "includeIssues": true,
   "includeProjectUpdates": true,
-  "includeIssueComments": false
+  "includeIssueComments": false,
+  "teamKeys": ["LINC"],
+  "includeProjects": true,
+  "projectStateFilter": ["completed", "started"]
 }

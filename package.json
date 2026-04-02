@@ -36,7 +36,8 @@
     "sales:check-config": "tsx src/sales/cli.ts sales:check-config",
     "sales:cleanup": "tsx src/sales/cli.ts sales:cleanup",
     "sales:status": "tsx src/sales/cli.ts sales:status",
-    "sales:cleanup-orphans": "tsx src/sales/cli.ts sales:cleanup-orphans"
+    "sales:cleanup-orphans": "tsx src/sales/cli.ts sales:cleanup-orphans",
+    "scope-migration:run": "tsx scripts/scope-migration.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

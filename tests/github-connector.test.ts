@@ -338,7 +338,7 @@ describe("GitHubConnector retry and failure handling", () => {
     expect(result.partialCompletion).toBe(true);
   });
 
-  it("does not advance cursor when repo-level failures occur", async () => {
+  it("advances successful repos and holds failed repos with per-repo cursors", async () => {
     const multiRepoConfig: GitHubSourceConfig = {
       ...defaultConfig,
       repos: ["repo-a", "repo-b"],
@@ -358,8 +358,10 @@ describe("GitHubConnector retry and failure handling", () => {
 
     const result = await connector.fetchSinceV2(existingCursor, multiRepoConfig, defaultContext);
 
-    // Cursor stays at existing value because of partial failure
-    expect(result.nextCursor).toBe(existingCursor);
+    // Per-repo: successful repo advances, failed repo holds at legacy fallback
+    const cursors = JSON.parse(result.nextCursor!);
+    expect(cursors["repo-a"]).toBe("2026-03-31T10:00:00Z");
+    expect(cursors["repo-b"]).toBe(existingCursor);
     expect(result.partialCompletion).toBe(true);
   });
 
@@ -391,6 +393,50 @@ describe("GitHubConnector retry and failure handling", () => {
     expect(result.partialCompletion).toBe(true);
     // Cursor advances to last processed item, not beyond
     expect(result.nextCursor).toBeTruthy();
+  });
+
+  it("per-repo cursors prevent active repos from shadowing quiet repos", async () => {
+    const config: GitHubSourceConfig = {
+      ...defaultConfig,
+      repos: ["active-repo", "quiet-repo"],
+      includeMergedPRs: true,
+      includeClosedIssues: false,
+      includeReleases: false,
+      rateLimit: { requestsPerMinute: 600, maxRetries: 0, initialDelayMs: 0 }
+    };
+
+    // Run 1: both repos return items at different times
+    fetchMock
+      .mockResolvedValueOnce(graphqlResponse(
+        mergedPRsPayload([{ id: "PR_a1", number: 1, title: "feat: active", updatedAt: "2026-03-31T10:00:00Z" }])
+      ))
+      .mockResolvedValueOnce(graphqlResponse(
+        mergedPRsPayload([{ id: "PR_q1", number: 1, title: "feat: quiet", updatedAt: "2026-02-15T10:00:00Z" }])
+      ));
+
+    const run1 = await connector.fetchSinceV2(null, config, defaultContext);
+    expect(run1.items).toHaveLength(2);
+
+    const cursors1 = JSON.parse(run1.nextCursor!);
+    expect(cursors1["active-repo"]).toBe("2026-03-31T10:00:00Z");
+    expect(cursors1["quiet-repo"]).toBe("2026-02-15T10:00:00Z");
+
+    // Run 2: active-repo has new items, quiet-repo has none
+    fetchMock
+      .mockResolvedValueOnce(graphqlResponse(
+        mergedPRsPayload([{ id: "PR_a2", number: 2, title: "feat: newer", updatedAt: "2026-04-01T10:00:00Z" }])
+      ))
+      .mockResolvedValueOnce(graphqlResponse(
+        mergedPRsPayload([])
+      ));
+
+    const run2 = await connector.fetchSinceV2(run1.nextCursor, config, defaultContext);
+    expect(run2.items).toHaveLength(1);
+
+    // Key: quiet-repo cursor is NOT dragged forward by active-repo
+    const cursors2 = JSON.parse(run2.nextCursor!);
+    expect(cursors2["active-repo"]).toBe("2026-04-01T10:00:00Z");
+    expect(cursors2["quiet-repo"]).toBe("2026-02-15T10:00:00Z");
   });
 
   it("rate-limit exhaustion (403 with remaining=0) is retried then propagated as per-repo warning", async () => {

@@ -119,7 +119,10 @@ export const linearSourceConfigSchema = sourceBaseSchema.extend({
   workspaceIds: z.array(z.string()),
   includeIssues: z.boolean(),
   includeProjectUpdates: z.boolean(),
-  includeIssueComments: z.boolean()
+  includeIssueComments: z.boolean(),
+  teamKeys: z.array(z.string()).optional(),
+  includeProjects: z.boolean().optional(),
+  projectStateFilter: z.array(z.string()).optional()
 });
 
 export const marketFindingsSourceConfigSchema = sourceBaseSchema.extend({

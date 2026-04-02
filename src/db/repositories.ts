@@ -981,6 +981,7 @@ export class RepositoryBundle {
       where: {
         companyId: params.companyId,
         processedAt: { not: null },
+        NOT: { metadataJson: { path: ["scopeExcluded"], equals: true } },
         ...(params.excludeIds && params.excludeIds.length > 0
           ? { id: { notIn: params.excludeIds } }
           : {})

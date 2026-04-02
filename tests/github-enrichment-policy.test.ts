@@ -109,11 +109,11 @@ describe("evaluateGitHubEnrichmentPolicy", () => {
 });
 
 describe("getSourceCreationMode for github", () => {
-  it("returns create-capable for shipped-feature", () => {
+  it("returns enrich-only for shipped-feature (GitHub is proof-only)", () => {
     const item = makeGitHubItem({
       metadata: { ...makeGitHubItem().metadata, githubEnrichmentClassification: "shipped-feature" }
     });
-    expect(getSourceCreationMode(item)).toBe("create-capable");
+    expect(getSourceCreationMode(item)).toBe("enrich-only");
   });
 
   it("returns enrich-only for customer-fix", () => {

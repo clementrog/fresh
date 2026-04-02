@@ -1,6 +1,6 @@
 {
   "source": "github",
-  "enabled": false,
+  "enabled": true,
   "storeRawText": false,
   "retentionDays": 30,
   "rateLimit": {
@@ -9,12 +9,12 @@
     "initialDelayMs": 2000
   },
   "orgSlug": "linc-fr",
-  "repos": ["*"],
+  "repos": ["tranche", "rgdu", "dsnreader"],
   "includeMergedPRs": true,
   "includeClosedIssues": true,
   "includeReleases": true,
   "labelFilters": {
     "exclude": ["dependencies", "ci", "chore"]
   },
-  "maxItemsPerRun": 500
+  "maxItemsPerRun": 150
 }

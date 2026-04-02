@@ -1356,7 +1356,7 @@ export function parseToneBodySections(sections: Map<string, string>): {
   };
 }
 
-function formatEvidenceExcerpts(evidence: EvidenceReference[]): string {
+export function formatEvidenceExcerpts(evidence: EvidenceReference[]): string {
   if (evidence.length === 0) return "";
   return evidence.map((e) => {
     const date = e.timestamp.slice(0, 10);
@@ -1367,7 +1367,7 @@ function formatEvidenceExcerpts(evidence: EvidenceReference[]): string {
   }).join("\n\n");
 }
 
-function formatOperatorGuidance(guidance: string[]): string {
+export function formatOperatorGuidance(guidance: string[]): string {
   if (guidance.length === 0) return "";
   return guidance.map((g) => `• ${g}`).join("\n");
 }

@@ -28,6 +28,20 @@ import { tokenizeV1, tokenizeV2, removeStopWords, jaccardSimilarity, hasMeaningf
 import type { AngleSharpnessResult } from "../lib/text.js";
 import type { AngleQualitySignals } from "../domain/types.js";
 
+// --- Concurrency-limited parallel map ---
+async function pMap<T, R>(items: T[], fn: (item: T) => Promise<R>, concurrency: number): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let index = 0;
+  async function worker() {
+    while (index < items.length) {
+      const i = index++;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return results;
+}
+
 // --- Prefilter ---
 
 export function prefilterSourceItems(
@@ -41,6 +55,10 @@ export function prefilterSourceItems(
   const skipped: Array<{ item: NormalizedSourceItem; reason: string }> = [];
 
   for (const item of items) {
+    if (item.metadata?.scopeExcluded === true) {
+      skipped.push({ item, reason: "Scope-excluded (historical out-of-scope record)" });
+      continue;
+    }
     if (new Date(item.occurredAt).getTime() < cutoff) {
       skipped.push({ item, reason: `Older than ${windowDays} days` });
       continue;
@@ -189,7 +207,7 @@ export async function evaluateLinearEnrichmentPolicy(params: {
   const usageEvents: Array<{ step: string; usage: LlmUsage }> = [];
 
   const system = [
-    "You are an editorial policy evaluator for a content pipeline. Your job is to classify Linear issues and project updates for enrichment eligibility.",
+    "You are an editorial policy evaluator for a content pipeline. Your job is to classify Linear issues, project updates, and projects for enrichment eligibility.",
     "",
     "## Company Doctrine",
     params.doctrineMarkdown,
@@ -235,6 +253,12 @@ export async function evaluateLinearEnrichmentPolicy(params: {
     "- pre-shipping: work in progress that might not ship as described",
     "- promise-like: reads like a commitment to customers",
     "",
+    "## Project items (itemType = 'project')",
+    "Project items represent entire Linear projects with full discovery, scoping, and delivery context.",
+    "- Projects with projectState = 'completed' are RELEASED features. These are the highest-confidence editorial-lead candidates. They represent shipped work that has gone through full product lifecycle.",
+    "- Projects with projectState = 'started' are IN PROGRESS roadmap items. Classify as manual-review-needed with sensitivityLevel = 'roadmap-sensitive'. They may be used for teasing content but must not be presented as shipped.",
+    "- Project labels often contain sizing (S, M, L, XL) which indicates scope — larger projects are stronger editorial-lead candidates.",
+    "",
     "## Tie-breaking rules",
     "- Between editorial-lead and enrich-worthy: choose editorial-lead only when the item has enough substance and scope for a standalone article. A single narrow fix is enrich-worthy even if shipped.",
     "- Between enrich-worthy and manual-review-needed: choose manual-review-needed if the item is pre-shipping or roadmap-sensitive.",
@@ -243,7 +267,7 @@ export async function evaluateLinearEnrichmentPolicy(params: {
     "Return JSON matching the linearEnrichmentPolicy schema."
   ].join("\n");
 
-  for (const item of params.items) {
+  await pMap(params.items, async (item) => {
     const meta = item.metadata ?? {};
     const prompt = [
       "## Linear item to classify",
@@ -258,8 +282,13 @@ export async function evaluateLinearEnrichmentPolicy(params: {
       `Labels: ${Array.isArray(meta.labels) ? (meta.labels as string[]).join(", ") : "none"}`,
       `Project: ${meta.projectName ?? "none"}`,
       `Created at: ${meta.createdAt ?? "unknown"}`,
-      `Completed at: ${meta.completedAt ?? "not completed"}`
-    ].join("\n");
+      `Completed at: ${meta.completedAt ?? meta.projectCompletedAt ?? "not completed"}`,
+      meta.projectState ? `Project state: ${meta.projectState}` : "",
+      meta.projectStartDate ? `Project start: ${meta.projectStartDate}` : "",
+      meta.projectTargetDate ? `Project target: ${meta.projectTargetDate}` : "",
+      meta.projectLabels && Array.isArray(meta.projectLabels) && (meta.projectLabels as string[]).length > 0
+        ? `Project labels: ${(meta.projectLabels as string[]).join(", ")}` : ""
+    ].filter(Boolean).join("\n");
 
     try {
       const response = await params.llmClient.generateStructured({
@@ -276,7 +305,7 @@ export async function evaluateLinearEnrichmentPolicy(params: {
     } catch {
       results.set(item.externalId, LINEAR_ENRICHMENT_FALLBACK);
     }
-  }
+  }, 5);
 
   return { results, usageEvents };
 }
@@ -318,8 +347,9 @@ export async function evaluateGitHubEnrichmentPolicy(params: {
     "Classify each GitHub item into one of five categories:",
     "",
     "### shipped-feature",
-    "A major user-facing capability that has been shipped to production. Standalone editorial potential — can anchor a new content opportunity.",
-    "Requirements: (1) clear user/customer benefit, (2) enough substance for a 500+ word article, (3) merged/released to production.",
+    "A major user-facing capability that has been shipped to production. Provides strong proof/evidence for existing editorial opportunities created from Linear released projects.",
+    "Note: GitHub items do NOT create standalone content opportunities — they provide evidence that something shipped. Classify as shipped-feature when the item demonstrates real production-ready work.",
+    "Requirements: (1) clear user/customer benefit, (2) concrete shipped work, (3) merged/released to production.",
     "Strong signals: release notes describing new capabilities, milestone PRs for convention support, major workflow improvements.",
     "Examples: 'Release v2.5: Convention HCR fully supported', 'PR: Clickable PDF bulletins for all clients', 'Release: DSN filing automation'",
     "",
@@ -359,7 +389,7 @@ export async function evaluateGitHubEnrichmentPolicy(params: {
     "Return JSON matching the githubEnrichmentPolicy schema."
   ].join("\n");
 
-  for (const item of params.items) {
+  await pMap(params.items, async (item) => {
     const meta = item.metadata ?? {};
     const prompt = [
       "## GitHub item to classify",
@@ -393,7 +423,7 @@ export async function evaluateGitHubEnrichmentPolicy(params: {
     } catch {
       results.set(item.externalId, GITHUB_ENRICHMENT_FALLBACK);
     }
-  }
+  }, 5);
 
   return { results, usageEvents };
 }
@@ -557,11 +587,8 @@ export function getSourceCreationMode(item: NormalizedSourceItem): SourceCreatio
     }
     case "hubspot":
       return "enrich-only";
-    case "github": {
-      const ghClass = typeof item.metadata?.githubEnrichmentClassification === "string"
-        ? item.metadata.githubEnrichmentClassification : undefined;
-      return ghClass === "shipped-feature" ? "create-capable" : "enrich-only";
-    }
+    case "github":
+      return "enrich-only"; // GitHub is proof/evidence only; Linear is the primary signal source
     default:
       return "enrich-only";
   }
@@ -592,11 +619,8 @@ function isCuratedSource(item: NormalizedSourceItem): boolean {
     }
     case "hubspot":
       return false;
-    case "github": {
-      const ghItemType = typeof item.metadata?.itemType === "string"
-        ? item.metadata.itemType : undefined;
-      return ghItemType === "release";
-    }
+    case "github":
+      return false; // GitHub items are never curated origins
     default:
       return false;
   }

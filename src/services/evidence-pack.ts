@@ -35,6 +35,9 @@ interface SourcePolicyEntry {
 }
 
 function getSourcePolicy(item: NormalizedSourceItem): SourcePolicyEntry {
+  if (item.metadata?.scopeExcluded === true) {
+    return { canBeOrigin: false, canBeSupport: false, minJaccardForSupport: 1.0, priority: 99 };
+  }
   if (isBlockedByPublishability(item)) {
     return { canBeOrigin: false, canBeSupport: false, minJaccardForSupport: 1.0, priority: 99 };
   }
@@ -66,7 +69,7 @@ function getSourcePolicy(item: NormalizedSourceItem): SourcePolicyEntry {
       const linearClass = typeof item.metadata?.linearEnrichmentClassification === "string"
         ? item.metadata.linearEnrichmentClassification : undefined;
       if (linearClass === "editorial-lead") {
-        return { canBeOrigin: true, canBeSupport: true, minJaccardForSupport: 0.10, priority: 2 };
+        return { canBeOrigin: true, canBeSupport: true, minJaccardForSupport: 0.10, priority: 1 };
       }
       if (linearClass === "manual-review-needed" || linearClass === "ignore") {
         return { canBeOrigin: false, canBeSupport: false, minJaccardForSupport: 1.0, priority: 99 };
@@ -77,7 +80,7 @@ function getSourcePolicy(item: NormalizedSourceItem): SourcePolicyEntry {
       const ghClass = typeof item.metadata?.githubEnrichmentClassification === "string"
         ? item.metadata.githubEnrichmentClassification : undefined;
       if (ghClass === "shipped-feature") {
-        return { canBeOrigin: true, canBeSupport: true, minJaccardForSupport: 0.10, priority: 2 };
+        return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.10, priority: 2 };
       }
       if (ghClass === "proof-point" || ghClass === "customer-fix") {
         return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.15, priority: 3 };

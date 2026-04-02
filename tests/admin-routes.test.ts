@@ -705,13 +705,13 @@ describe("GET /admin/reviews/github", () => {
     expect(res.body).toContain("Ambiguous PR about customer migration");
     expect(res.body).toContain("app");
 
-    // Verify the query was called with manual-review filter
+    // Verify the query was called with manual-review + scopeExcluded filter
     const findManyCall = (prisma.sourceItem.findMany as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(findManyCall.where.source).toBe("github");
-    expect(findManyCall.where.metadataJson).toEqual({
-      path: ["githubEnrichmentClassification"],
-      equals: "manual-review"
-    });
+    expect(findManyCall.where.AND).toEqual([
+      { metadataJson: { path: ["githubEnrichmentClassification"], equals: "manual-review" } },
+      { NOT: { metadataJson: { path: ["scopeExcluded"], equals: true } } }
+    ]);
   });
 });
 

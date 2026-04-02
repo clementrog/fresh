@@ -161,19 +161,25 @@ export class EditorialSignalEngineApp {
   }
 
   private async ingestRun(context: RunContext) {
+    const company = await this.getActiveCompany(context);
     const run = createRun("ingest:run");
+    run.companyId = company.id;
     if (!context.dryRun) {
       await this.repositories.createSyncRun(run);
     }
 
     try {
-      const company = await this.getActiveCompany(context);
       const staticInputs = await this.loadStaticInputs(context);
       const registry = createConnectorRegistry(this.env, this.llmClient, staticInputs.doctrineMarkdown);
       const sourceMaxCursor = new Map<string, string | null>();
 
-      for (const config of staticInputs.configs.filter((entry) => entry.enabled)) {
+      const enabledConfigs = staticInputs.configs.filter((entry) => entry.enabled);
+      this.logger.info({ sources: enabledConfigs.map(c => c.source) }, "Enabled sources");
+
+      for (const config of enabledConfigs) {
+        this.logger.info({ source: config.source }, "Fetching source items");
         const fetchResult = await this.fetchSourceItems(config, registry[config.source], context, company.id);
+        this.logger.info({ source: config.source, fetched: fetchResult.items.length, warnings: fetchResult.warnings, partial: fetchResult.partialCompletion }, "Fetch result");
         run.counters.fetched += fetchResult.items.length;
 
         for (const w of fetchResult.warnings) {
