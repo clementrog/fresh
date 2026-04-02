@@ -9,7 +9,6 @@ import type {
   EditorialConfigRecord,
   EvidenceReference,
   MarketQueryRecord,
-  NotionDatabaseBinding,
   NormalizedSourceItem,
   ScreeningResult,
   SourceConfigRecord,
@@ -185,58 +184,6 @@ export class RepositoryBundle {
     }));
   }
 
-  async getNotionDatabaseBinding(parentPageId: string, name: string): Promise<NotionDatabaseBinding | null> {
-    const binding = await this.prisma.notionDatabaseBinding.findUnique({
-      where: {
-        parentPageId_name: {
-          parentPageId,
-          name
-        }
-      }
-    });
-
-    if (!binding) {
-      return null;
-    }
-
-    return {
-      name: binding.name,
-      parentPageId: binding.parentPageId,
-      databaseId: binding.databaseId,
-      createdAt: binding.createdAt.toISOString(),
-      updatedAt: binding.updatedAt.toISOString()
-    };
-  }
-
-  async upsertNotionDatabaseBinding(parentPageId: string, name: string, databaseId: string, tx: PrismaTransaction = this.prisma) {
-    return tx.notionDatabaseBinding.upsert({
-      where: {
-        parentPageId_name: {
-          parentPageId,
-          name
-        }
-      },
-      create: {
-        id: createDeterministicId("notion-db", [parentPageId, name]),
-        parentPageId,
-        name,
-        databaseId
-      },
-      update: {
-        databaseId
-      }
-    });
-  }
-
-  async clearNotionDatabaseBinding(parentPageId: string, name: string, tx: PrismaTransaction = this.prisma) {
-    await tx.notionDatabaseBinding.deleteMany({
-      where: {
-        parentPageId,
-        name
-      }
-    });
-  }
-
   async getCursor(source: string, companyId?: string) {
     if (companyId) {
       const cursor = await this.prisma.sourceCursor.findUnique({
@@ -388,15 +335,6 @@ export class RepositoryBundle {
     });
   }
 
-  async updateSourceItemNotionSync(sourceItemId: string, notionPageId: string | null, notionPageFingerprint: string | null) {
-    return this.prisma.sourceItem.update({
-      where: { id: sourceItemId },
-      data: {
-        notionPageId,
-        notionPageFingerprint
-      }
-    });
-  }
 
   async upsertOpportunity(opportunity: ContentOpportunity, tx: PrismaTransaction = this.prisma) {
     const supportingEvidenceCount = Math.max(0, opportunity.evidence.length - 1);
@@ -465,16 +403,6 @@ export class RepositoryBundle {
         v1HistoryJson: toJson(opportunity.v1History),
         notionPageId: opportunity.notionPageId,
         notionPageFingerprint: opportunity.notionPageFingerprint
-      }
-    });
-  }
-
-  async updateOpportunityNotionSync(opportunityId: string, notionPageId: string, notionPageFingerprint: string) {
-    return this.prisma.opportunity.update({
-      where: { id: opportunityId },
-      data: {
-        notionPageId,
-        notionPageFingerprint
       }
     });
   }
@@ -662,16 +590,6 @@ export class RepositoryBundle {
     return result.count > 0;
   }
 
-  async updateSyncRunNotionSync(runId: string, notionPageId: string, notionPageFingerprint: string) {
-    return this.prisma.syncRun.update({
-      where: { id: runId },
-      data: {
-        notionPageId,
-        notionPageFingerprint
-      }
-    });
-  }
-
   async addCostEntries(entries: CostLedgerEntry[], tx: PrismaTransaction = this.prisma) {
     if (entries.length === 0) {
       return;
@@ -724,20 +642,6 @@ export class RepositoryBundle {
     });
   }
 
-  async findOpportunityByNotionPageId(notionPageId: string, companyId?: string) {
-    return this.prisma.opportunity.findFirst({
-      where: { notionPageId, ...(companyId ? { companyId } : {}) },
-      include: opportunityInclude
-    });
-  }
-
-  async findOpportunityByNotionPageFingerprint(fingerprint: string, companyId?: string) {
-    return this.prisma.opportunity.findFirst({
-      where: { notionPageFingerprint: fingerprint, ...(companyId ? { companyId } : {}) },
-      include: opportunityInclude
-    });
-  }
-
   async updateOpportunityEditableFields(params: {
     opportunityId: string;
     title: string;
@@ -777,40 +681,6 @@ export class RepositoryBundle {
     return this.prisma.evidenceReference.update({
       where: { id: evidenceId },
       data: { sourceUrl }
-    });
-  }
-
-  async markEditsPending(opportunityIds: string[], companyId: string) {
-    if (opportunityIds.length === 0) return;
-    return this.prisma.opportunity.updateMany({
-      where: { id: { in: opportunityIds }, companyId },
-      data: { notionEditsPending: true }
-    });
-  }
-
-  async clearEditsPending(opportunityId: string) {
-    return this.prisma.opportunity.update({
-      where: { id: opportunityId },
-      data: { notionEditsPending: false }
-    });
-  }
-
-  async findEditsPendingOpportunities(companyId: string): Promise<Array<{ id: string; notionPageId: string | null; notionPageFingerprint: string }>> {
-    return this.prisma.opportunity.findMany({
-      where: { notionEditsPending: true, companyId },
-      select: { id: true, notionPageId: true, notionPageFingerprint: true }
-    });
-  }
-
-  async markOpportunitySelected(opportunityId: string, editorialOwner?: string) {
-    return this.prisma.opportunity.update({
-      where: { id: opportunityId },
-      data: {
-        ...(editorialOwner ? { editorialOwner } : {}),
-        selectedAt: new Date(),
-        status: "Selected"
-      },
-      include: opportunityInclude
     });
   }
 

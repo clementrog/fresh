@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { classifyToneSection, normalizeToneText, parseToneBodySections } from "../src/services/notion.js";
+import { classifyToneSection, normalizeToneText, parseToneBodySections } from "../src/lib/tone.js";
 import { resolveProfileId } from "../src/services/convergence.js";
 
 describe("classifyToneSection", () => {

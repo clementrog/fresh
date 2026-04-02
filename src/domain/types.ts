@@ -150,8 +150,6 @@ export type RunType =
   | "draft:generate"
   | "draft:generate-ready"
   | "server:start"
-  | "setup:notion"
-  | "selection:scan"
   | "cleanup:retention"
   | "backfill:evidence"
   | "cleanup:claap-publishability"
@@ -160,8 +158,7 @@ export type RunType =
   | "sales:extract"
   | "sales:detect"
   | "sales:match"
-  | "sales:cleanup"
-  | "opportunity:pull-notion-edits";
+  | "sales:cleanup";
 
 export interface RateLimitConfig {
   requestsPerMinute: number;
@@ -558,43 +555,6 @@ export interface HealthcheckResult {
   source: SourceKind;
   ok: boolean;
   details?: string;
-}
-
-export interface NotionSelectionRow {
-  notionPageId: string;
-  fingerprint: string;
-  editorialOwner: string;
-}
-
-export interface NotionEditRequest {
-  notionPageId: string;
-  fingerprint: string;
-  title: string;
-  angle: string;
-  whyNow: string;
-  whatItIsAbout: string;
-  whatItIsNotAbout: string;
-  sourceUrl: string;
-  editorialNotes: string;
-  /** "" = operator cleared, valid enum = operator set, undefined = absent or invalid (preserve DB) */
-  targetSegment?: string;
-  editorialPillar?: string;
-  awarenessTarget?: string;
-  buyerFriction?: string;
-  contentMotion?: string;
-}
-
-export interface NotionSyncResult {
-  notionPageId: string;
-  action: "created" | "updated";
-}
-
-export interface NotionDatabaseBinding {
-  name: string;
-  parentPageId: string;
-  databaseId: string;
-  createdAt?: string;
-  updatedAt?: string;
 }
 
 export interface SourceConnector<TConfig extends ConnectorConfig = ConnectorConfig> {

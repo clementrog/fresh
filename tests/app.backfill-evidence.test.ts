@@ -19,7 +19,6 @@ function buildEnv() {
   return {
     DATABASE_URL: "",
     NOTION_TOKEN: "",
-    NOTION_PARENT_PAGE_ID: "parent-page",
     OPENAI_API_KEY: "",
     ANTHROPIC_API_KEY: "",
     TAVILY_API_KEY: "",
@@ -204,22 +203,12 @@ function buildRepositories() {
     })),
     createSyncRun: vi.fn(async () => ({})),
     updateSyncRun: vi.fn(async () => ({})),
-    updateSyncRunNotionSync: vi.fn(async () => ({})),
     addCostEntries: vi.fn(async () => ({})),
     listRecentActiveOpportunities: vi.fn(async () => []),
     listCandidateSourceItems: vi.fn(async () => [] as any[]),
-    listUsers: vi.fn(async () => []),
     persistStandaloneEvidence: vi.fn(async () => ({})),
     enrichOpportunity: vi.fn(async () => ({})),
-    listSourceItemsByIds: vi.fn(async () => [] as any[]),
-    updateOpportunityNotionSync: vi.fn(async () => ({}))
-  };
-}
-
-function buildNotion() {
-  return {
-    syncOpportunity: vi.fn(async (..._args: any[]) => ({ notionPageId: "np-1", action: "updated" as const })),
-    syncRun: vi.fn(async () => null)
+    listSourceItemsByIds: vi.fn(async () => [] as any[])
   };
 }
 
@@ -231,12 +220,10 @@ function buildPrisma() {
 
 function buildApp(overrides: {
   repositories?: ReturnType<typeof buildRepositories>;
-  notion?: ReturnType<typeof buildNotion>;
   prisma?: ReturnType<typeof buildPrisma>;
   logger?: { info: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> };
 } = {}) {
   const repositories = overrides.repositories ?? buildRepositories();
-  const notion = overrides.notion ?? buildNotion();
   const prisma = overrides.prisma ?? buildPrisma();
   const logger = overrides.logger ?? { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
   const app = new EditorialSignalEngineApp(
@@ -245,16 +232,15 @@ function buildApp(overrides: {
     {
       prisma: prisma as any,
       repositories: repositories as any,
-      llmClient: {} as any,
-      notion: notion as any
+      llmClient: {} as any
     }
   );
-  return { app, repositories, notion, prisma, logger };
+  return { app, repositories, prisma, logger };
 }
 
 describe("backfill:evidence command", () => {
   it("does not persist or sync during dry-run", async () => {
-    const { app, repositories, notion, logger } = buildApp();
+    const { app, repositories, logger } = buildApp();
 
     const opp = makeOpportunity();
     repositories.listRecentActiveOpportunities.mockResolvedValue([makeOpportunityRow(opp)] as any);
@@ -274,15 +260,14 @@ describe("backfill:evidence command", () => {
     expect(repositories.createSyncRun).not.toHaveBeenCalled();
     expect(repositories.persistStandaloneEvidence).not.toHaveBeenCalled();
     expect(repositories.enrichOpportunity).not.toHaveBeenCalled();
-    expect(notion.syncOpportunity).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({ opportunityId: opp.id }),
       expect.stringContaining("[dry-run] Would add")
     );
   });
 
-  it("persists, reassesses, and syncs updated opportunity when new evidence is found", async () => {
-    const { app, repositories, notion } = buildApp();
+  it("persists and enriches opportunity when new evidence is found", async () => {
+    const { app, repositories } = buildApp();
 
     const primaryEvidence = makeEvidence({
       id: "ev-origin",
@@ -330,17 +315,10 @@ describe("backfill:evidence command", () => {
     expect(repositories.createSyncRun).toHaveBeenCalledTimes(1);
     expect(repositories.persistStandaloneEvidence).toHaveBeenCalledTimes(1);
     expect(repositories.enrichOpportunity).toHaveBeenCalledTimes(1);
-    expect(notion.syncOpportunity).toHaveBeenCalledTimes(1);
-
-    const syncedOpp = (notion.syncOpportunity.mock.calls as any[][])[0][0] as ContentOpportunity;
-    expect(syncedOpp.evidence.length).toBeGreaterThan(1);
-    expect(syncedOpp.supportingEvidenceCount).toBe(syncedOpp.evidence.length - 1);
-    expect(syncedOpp.evidenceExcerpts.length).toBe(syncedOpp.evidence.length);
-    expect(syncedOpp.enrichmentLog.length).toBe(1);
   });
 
   it("is idempotent at the command path when equivalent evidence is already attached", async () => {
-    const { app, repositories, notion } = buildApp();
+    const { app, repositories } = buildApp();
 
     const candidate = makeSourceItemRow({
       source: "market-research",
@@ -379,6 +357,5 @@ describe("backfill:evidence command", () => {
 
     expect(repositories.persistStandaloneEvidence).not.toHaveBeenCalled();
     expect(repositories.enrichOpportunity).not.toHaveBeenCalled();
-    expect(notion.syncOpportunity).not.toHaveBeenCalled();
   });
 });

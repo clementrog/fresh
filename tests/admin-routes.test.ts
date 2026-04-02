@@ -473,7 +473,6 @@ describe("GET /admin", () => {
     expect(res.body).toContain("Screened Out");
     expect(res.body).toContain("Blocked");
     expect(res.body).toContain("Orphaned");
-    expect(res.body).toContain("Unsynced");
   });
 });
 
@@ -924,7 +923,7 @@ describe("scope continuity", () => {
     const dispositionHrefs = extractHrefs(res.body).filter(
       (h) => h.includes("disposition=")
     );
-    expect(dispositionHrefs.length).toBe(4);
+    expect(dispositionHrefs.length).toBe(3);
     for (const href of dispositionHrefs) {
       expect(href).toContain("company=custom");
     }
@@ -1952,7 +1951,7 @@ describe("empty-state rendering — phase 3", () => {
     prisma.syncRun.findUnique = vi.fn(async () => ({
       id: "run_warn",
       companyId: "comp_1",
-      runType: "opportunity:pull-notion-edits",
+      runType: "intelligence:run",
       source: null,
       status: "completed",
       startedAt: new Date("2026-01-01T10:00:00Z"),

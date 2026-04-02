@@ -89,8 +89,7 @@ export function registerSourceItemPages(
           options: [
             { value: "screened-out", label: "Screened Out" },
             { value: "blocked", label: "Blocked" },
-            { value: "orphaned", label: "Orphaned" },
-            { value: "unsynced", label: "Unsynced" }
+            { value: "orphaned", label: "Orphaned" }
           ]
         },
         { name: "q", label: "Search title…", type: "text" }
@@ -213,7 +212,7 @@ function truncate(str: string, max: number): string {
   return str.slice(0, max - 1) + "…";
 }
 
-const VALID_DISPOSITIONS: Disposition[] = ["screened-out", "blocked", "orphaned", "unsynced"];
+const VALID_DISPOSITIONS: Disposition[] = ["screened-out", "blocked", "orphaned"];
 
 function parseDisposition(value: string): Disposition | undefined {
   return VALID_DISPOSITIONS.includes(value as Disposition) ? (value as Disposition) : undefined;

@@ -50,7 +50,7 @@ function getSourcePolicy(item: NormalizedSourceItem): SourcePolicyEntry {
     case "market-findings":
       return { canBeOrigin: true, canBeSupport: true, minJaccardForSupport: 0.10, priority: 1 };
     case "notion":
-      if (notionKind === "market-insight" || notionKind === "claap-signal") {
+      if (notionKind === "market-insight") {
         return { canBeOrigin: true, canBeSupport: true, minJaccardForSupport: 0.10, priority: 1 };
       }
       if (notionKind === "internal-proof") {
@@ -58,10 +58,15 @@ function getSourcePolicy(item: NormalizedSourceItem): SourcePolicyEntry {
       }
       return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.15, priority: 2 };
     case "claap": {
+      const routingDecision = typeof item.metadata?.routingDecision === "string"
+        ? item.metadata.routingDecision : undefined;
       const signalKind = typeof item.metadata?.signalKind === "string"
         ? item.metadata.signalKind : undefined;
-      if (signalKind === "claap-signal") {
+      if (routingDecision === "create_opportunity" || (!routingDecision && signalKind === "claap-signal")) {
         return { canBeOrigin: true, canBeSupport: true, minJaccardForSupport: 0.10, priority: 1 };
+      }
+      if (routingDecision === "support_only" || signalKind === "claap-signal-reframeable") {
+        return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.12, priority: 2 };
       }
       return { canBeOrigin: false, canBeSupport: true, minJaccardForSupport: 0.15, priority: 3 };
     }
@@ -108,14 +113,19 @@ export function deriveProvenanceType(item: NormalizedSourceItem): string {
       return "market-findings";
     case "notion":
       if (notionKind === "market-insight") return "notion:market-insight";
-      if (notionKind === "claap-signal") return "notion:claap-signal";
       if (notionKind === "internal-proof") return "notion:internal-proof";
       return "notion";
     case "claap": {
+      const routingDecision = typeof item.metadata?.routingDecision === "string"
+        ? item.metadata.routingDecision : undefined;
       const signalKind = typeof item.metadata?.signalKind === "string"
         ? item.metadata.signalKind : undefined;
-      if (signalKind === "claap-signal") return "claap:signal";
-      if (signalKind === "claap-signal-reframeable") return "claap:reframeable";
+      if (routingDecision === "create_opportunity" || (!routingDecision && signalKind === "claap-signal")) {
+        return "claap:signal";
+      }
+      if (routingDecision === "support_only" || signalKind === "claap-signal-reframeable") {
+        return "claap:support";
+      }
       return "claap";
     }
     case "linear": {
@@ -441,7 +451,13 @@ export function assessDraftReadiness(
     : undefined;
   const primaryNotionKind = typeof primarySourceItem?.metadata?.notionKind === "string"
     ? primarySourceItem.metadata.notionKind : undefined;
-  const isCuratedOrigin = primaryNotionKind === "market-insight" || primaryNotionKind === "claap-signal"
+  const primaryRoutingDecision = typeof primarySourceItem?.metadata?.routingDecision === "string"
+    ? primarySourceItem.metadata.routingDecision : undefined;
+  const primarySignalKind = typeof primarySourceItem?.metadata?.signalKind === "string"
+    ? primarySourceItem.metadata.signalKind : undefined;
+  const isCuratedOrigin = primaryNotionKind === "market-insight"
+    || primaryRoutingDecision === "create_opportunity"
+    || primarySignalKind === "claap-signal"
     || opportunity.primaryEvidence?.source === "market-research"
     || opportunity.primaryEvidence?.source === "market-findings";
   const curatedContentLength = isCuratedOrigin

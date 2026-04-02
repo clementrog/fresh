@@ -18,15 +18,7 @@ interface TranscriptSegment {
   endedAt?: number;
 }
 
-function buildReviewWhyBlocked(
-  risk: "harmful" | "reframeable",
-  title: string
-): string {
-  if (risk === "harmful") {
-    return `Blocked as harmful: "${title}" reads like negative feedback about our own product or customer trust. Publishing it would turn a product weakness into public marketing material.`;
-  }
-  return `Blocked as reframeable: "${title}" contains useful substance, but the current framing still exposes a product weakness or negative customer experience. A human must review the evidence and rewrite the angle before any public use.`;
-}
+type RoutingDecision = "create_opportunity" | "support_only" | "ignore";
 
 function buildSignalExtractionSystem(doctrineMarkdown?: string): string {
   const sections: string[] = [];
@@ -37,7 +29,19 @@ editorial signal — a concrete proof point, pain point, adoption signal, market
 or customer insight worth turning into a LinkedIn post.
 
 If the transcript is a routine internal meeting, training session, or contains no
-specific editorial insight, set hasSignal to false.
+specific editorial insight, set hasSignal to false and routingDecision to "ignore".
+
+## Routing Decision
+
+Set routingDecision to one of:
+- "create_opportunity": Strong signal worthy of a new content opportunity. Clear proof point,
+  sharp pain point, measurable adoption signal, or concrete customer insight with a publishable angle.
+- "support_only": Has evidence value (quotes, context, data points) but not strong enough alone
+  to justify a standalone post. Useful for enriching an existing opportunity later.
+- "ignore": No editorial signal. Routine internal meeting, training, or generic discussion.
+
+If hasSignal is false, routingDecision MUST be "ignore".
+If hasSignal is true, choose between "create_opportunity" and "support_only" based on signal strength.
 
 If it contains a signal, extract:
 - title: A concise signal title (French)
@@ -118,6 +122,14 @@ export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
         continue;
       }
 
+      // workspaceIds scoping: skip recordings from other workspaces.
+      // If the recording has no workspaceId (field absent from API response), let it through
+      // rather than silently dropping data — the API key may already scope to one workspace.
+      const recordingWs = recording.workspaceId != null ? String(recording.workspaceId) : undefined;
+      if (config.workspaceIds.length > 0 && recordingWs !== undefined && !config.workspaceIds.includes(recordingWs)) {
+        continue;
+      }
+
       if (config.folderIds.length > 0 && !config.folderIds.includes(String(recording.folderId ?? ""))) {
         continue;
       }
@@ -161,6 +173,7 @@ export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
     const transcript = payload.assembledTranscript ?? "";
     const segments = payload.transcriptSegments ?? [];
     const sourceItemId = String(payload.id ?? rawItem.id);
+    const occurredAt = payload.updatedAt ?? payload.createdAt ?? context.now.toISOString();
 
     // Attempt LLM signal extraction if transcript is substantial
     if (this.llmClient && transcript.length >= 100) {
@@ -169,33 +182,16 @@ export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
         if (extraction && extraction.hasSignal) {
           const risk = extraction.publishabilityRisk ?? "safe";
 
-          // Harmful: emit plain item with publishabilityRisk in metadata (no signal promotion)
-          if (risk === "harmful") {
-            const reviewTitle = extraction.title || payload.title || `Claap recording ${rawItem.id}`;
-            return {
-              source: "claap",
-              sourceItemId,
-              externalId: `claap:${sourceItemId}`,
-              sourceFingerprint: hashParts(["claap", sourceItemId, payload.updatedAt ?? payload.createdAt ?? "", transcript]),
-              sourceUrl: payload.url ?? "",
-              title: payload.title ?? `Claap recording ${rawItem.id}`,
-              text: transcript,
-              summary: payload.summary ?? transcript.slice(0, 200),
-              speakerName: payload.speaker,
-              occurredAt: payload.updatedAt ?? payload.createdAt ?? context.now.toISOString(),
-              ingestedAt: context.now.toISOString(),
-              metadata: {
-                storeRawText: config.storeRawText,
-                publishabilityRisk: "harmful",
-                reviewTitle,
-                reviewSummary: extraction.summary,
-                reviewExcerpts: extraction.excerpts,
-                reviewWhyBlocked: buildReviewWhyBlocked("harmful", reviewTitle)
-              },
-              rawPayload: rawItem.payload,
-              rawText: config.storeRawText ? transcript : null,
-              chunks: chunkTranscript(transcript, segments)
-            };
+          // Derive routing decision from LLM output, with fallback for old responses
+          let routing: RoutingDecision = extraction.routingDecision ?? "ignore";
+          if (routing === "ignore" && extraction.hasSignal) {
+            // Backward compat: old LLM responses lack routingDecision
+            routing = extraction.confidenceScore >= 0.7 ? "create_opportunity" : "support_only";
+          }
+
+          // Publishability gate: harmful/reframeable cannot create opportunities
+          if (routing === "create_opportunity" && risk !== "safe") {
+            routing = "support_only";
           }
 
           const profileHint = inferClaapSignalProfileHint({
@@ -228,86 +224,64 @@ export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
             .filter(Boolean)
             .join(" ");
 
-          // Reframeable: demoted signal with reduced confidence
-          if (risk === "reframeable") {
-            const demotedConfidence = Math.min(extraction.confidenceScore * 0.6, 0.5);
-            return {
-              source: "claap",
-              sourceItemId,
-              externalId: `claap:${sourceItemId}`,
-              sourceFingerprint: hashParts([
+          // Determine signalKind and fingerprint based on routing + risk
+          const signalKind = routing === "create_opportunity" ? "claap-signal"
+            : (risk === "reframeable" ? "claap-signal-reframeable" : undefined);
+
+          const fingerprintTag = routing === "create_opportunity" ? "claap-signal"
+            : (risk === "reframeable" ? "claap-signal-reframeable" : undefined);
+
+          const sourceFingerprint = fingerprintTag
+            ? hashParts([
                 "claap",
-                "claap-signal-reframeable",
+                fingerprintTag,
                 sourceItemId,
                 extraction.title,
                 extraction.signalType,
                 extraction.theme,
-                payload.updatedAt ?? payload.createdAt ?? ""
-              ]),
-              sourceUrl: payload.url ?? "",
-              title: extraction.title,
-              text,
-              summary: summaryText,
-              speakerName: payload.speaker,
-              occurredAt: payload.updatedAt ?? payload.createdAt ?? context.now.toISOString(),
-              ingestedAt: context.now.toISOString(),
-              metadata: {
-                storeRawText: config.storeRawText,
-                signalKind: "claap-signal-reframeable",
-                theme: extraction.theme,
-                signalTypeLabel: extraction.signalType,
-                profileHint,
-                hookCandidate: extraction.hookCandidate,
-                whyItMatters: extraction.whyItMatters,
-                confidenceScore: demotedConfidence,
-                publishabilityRisk: "reframeable",
-                reframingSuggestion: extraction.reframingSuggestion,
-                reviewTitle: extraction.title,
-                reviewSummary: extraction.summary,
-                reviewExcerpts: extraction.excerpts,
-                reviewWhyBlocked: buildReviewWhyBlocked("reframeable", extraction.title)
-              },
-              rawPayload: rawItem.payload,
-              rawText: config.storeRawText ? transcript : null,
-              chunks: extraction.excerpts.length > 0 ? extraction.excerpts : chunkTranscript(transcript, segments)
-            };
-          }
+                occurredAt
+              ])
+            : hashParts(["claap", sourceItemId, occurredAt, transcript]);
 
-          // Safe: full signal promotion
+          const confidenceScore = risk === "reframeable"
+            ? Math.min(extraction.confidenceScore * 0.6, 0.5)
+            : extraction.confidenceScore;
+
+          const metadata: Record<string, unknown> = {
+            storeRawText: config.storeRawText,
+            routingDecision: routing,
+            theme: extraction.theme,
+            signalTypeLabel: extraction.signalType,
+            profileHint,
+            hookCandidate: extraction.hookCandidate,
+            whyItMatters: extraction.whyItMatters,
+            confidenceScore,
+            publishabilityRisk: risk
+          };
+          if (signalKind) metadata.signalKind = signalKind;
+          if (extraction.reframingSuggestion) metadata.reframingSuggestion = extraction.reframingSuggestion;
+
+          // For harmful items, use original title (not extracted) and transcript as text
+          const useExtractedContent = risk !== "harmful";
+
           return {
             source: "claap",
             sourceItemId,
             externalId: `claap:${sourceItemId}`,
-            sourceFingerprint: hashParts([
-              "claap",
-              "claap-signal",
-              sourceItemId,
-              extraction.title,
-              extraction.signalType,
-              extraction.theme,
-              payload.updatedAt ?? payload.createdAt ?? ""
-            ]),
+            sourceFingerprint,
             sourceUrl: payload.url ?? "",
-            title: extraction.title,
-            text,
-            summary: summaryText,
+            title: useExtractedContent ? extraction.title : (payload.title ?? `Claap recording ${rawItem.id}`),
+            text: useExtractedContent ? text : transcript,
+            summary: useExtractedContent ? summaryText : (payload.summary ?? transcript.slice(0, 200)),
             speakerName: payload.speaker,
-            occurredAt: payload.updatedAt ?? payload.createdAt ?? context.now.toISOString(),
+            occurredAt,
             ingestedAt: context.now.toISOString(),
-            metadata: {
-              storeRawText: config.storeRawText,
-              signalKind: "claap-signal",
-              theme: extraction.theme,
-              signalTypeLabel: extraction.signalType,
-              profileHint,
-              hookCandidate: extraction.hookCandidate,
-              whyItMatters: extraction.whyItMatters,
-              confidenceScore: extraction.confidenceScore,
-              publishabilityRisk: "safe"
-            },
+            metadata,
             rawPayload: rawItem.payload,
             rawText: config.storeRawText ? transcript : null,
-            chunks: extraction.excerpts.length > 0 ? extraction.excerpts : chunkTranscript(transcript, segments)
+            chunks: useExtractedContent && extraction.excerpts.length > 0
+              ? extraction.excerpts
+              : chunkTranscript(transcript, segments)
           };
         }
       } catch {
@@ -315,21 +289,22 @@ export class ClaapConnector extends BaseConnector<ClaapSourceConfig> {
       }
     }
 
-    // No signal or no LLM: plain enrich-only item
+    // No signal or no LLM: plain item with ignore routing
     return {
       source: "claap",
       sourceItemId,
       externalId: `claap:${sourceItemId}`,
-      sourceFingerprint: hashParts(["claap", sourceItemId, payload.updatedAt ?? payload.createdAt ?? "", transcript]),
+      sourceFingerprint: hashParts(["claap", sourceItemId, occurredAt, transcript]),
       sourceUrl: payload.url ?? "",
       title: payload.title ?? `Claap recording ${rawItem.id}`,
       text: transcript,
       summary: payload.summary ?? transcript.slice(0, 200),
       speakerName: payload.speaker,
-      occurredAt: payload.updatedAt ?? payload.createdAt ?? context.now.toISOString(),
+      occurredAt,
       ingestedAt: context.now.toISOString(),
       metadata: {
-        storeRawText: config.storeRawText
+        storeRawText: config.storeRawText,
+        routingDecision: "ignore" as RoutingDecision
       },
       rawPayload: rawItem.payload,
       rawText: config.storeRawText ? transcript : null,

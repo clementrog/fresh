@@ -57,8 +57,6 @@ export function registerRunPages(
             { value: "draft:generate", label: "draft:generate" },
             { value: "draft:generate-ready", label: "draft:generate-ready" },
             { value: "market-research:run", label: "market-research:run" },
-            { value: "setup:notion", label: "setup:notion" },
-            { value: "selection:scan", label: "selection:scan" },
             { value: "cleanup:retention", label: "cleanup:retention" },
             { value: "cleanup:claap-publishability", label: "cleanup:claap-publishability" },
             { value: "backfill:evidence", label: "backfill:evidence" }
@@ -73,6 +71,7 @@ export function registerRunPages(
     const rows = items.map((run) => {
       const counters = run.countersJson as Record<string, unknown>;
       const counterStr = Object.entries(counters)
+        .filter(([k]) => k !== "notionCreates" && k !== "notionUpdates")
         .map(([k, v]) => `${k}: ${v}`)
         .join(", ");
       const statusColor = run.status === "completed" ? "green" : run.status === "failed" ? "red" : "blue";

@@ -572,13 +572,24 @@ export function getSourceCreationMode(item: NormalizedSourceItem): SourceCreatio
     case "market-findings":
       return "create-capable";
     case "notion":
-      return notionKind === "market-insight" || notionKind === "claap-signal"
+      return notionKind === "market-insight"
         ? "create-capable"
         : "enrich-only";
     case "claap": {
-      const signalKind = typeof item.metadata?.signalKind === "string"
-        ? item.metadata.signalKind : undefined;
-      return signalKind === "claap-signal" ? "create-capable" : "enrich-only";
+      const routingDecision = typeof item.metadata?.routingDecision === "string"
+        ? item.metadata.routingDecision : undefined;
+      // Backward compat: old items have signalKind but no routingDecision
+      if (routingDecision === "create_opportunity") return "create-capable";
+      if (!routingDecision) {
+        const signalKind = typeof item.metadata?.signalKind === "string"
+          ? item.metadata.signalKind : undefined;
+        if (signalKind === "claap-signal") return "create-capable";
+      }
+      // Defense in depth: blocked items cannot create regardless of routing
+      const pubRisk = typeof item.metadata?.publishabilityRisk === "string"
+        ? item.metadata.publishabilityRisk : undefined;
+      if (pubRisk === "harmful" || pubRisk === "reframeable") return "enrich-only";
+      return "enrich-only";
     }
     case "linear": {
       const linearClass = typeof item.metadata?.linearEnrichmentClassification === "string"
@@ -606,11 +617,17 @@ function isCuratedSource(item: NormalizedSourceItem): boolean {
     case "market-findings":
       return true;
     case "notion":
-      return notionKind === "market-insight" || notionKind === "claap-signal";
+      return notionKind === "market-insight";
     case "claap": {
-      const signalKind = typeof item.metadata?.signalKind === "string"
-        ? item.metadata.signalKind : undefined;
-      return signalKind === "claap-signal";
+      const routingDecision = typeof item.metadata?.routingDecision === "string"
+        ? item.metadata.routingDecision : undefined;
+      if (routingDecision === "create_opportunity") return true;
+      if (!routingDecision) {
+        const signalKind = typeof item.metadata?.signalKind === "string"
+          ? item.metadata.signalKind : undefined;
+        return signalKind === "claap-signal";
+      }
+      return false;
     }
     case "linear": {
       const linearClass = typeof item.metadata?.linearEnrichmentClassification === "string"
@@ -1270,7 +1287,7 @@ export function buildNewOpportunity(params: {
     suggestedFormat: params.decision.suggestedFormat,
     enrichmentLog: [],
     v1History: [],
-    notionPageFingerprint: sourceFingerprint
+    notionPageFingerprint: sourceFingerprint // @compat non-nullable Prisma column; remove with schema cleanup
   };
 }
 

@@ -3,7 +3,7 @@ import { loadConnectorConfigs, loadDoctrineMarkdown, loadProfileBases, loadSensi
 import { PROFILE_IDS, type CompanyRecord, type EditorialConfigRecord, type ProfileBase, type SourceConfigRecord, type UserRecord } from "../domain/types.js";
 import { createDeterministicId, hashParts } from "../lib/ids.js";
 import type { RepositoryBundle } from "../db/repositories.js";
-import type { NotionService } from "./notion.js";
+import { readToneOfVoiceProfiles } from "../lib/tone.js";
 
 /** Narrow a Prisma JsonValue to Record<string, unknown>, returning undefined for non-objects. */
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -14,8 +14,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 export async function ensureConvergenceFoundation(
   repositories: RepositoryBundle,
-  env: AppEnv,
-  notion?: NotionService
+  env: AppEnv
 ): Promise<CompanyRecord> {
   if (typeof (repositories as Partial<RepositoryBundle>).ensureDefaultCompany !== "function") {
     return {
@@ -43,7 +42,7 @@ export async function ensureConvergenceFoundation(
   ]);
 
   // Merge Tone of voice from Notion if available
-  const toneOverrides = await loadToneOfVoiceOverrides(notion, env.NOTION_TONE_OF_VOICE_DB_ID);
+  const toneOverrides = await loadToneOfVoiceOverrides(env.NOTION_TOKEN, env.NOTION_TONE_OF_VOICE_DB_ID);
   const mergedProfiles = profiles.map((profile) => applyToneOverride(profile, toneOverrides));
 
   for (const profile of mergedProfiles) {
@@ -167,13 +166,15 @@ export function resolveProfileId(profileName: string): string | undefined {
 }
 
 async function loadToneOfVoiceOverrides(
-  notion: NotionService | undefined,
+  notionToken: string | undefined,
   databaseId: string | undefined
 ): Promise<Map<string, ToneOverride>> {
   const overrides = new Map<string, ToneOverride>();
-  if (!notion || !databaseId) return overrides;
+  if (!notionToken || !databaseId) return overrides;
 
-  const toneProfiles = await notion.readToneOfVoiceProfiles(databaseId);
+  const { Client } = await import("@notionhq/client");
+  const client = new Client({ auth: notionToken });
+  const toneProfiles = await readToneOfVoiceProfiles(client, databaseId);
   for (const tp of toneProfiles) {
     const profileId = resolveProfileId(tp.profileName);
     if (!profileId) {

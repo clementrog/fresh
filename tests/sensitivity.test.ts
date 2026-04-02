@@ -24,7 +24,7 @@ describe("sensitivity rules", () => {
     const llm = new LlmClient({
       DATABASE_URL: "",
       NOTION_TOKEN: "",
-      NOTION_PARENT_PAGE_ID: "",
+
       OPENAI_API_KEY: "",
       CLAAP_API_KEY: "",
       LINEAR_API_KEY: "",
@@ -52,7 +52,7 @@ describe("sensitivity rules", () => {
     const llm = new LlmClient({
       DATABASE_URL: "",
       NOTION_TOKEN: "",
-      NOTION_PARENT_PAGE_ID: "",
+
       OPENAI_API_KEY: "",
       CLAAP_API_KEY: "",
       LINEAR_API_KEY: "",

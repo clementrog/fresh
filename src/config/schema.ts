@@ -13,7 +13,6 @@ const llmProviderSchema = z.enum(["openai", "anthropic", "claude-cli"]);
 export const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   NOTION_TOKEN: z.string().default(""),
-  NOTION_PARENT_PAGE_ID: z.string().default(""),
   OPENAI_API_KEY: z.string().default(""),
   ANTHROPIC_API_KEY: z.string().default(""),
   TAVILY_API_KEY: z.string().default(""),
@@ -76,6 +75,7 @@ export const claapSourceConfigSchema = sourceBaseSchema.extend({
 
 export const claapSignalExtractionSchema = z.object({
   hasSignal: z.boolean(),
+  routingDecision: z.enum(["create_opportunity", "support_only", "ignore"]).default("ignore"),
   title: z.string(),
   summary: z.string(),
   hookCandidate: z.string(),
@@ -183,27 +183,8 @@ export const draftOutputSchema = z.object({
 
 export const llmDraftSafetySchema = sensitivityOutputSchema;
 
-export const notionSelectionRowSchema = z.object({
-  notionPageId: z.string().min(1),
-  fingerprint: z.string(),
-  editorialOwner: z.string()
-});
-
-export const notionRichTextChunkSchema = z.object({
-  text: z.string().min(1)
-});
-
 export const opportunityStatusSchema = z.enum(CONTENT_STATUS);
 export const readinessSchema = z.enum(CONTENT_READINESS);
-
-export const notionDatabaseNameSchema = z.enum([
-  "Content Opportunities",
-  "Claap Review",
-  "Linear Review",
-  "GitHub Review",
-  "Profiles",
-  "Sync Runs"
-]);
 
 export const supportedSourceSchema = z.enum(SOURCE_KINDS);
 

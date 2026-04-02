@@ -33,12 +33,11 @@ import { NotFoundError, ForbiddenError, UnprocessableError } from "./lib/errors.
 import type { LlmUsage } from "./services/llm.js";
 import { LlmClient } from "./services/llm.js";
 import { buildSpikeWarnings, createCostEntry, createRun, finalizeRun } from "./services/observability.js";
-import { NotionService } from "./services/notion.js";
 import { computeRawTextExpiry } from "./services/retention.js";
 import { ensureConvergenceFoundation, normalizeLayer3Defaults, resolveProfileId } from "./services/convergence.js";
 import { runIntelligencePipeline, DEDUP_CANDIDATE_WINDOW } from "./services/intelligence.js";
 import { runMarketResearch } from "./services/market-research.js";
-import { findSupportingEvidence, assessDraftReadiness, deriveProvenanceType, computeReadinessTier, generateOperatorGuidance } from "./services/evidence-pack.js";
+import { findSupportingEvidence, assessDraftReadiness, deriveProvenanceType } from "./services/evidence-pack.js";
 import { fetchHubSpotSignalItems, type BridgeRepositories } from "./connectors/hubspot-signals.js";
 
 type LoggerLike = {
@@ -51,7 +50,6 @@ export class EditorialSignalEngineApp {
   private readonly prisma;
   private readonly repositories;
   private readonly llmClient: LlmClient;
-  private readonly notion: NotionService;
 
   constructor(
     private readonly env: AppEnv,
@@ -60,18 +58,11 @@ export class EditorialSignalEngineApp {
       prisma: ReturnType<typeof getPrisma>;
       repositories: RepositoryBundle;
       llmClient: LlmClient;
-      notion: NotionService;
     }> = {}
   ) {
     this.prisma = deps.prisma ?? getPrisma();
     this.repositories = deps.repositories ?? new RepositoryBundle(this.prisma);
     this.llmClient = deps.llmClient ?? new LlmClient(env, logger);
-    this.notion =
-      deps.notion ??
-      new NotionService(env.NOTION_TOKEN ?? "", env.NOTION_PARENT_PAGE_ID ?? "", {
-        bindings: this.repositories,
-        onWarning: (warning) => this.logger.warn?.({ warning }, "Notion self-heal warning")
-      });
   }
 
   async run(
@@ -91,7 +82,7 @@ export class EditorialSignalEngineApp {
       port: options.port
     };
 
-    await ensureConvergenceFoundation(this.repositories, this.env, this.notion);
+    await ensureConvergenceFoundation(this.repositories, this.env);
 
     switch (command) {
       case "ingest:run":
@@ -106,10 +97,6 @@ export class EditorialSignalEngineApp {
         return this.generateDraftsForReady(context);
       case "server:start":
         throw new Error("Use `pnpm server:start` to launch the HTTP server entrypoint.");
-      case "setup:notion":
-        return this.setupNotion();
-      case "selection:scan":
-        return this.scanSelections(context);
       case "cleanup:retention":
         return this.cleanupRetention(context);
       case "backfill:evidence":
@@ -118,8 +105,6 @@ export class EditorialSignalEngineApp {
         return this.cleanupClaapPublishability(context);
       case "tone:inspect":
         return this.inspectToneProfiles();
-      case "opportunity:pull-notion-edits":
-        return this.pullNotionEdits(context);
       case "sales:sync":
       case "sales:extract":
       case "sales:detect":
@@ -131,11 +116,6 @@ export class EditorialSignalEngineApp {
     }
   }
 
-  private async setupNotion() {
-    const result = await this.notion.ensureSchema();
-    this.logger.info({ databases: result.databases, views: result.viewSpecs }, "Notion schema ensured");
-  }
-
   private async inspectToneProfiles() {
     const databaseId = this.env.NOTION_TONE_OF_VOICE_DB_ID;
     if (!databaseId) {
@@ -143,7 +123,10 @@ export class EditorialSignalEngineApp {
       return;
     }
 
-    const toneProfiles = await this.notion.readToneOfVoiceProfiles(databaseId);
+    const { Client } = await import("@notionhq/client");
+    const { readToneOfVoiceProfiles } = await import("./lib/tone.js");
+    const client = new Client({ auth: this.env.NOTION_TOKEN });
+    const toneProfiles = await readToneOfVoiceProfiles(client, databaseId);
     if (toneProfiles.length === 0) {
       console.log("[tone:inspect] No tone-of-voice profiles found in database.");
       return;
@@ -195,13 +178,12 @@ export class EditorialSignalEngineApp {
           const normalized = await registry[config.source].normalize(rawItem, config as never, context);
           run.counters.normalized += 1;
           if (!context.dryRun) {
-            const storedItem = await this.repositories.upsertSourceItem(
+            await this.repositories.upsertSourceItem(
               normalized,
               computeRawTextExpiry(this.findConfig(staticInputs.configs, normalized.source), context.now),
               this.prisma,
               company.id
             );
-            await this.syncClaapReviewQueueForNormalizedItem(company.id, normalized, storedItem);
           }
         }
 
@@ -472,7 +454,7 @@ export class EditorialSignalEngineApp {
           }
         }
 
-        // Persist Linear enrichment classifications to DB + sync review items to Notion
+        // Persist Linear enrichment classifications to DB
         const linearPersistFailedIds = new Set<string>();
         for (const [externalId, classification] of pipelineResult.linearClassifications) {
           const dbId = sourceItemDbId(company.id, externalId);
@@ -494,37 +476,6 @@ export class EditorialSignalEngineApp {
                   }
                 }
               });
-
-              if (classification.classification === "manual-review-needed") {
-                const reviewFingerprint = hashParts(["linear-review", company.id, dbId]);
-                const syncResult = await this.notion.syncLinearReviewItem({
-                  itemTitle: storedItem.title,
-                  classification: "manual-review-needed",
-                  rationale: classification.rationale,
-                  customerVisibility: classification.customerVisibility,
-                  sensitivityLevel: classification.sensitivityLevel,
-                  evidenceStrength: classification.evidenceStrength,
-                  reviewNote: classification.reviewNote,
-                  linearLink: storedItem.sourceUrl,
-                  itemType: typeof existingMeta.itemType === "string" ? existingMeta.itemType : "issue",
-                  stateName: typeof existingMeta.stateName === "string" ? existingMeta.stateName : undefined,
-                  teamName: typeof existingMeta.teamName === "string" ? existingMeta.teamName : undefined,
-                  priority: typeof existingMeta.priority === "number" ? existingMeta.priority : undefined,
-                  labels: Array.isArray(existingMeta.labels) ? (existingMeta.labels as string[]).join(", ") : undefined,
-                  occurredAt: storedItem.occurredAt.toISOString(),
-                  reviewFingerprint,
-                  linearSourceItemId: dbId,
-                  notionPageId: storedItem.notionPageId ?? undefined
-                });
-                if (syncResult) {
-                  await this.repositories.updateSourceItemNotionSync(dbId, syncResult.notionPageId, reviewFingerprint);
-                }
-              } else if (storedItem.notionPageId) {
-                // Archive any existing Linear Review row for this item and clear the
-                // stale reference so subsequent runs do not re-attempt the archive.
-                await this.notion.archiveLinearReviewItem(storedItem.notionPageId);
-                await this.repositories.updateSourceItemNotionSync(dbId, null, null);
-              }
             }
           } catch (error) {
             const message = error instanceof Error ? error.message : "Unknown error";
@@ -542,7 +493,7 @@ export class EditorialSignalEngineApp {
           run.warnings.push(`Linear classification persistence failed for ${linearPersistFailedIds.size} item(s): ${[...linearPersistFailedIds].join(", ")}`);
         }
 
-        // Persist GitHub enrichment classifications to DB + sync review items to Notion
+        // Persist GitHub enrichment classifications to DB
         const githubPersistFailedIds = new Set<string>();
         for (const [externalId, classification] of pipelineResult.githubClassifications) {
           const dbId = sourceItemDbId(company.id, externalId);
@@ -564,33 +515,6 @@ export class EditorialSignalEngineApp {
                   }
                 }
               });
-
-              if (classification.classification === "manual-review") {
-                const reviewFingerprint = hashParts(["github-review", company.id, dbId]);
-                const syncResult = await this.notion.syncGitHubReviewItem({
-                  itemTitle: storedItem.title,
-                  classification: "manual-review",
-                  rationale: classification.rationale,
-                  customerVisibility: classification.customerVisibility,
-                  sensitivityLevel: classification.sensitivityLevel,
-                  evidenceStrength: classification.evidenceStrength,
-                  reviewNote: classification.reviewNote,
-                  githubLink: storedItem.sourceUrl,
-                  itemType: typeof existingMeta.itemType === "string" ? existingMeta.itemType : "unknown",
-                  repo: typeof existingMeta.repoName === "string" ? existingMeta.repoName : undefined,
-                  labels: Array.isArray(existingMeta.labels) ? (existingMeta.labels as string[]).join(", ") : undefined,
-                  occurredAt: storedItem.occurredAt.toISOString(),
-                  reviewFingerprint,
-                  githubSourceItemId: dbId,
-                  notionPageId: storedItem.notionPageId ?? undefined
-                });
-                if (syncResult) {
-                  await this.repositories.updateSourceItemNotionSync(dbId, syncResult.notionPageId, reviewFingerprint);
-                }
-              } else if (storedItem.notionPageId) {
-                await this.notion.archiveGitHubReviewItem(storedItem.notionPageId);
-                await this.repositories.updateSourceItemNotionSync(dbId, null, null);
-              }
             }
           } catch (error) {
             const message = error instanceof Error ? error.message : "Unknown error";
@@ -691,29 +615,6 @@ export class EditorialSignalEngineApp {
             relevanceNote: "Evidence pack provenance record"
           });
 
-          const syncedOpportunity: ContentOpportunity = {
-            ...opp,
-            evidence: allEvidence,
-            enrichmentLog: [...opp.enrichmentLog, packLogEntry],
-            supportingEvidenceCount: opp.supportingEvidenceCount + supportEvidence.length,
-            evidenceExcerpts: allEvidence.map(e => e.excerpt)
-          };
-
-          const ownerDisplayName = opp.ownerUserId
-            ? inputs.users.find(u => u.id === opp.ownerUserId)?.displayName
-            : undefined;
-          const reframingNote = typeof originItem?.metadata?.reframingSuggestion === "string"
-            ? originItem.metadata.reframingSuggestion : undefined;
-          const opportunitySync = await this.notion.syncOpportunity(syncedOpportunity, null, {
-            ownerDisplayName,
-            provenanceType,
-            draftReadiness: { tier: readiness.readinessTier, guidance: readiness.operatorGuidance },
-            reframingNote
-          });
-          if (opportunitySync) {
-            run.counters[opportunitySync.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
-            await this.repositories.updateOpportunityNotionSync(opp.id, opportunitySync.notionPageId, opp.notionPageFingerprint);
-          }
           run.counters.opportunitiesCreated += 1;
         }
 
@@ -753,54 +654,6 @@ export class EditorialSignalEngineApp {
             relevanceNote: enriched.logEntry.contextComment
           });
 
-          // Compute draft readiness for enriched opportunities
-          const enrichedReadiness = assessDraftReadiness(enriched.opportunity, enriched.opportunity.evidence, {
-            sourceItems: enrichedSourceItems
-          });
-          const enrichedOwnerDisplayName = enriched.opportunity.ownerUserId
-            ? inputs.users.find(u => u.id === enriched.opportunity.ownerUserId)?.displayName
-            : undefined;
-          const opportunitySync = await this.notion.syncOpportunity(enriched.opportunity, null, {
-            ownerDisplayName: enrichedOwnerDisplayName,
-            draftReadiness: { tier: enrichedReadiness.readinessTier, guidance: enrichedReadiness.operatorGuidance }
-          });
-          if (opportunitySync) {
-            run.counters[opportunitySync.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
-            await this.repositories.updateOpportunityNotionSync(enriched.opportunity.id, opportunitySync.notionPageId, enriched.opportunity.notionPageFingerprint);
-          }
-        }
-
-        // Reassess readiness for recent active opportunities not already synced in this run
-        const syncedOppIds = new Set([
-          ...pipelineResult.created.map((o) => o.id),
-          ...pipelineResult.enriched.map((e) => e.opportunity.id)
-        ]);
-
-        // Hydrate source items for reassessment
-        const reassessSourceItemIds = [...new Set(
-          recentOpportunities
-            .filter(opp => !syncedOppIds.has(opp.id))
-            .flatMap(opp => opp.evidence.map(e => e.sourceItemId))
-        )];
-        const reassessSourceItemRows = await this.repositories.listSourceItemsByIds(reassessSourceItemIds);
-        const reassessSourceItems = reassessSourceItemRows.map(row => this.mapStoredSourceItem(row));
-
-        for (const opp of recentOpportunities) {
-          if (syncedOppIds.has(opp.id)) continue;
-          const readiness = assessDraftReadiness(opp, opp.evidence, {
-            sourceItems: reassessSourceItems
-          });
-          const ownerDisplayName = opp.ownerUserId
-            ? inputs.users.find(u => u.id === opp.ownerUserId)?.displayName
-            : undefined;
-          const syncResult = await this.notion.syncOpportunity(opp, null, {
-            ownerDisplayName,
-            draftReadiness: { tier: readiness.readinessTier, guidance: readiness.operatorGuidance }
-          });
-          if (syncResult) {
-            run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
-            await this.repositories.updateOpportunityNotionSync(opp.id, syncResult.notionPageId, opp.notionPageFingerprint);
-          }
         }
 
         // Mark processed
@@ -808,17 +661,6 @@ export class EditorialSignalEngineApp {
           sourceItemDbId(company.id, externalId)
         );
         await this.repositories.markSourceItemsProcessed(dbIds, context.now);
-
-        // Sync users to Notion Profiles database
-        for (const user of inputs.users) {
-          await this.notion.syncUser({
-            displayName: user.displayName,
-            type: user.type,
-            language: user.language,
-            baseProfile: user.baseProfile,
-            notionPageFingerprint: hashParts([company.id, user.id])
-          });
-        }
       }
 
       if (!context.dryRun) {
@@ -901,24 +743,6 @@ export class EditorialSignalEngineApp {
 
       if (!context.dryRun) {
         await this.repositories.persistDraftGraph(result.draft, opportunity, company.id);
-        const draftSourceItemIds = [...new Set(opportunity.evidence.map(e => e.sourceItemId))];
-        const draftSourceItemRows = await this.repositories.listSourceItemsByIds(draftSourceItemIds);
-        const draftSourceItems = draftSourceItemRows.map(row => this.mapStoredSourceItem(row));
-        const draftReadiness = assessDraftReadiness(opportunity, opportunity.evidence, {
-          sourceItems: draftSourceItems
-        });
-        const ownerDisplayName = opportunity.ownerUserId
-          ? inputs.users.find(u => u.id === opportunity.ownerUserId)?.displayName
-          : undefined;
-        const syncResult = await this.notion.syncOpportunity(opportunity, result.draft, {
-          ownerDisplayName,
-          draftReadiness: { tier: draftReadiness.readinessTier, guidance: draftReadiness.operatorGuidance }
-        });
-        if (syncResult) {
-          run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
-          await this.repositories.updateOpportunityNotionSync(opportunity.id, syncResult.notionPageId, opportunity.notionPageFingerprint);
-          await this.notion.writeDraftToPageBody(syncResult.notionPageId, result.draft);
-        }
       }
 
       run.counters.draftsCreated += 1;
@@ -998,19 +822,6 @@ export class EditorialSignalEngineApp {
 
           if (!context.dryRun) {
             await this.repositories.persistDraftGraph(result.draft, opportunity, company.id);
-            const ownerDisplayName = opportunity.ownerUserId
-              ? inputs.users.find(u => u.id === opportunity.ownerUserId)?.displayName
-              : undefined;
-            const readiness = assessDraftReadiness(opportunity, opportunity.evidence, { sourceItems });
-            const syncResult = await this.notion.syncOpportunity(opportunity, result.draft, {
-              ownerDisplayName,
-              draftReadiness: { tier: readiness.readinessTier, guidance: readiness.operatorGuidance }
-            });
-            if (syncResult) {
-              run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
-              await this.repositories.updateOpportunityNotionSync(opportunity.id, syncResult.notionPageId, opportunity.notionPageFingerprint);
-              await this.notion.writeDraftToPageBody(syncResult.notionPageId, result.draft);
-            }
           }
 
           generated += 1;
@@ -1027,183 +838,6 @@ export class EditorialSignalEngineApp {
     } catch (error) {
       const failedRun = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown batch draft error");
       await this.finishRun(failedRun, costs, context);
-      throw error;
-    }
-  }
-
-  private async scanSelections(context: RunContext) {
-    const run = createRun("selection:scan");
-    if (!context.dryRun) {
-      await this.repositories.createSyncRun(run);
-    }
-
-    try {
-      const selected = await this.notion.listSelectedOpportunities();
-      const warnings: string[] = [];
-
-      for (const candidate of selected) {
-        const fingerprint = candidate.fingerprint.trim() || undefined;
-        const editorialOwner = candidate.editorialOwner.trim() || undefined;
-
-        const opportunity = await this.repositories.findOpportunityByNotionPageId(candidate.notionPageId);
-        if (!opportunity || opportunity.status === "Selected") {
-          continue;
-        }
-
-        if (!fingerprint) {
-          this.logger.warn?.({ notionPageId: candidate.notionPageId, opportunityId: opportunity.id }, "Selected Notion page has empty fingerprint — resolving by page ID only");
-          warnings.push(`Empty fingerprint: notionPageId=${candidate.notionPageId}, opportunityId=${opportunity.id}`);
-        }
-
-        if (!editorialOwner) {
-          this.logger.warn?.({ notionPageId: candidate.notionPageId, opportunityId: opportunity.id }, "Selected Notion page has empty editorial owner — preserving existing DB value");
-          warnings.push(`Empty editorialOwner: notionPageId=${candidate.notionPageId}, opportunityId=${opportunity.id}`);
-        }
-
-        if (!context.dryRun) {
-          await this.repositories.markOpportunitySelected(opportunity.id, editorialOwner);
-        }
-      }
-
-      const warningsSuffix = warnings.length > 0 ? ` (${warnings.length} warning(s))` : "";
-      const finished = finalizeRun(run, "completed", `Selection scan processed ${selected.length} candidates${warningsSuffix}`);
-      finished.warnings.push(...warnings);
-      await this.finishRun(finished, [], context);
-    } catch (error) {
-      const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown selection scan error");
-      await this.finishRun(failed, [], context);
-      throw error;
-    }
-  }
-
-  private async pullNotionEdits(context: RunContext) {
-    const company = await this.getActiveCompany(context);
-    const run = createRun("opportunity:pull-notion-edits");
-    run.companyId = company.id;
-
-    try {
-      // Phase A — Discovery (read-only)
-      const editRequests = await this.notion.listReEvaluationRequests();
-      this.logger.info({ count: editRequests.length }, "Found re-evaluation requests in Notion");
-
-      // Resolve all matching opportunities from DB (company-scoped)
-      type OpportunityRow = NonNullable<Awaited<ReturnType<RepositoryBundle["findOpportunityByNotionPageId"]>>>;
-      const resolved: Array<{ request: typeof editRequests[number]; oppRow: OpportunityRow }> = [];
-      for (const request of editRequests) {
-        let oppRow: OpportunityRow | null = await this.repositories.findOpportunityByNotionPageId(request.notionPageId, company.id);
-        if (!oppRow && request.fingerprint) {
-          oppRow = await this.repositories.findOpportunityByNotionPageFingerprint(request.fingerprint, company.id);
-        }
-        if (!oppRow) {
-          this.logger.warn?.({ notionPageId: request.notionPageId, fingerprint: request.fingerprint }, "No matching opportunity found for re-evaluation request, skipping");
-          run.warnings.push(`Unresolved re-evaluation request: notionPageId=${request.notionPageId} fingerprint=${request.fingerprint} — checkbox left checked, user edits unprotected until resolved`);
-          continue;
-        }
-        resolved.push({ request, oppRow });
-      }
-
-      // Phase B — Dry-run exit
-      if (context.dryRun) {
-        this.logger.info({ discovered: editRequests.length, resolved: resolved.length }, "[dry-run] Would process re-evaluation requests");
-        for (const { request, oppRow } of resolved) {
-          this.logger.info({ opportunityId: oppRow.id, title: request.title }, "[dry-run] Would apply Notion edits");
-        }
-        return;
-      }
-
-      await this.repositories.createSyncRun(run);
-
-      // Phase C — Guard activation
-      const users = await this.repositories.listUsers(company.id);
-      const resolvedIds = resolved.map(r => r.oppRow.id);
-      if (resolvedIds.length > 0) {
-        await this.repositories.markEditsPending(resolvedIds, company.id);
-      }
-
-      // Phase D — Per-item processing
-      let processed = 0;
-      let failed = 0;
-
-      for (const { request, oppRow } of resolved) {
-        try {
-          await this.repositories.updateOpportunityEditableFields({
-            opportunityId: oppRow.id,
-            title: request.title,
-            angle: request.angle,
-            whyNow: request.whyNow,
-            whatItIsAbout: request.whatItIsAbout,
-            whatItIsNotAbout: request.whatItIsNotAbout,
-            editorialNotes: request.editorialNotes,
-            targetSegment: request.targetSegment,
-            editorialPillar: request.editorialPillar,
-            awarenessTarget: request.awarenessTarget,
-            buyerFriction: request.buyerFriction,
-            contentMotion: request.contentMotion,
-          });
-
-          if (oppRow.primaryEvidenceId && request.sourceUrl !== oppRow.primaryEvidence?.sourceUrl) {
-            await this.repositories.updateEvidenceSourceUrl(oppRow.primaryEvidenceId, request.sourceUrl);
-          }
-
-          const freshRow = await this.repositories.findOpportunityById(oppRow.id);
-          if (!freshRow) {
-            this.logger.error({ opportunityId: oppRow.id }, "Opportunity disappeared after update");
-            failed += 1;
-            continue;
-          }
-          const opportunity = this.mapOpportunityRow(freshRow);
-
-          const sourceItemIds = [...new Set(opportunity.evidence.map(e => e.sourceItemId))];
-          const sourceItemRows = await this.repositories.listSourceItemsByIds(sourceItemIds);
-          const sourceItems = sourceItemRows.map(row => this.mapStoredSourceItem(row));
-          const readiness = assessDraftReadiness(opportunity, opportunity.evidence, { sourceItems });
-
-          const ownerDisplayName = opportunity.ownerUserId
-            ? users.find(u => u.id === opportunity.ownerUserId)?.displayName
-            : undefined;
-
-          const syncResult = await this.notion.syncOpportunity(opportunity, null, {
-            ownerDisplayName,
-            draftReadiness: { tier: readiness.readinessTier, guidance: readiness.operatorGuidance },
-            writeEditableFields: true
-          });
-
-          if (syncResult) {
-            await this.repositories.updateOpportunityNotionSync(opportunity.id, syncResult.notionPageId, opportunity.notionPageFingerprint);
-          }
-
-          // Clear internal guard FIRST, then external trigger
-          await this.repositories.clearEditsPending(oppRow.id);
-          await this.notion.clearReEvaluationCheckbox(request.notionPageId);
-
-          processed += 1;
-          this.logger.info({ opportunityId: oppRow.id, readiness: readiness.readinessTier }, "Re-evaluation complete");
-        } catch (itemError) {
-          this.logger.error({ notionPageId: request.notionPageId, error: itemError }, "Failed to process re-evaluation request");
-          failed += 1;
-        }
-      }
-
-      // Phase E — Orphan reconciliation
-      const requestedPageIds = new Set(editRequests.map(r => r.notionPageId));
-      const requestedFingerprints = new Set(editRequests.map(r => r.fingerprint).filter(Boolean));
-      const pendingOpps = await this.repositories.findEditsPendingOpportunities(company.id);
-      for (const pending of pendingOpps) {
-        if (pending.notionPageId && requestedPageIds.has(pending.notionPageId)) continue;
-        if (pending.notionPageFingerprint && requestedFingerprints.has(pending.notionPageFingerprint)) continue;
-        await this.repositories.clearEditsPending(pending.id);
-        this.logger.info({ opportunityId: pending.id }, "Cleared orphaned notionEditsPending flag");
-      }
-
-      const unresolved = editRequests.length - resolved.length;
-      const noteParts = [`Pull-edits processed ${processed}`];
-      if (unresolved > 0) noteParts.push(`${unresolved} unresolved (see warnings)`);
-      if (failed > 0) noteParts.push(`${failed} failed`);
-      const finished = finalizeRun(run, "completed", noteParts.join(", "));
-      await this.finishRun(finished, [], context);
-    } catch (error) {
-      const failed = finalizeRun(run, "failed", error instanceof Error ? error.message : "Unknown pull-edits error");
-      await this.finishRun(failed, [], context);
       throw error;
     }
   }
@@ -1250,9 +884,6 @@ export class EditorialSignalEngineApp {
         take: 500
       });
       const candidateItems = candidateRows.map((row) => this.mapStoredSourceItem(row));
-
-      // Load users for owner display names in Notion sync
-      const users = await this.repositories.listUsers(company.id);
 
       let enrichedCount = 0;
       let skippedCount = 0;
@@ -1308,25 +939,6 @@ export class EditorialSignalEngineApp {
           companyId: company.id,
           relevanceNote: logEntry.contextComment
         });
-
-        const allEvidence = [...opp.evidence, ...supportEvidence];
-        const sourceItemIds = [...new Set(allEvidence.map((e) => e.sourceItemId))];
-        const sourceItemRows = await this.repositories.listSourceItemsByIds(sourceItemIds);
-        const sourceItems = sourceItemRows.map((row) => this.mapStoredSourceItem(row));
-        const readiness = assessDraftReadiness(opp, allEvidence, { sourceItems });
-
-        const ownerDisplayName = opp.ownerUserId
-          ? users.find((u) => u.id === opp.ownerUserId)?.displayName
-          : undefined;
-        const syncResult = await this.notion.syncOpportunity(
-          { ...opp, evidence: allEvidence, enrichmentLog: [...opp.enrichmentLog, logEntry], supportingEvidenceCount: opp.supportingEvidenceCount + supportEvidence.length, evidenceExcerpts: allEvidence.map((e) => e.excerpt) },
-          null,
-          { ownerDisplayName, draftReadiness: { tier: readiness.readinessTier, guidance: readiness.operatorGuidance } }
-        );
-        if (syncResult) {
-          run.counters[syncResult.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
-          await this.repositories.updateOpportunityNotionSync(opp.id, syncResult.notionPageId, opp.notionPageFingerprint);
-        }
 
         enrichedCount += 1;
       }
@@ -1429,9 +1041,6 @@ Provide a rationale explaining your assessment.`,
           risk = response.output.publishabilityRisk;
 
           if (risk === "safe") {
-            if (!context.dryRun) {
-              await this.syncClaapReviewQueueForStoredItem(company.id, sourceItem);
-            }
             safe += 1;
             continue;
           }
@@ -1467,13 +1076,6 @@ Provide a rationale explaining your assessment.`,
             });
           }
           reclassified += 1;
-        }
-
-        if (!context.dryRun) {
-          await this.syncClaapReviewQueueForStoredItem(company.id, {
-            ...sourceItem,
-            metadataJson: reviewMetadata
-          });
         }
 
         // Find opportunities linked to this source item via direct FK or junction table
@@ -1516,11 +1118,6 @@ Provide a rationale explaining your assessment.`,
 
           // Detach evidence
           await this.repositories.replaceOpportunityRelations(opp.id, [], null);
-
-          // Archive in Notion
-          if (opp.notionPageId) {
-            await this.notion.archiveOpportunityInNotion(opp.notionPageId);
-          }
 
           archived += 1;
         }
@@ -1759,135 +1356,6 @@ Provide a rationale explaining your assessment.`,
 
     await this.repositories.updateSyncRun(run);
     await this.repositories.addCostEntries(costs);
-    const notionSync = await this.notion.syncRun(run);
-    if (notionSync) {
-      run.counters[notionSync.action === "created" ? "notionCreates" : "notionUpdates"] += 1;
-      run.notionPageId = notionSync.notionPageId;
-      await this.repositories.updateSyncRunNotionSync(run.id, notionSync.notionPageId, run.notionPageFingerprint);
-      await this.repositories.updateSyncRun(run);
-    }
-  }
-
-  private async syncClaapReviewQueueForNormalizedItem(
-    companyId: string,
-    item: NormalizedSourceItem,
-    storedItem: {
-      id: string;
-      source: string;
-      title: string;
-      sourceUrl: string;
-      occurredAt: Date;
-      summary?: string;
-      notionPageId?: string | null;
-      notionPageFingerprint?: string | null;
-    }
-  ) {
-    if (item.source !== "claap") {
-      return;
-    }
-
-    const risk = typeof item.metadata.publishabilityRisk === "string"
-      ? item.metadata.publishabilityRisk
-      : undefined;
-
-    if (risk !== "harmful" && risk !== "reframeable") {
-      if (storedItem.notionPageId) {
-        await this.notion.archiveClaapReviewItem(storedItem.notionPageId);
-      }
-      return;
-    }
-
-    const reviewFingerprint = storedItem.notionPageFingerprint ?? hashParts(["claap-review", companyId, storedItem.id]);
-    const reviewContext = buildClaapReviewContext({
-      risk,
-      title: typeof item.metadata.reviewTitle === "string" ? item.metadata.reviewTitle : item.title,
-      summary: typeof item.metadata.reviewSummary === "string" ? item.metadata.reviewSummary : item.summary,
-      excerpts: getStringArray(item.metadata.reviewExcerpts).length > 0
-        ? getStringArray(item.metadata.reviewExcerpts)
-        : item.chunks,
-      whyBlocked: typeof item.metadata.reviewWhyBlocked === "string" ? item.metadata.reviewWhyBlocked : undefined,
-      fallbackText: item.text
-    });
-    const syncResult = await this.notion.syncClaapReviewItem({
-      signalTitle: reviewContext.title,
-      publishabilityRisk: risk,
-      originalSignalSummary: reviewContext.summary,
-      keyExcerpts: reviewContext.excerpts,
-      whyBlocked: reviewContext.whyBlocked,
-      reframingSuggestion: typeof item.metadata.reframingSuggestion === "string" ? item.metadata.reframingSuggestion : undefined,
-      transcriptLink: item.sourceUrl,
-      occurredAt: item.occurredAt,
-      reviewFingerprint,
-      claapSourceItemId: storedItem.id,
-      notionPageId: storedItem.notionPageId ?? undefined
-    });
-
-    if (syncResult) {
-      await this.repositories.updateSourceItemNotionSync(storedItem.id, syncResult.notionPageId, reviewFingerprint);
-    }
-  }
-
-  private async syncClaapReviewQueueForStoredItem(
-    companyId: string,
-    sourceItem: {
-      id: string;
-      source: string;
-      title: string;
-      summary: string;
-      text: string;
-      rawText?: string | null;
-      chunksJson?: unknown;
-      sourceUrl: string;
-      occurredAt: Date;
-      metadataJson?: unknown;
-      notionPageId?: string | null;
-      notionPageFingerprint?: string | null;
-    }
-  ) {
-    if (sourceItem.source !== "claap") {
-      return;
-    }
-
-    const metadata = isRecord(sourceItem.metadataJson) ? sourceItem.metadataJson : {};
-    const risk = typeof metadata.publishabilityRisk === "string"
-      ? metadata.publishabilityRisk
-      : undefined;
-
-    if (risk !== "harmful" && risk !== "reframeable") {
-      if (sourceItem.notionPageId) {
-        await this.notion.archiveClaapReviewItem(sourceItem.notionPageId);
-      }
-      return;
-    }
-
-    const reviewFingerprint = sourceItem.notionPageFingerprint ?? hashParts(["claap-review", companyId, sourceItem.id]);
-    const reviewContext = buildClaapReviewContext({
-      risk,
-      title: typeof metadata.reviewTitle === "string" ? metadata.reviewTitle : sourceItem.title,
-      summary: typeof metadata.reviewSummary === "string" ? metadata.reviewSummary : sourceItem.summary,
-      excerpts: getStringArray(metadata.reviewExcerpts).length > 0
-        ? getStringArray(metadata.reviewExcerpts)
-        : getStringArray(sourceItem.chunksJson),
-      whyBlocked: typeof metadata.reviewWhyBlocked === "string" ? metadata.reviewWhyBlocked : undefined,
-      fallbackText: sourceItem.rawText ?? sourceItem.text
-    });
-    const syncResult = await this.notion.syncClaapReviewItem({
-      signalTitle: reviewContext.title,
-      publishabilityRisk: risk,
-      originalSignalSummary: reviewContext.summary,
-      keyExcerpts: reviewContext.excerpts,
-      whyBlocked: reviewContext.whyBlocked,
-      reframingSuggestion: typeof metadata.reframingSuggestion === "string" ? metadata.reframingSuggestion : undefined,
-      transcriptLink: sourceItem.sourceUrl,
-      occurredAt: sourceItem.occurredAt.toISOString(),
-      reviewFingerprint,
-      claapSourceItemId: sourceItem.id,
-      notionPageId: sourceItem.notionPageId ?? undefined
-    });
-
-    if (syncResult) {
-      await this.repositories.updateSourceItemNotionSync(sourceItem.id, syncResult.notionPageId, reviewFingerprint);
-    }
   }
 
   private buildBridgeRepositories(): BridgeRepositories {
@@ -2163,50 +1631,6 @@ function getStringArray(value: unknown): string[] {
     .map((entry) => entry.trim())
     .filter(Boolean)
     .slice(0, 3);
-}
-
-function buildClaapReviewContext(params: {
-  risk: "harmful" | "reframeable";
-  title: string;
-  summary?: string;
-  excerpts?: string[];
-  whyBlocked?: string;
-  fallbackText?: string;
-}) {
-  const excerpts = (params.excerpts ?? [])
-    .filter(Boolean)
-    .slice(0, 3)
-    .map((entry) => entry.trim().slice(0, 280));
-  return {
-    title: params.title,
-    summary: (params.summary ?? "").trim() || params.title,
-    excerpts: excerpts.length > 0 ? excerpts : fallbackReviewExcerpts(params.fallbackText),
-    whyBlocked: params.whyBlocked?.trim() || defaultClaapWhyBlocked(params.risk, params.title)
-  };
-}
-
-function fallbackReviewExcerpts(text?: string): string[] {
-  if (!text) {
-    return [];
-  }
-
-  const normalized = text
-    .split(/\n+/)
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 20);
-
-  if (normalized.length > 0) {
-    return normalized.slice(0, 3).map((entry) => entry.slice(0, 280));
-  }
-
-  return [text.trim().slice(0, 280)].filter(Boolean);
-}
-
-function defaultClaapWhyBlocked(risk: "harmful" | "reframeable", title: string): string {
-  if (risk === "harmful") {
-    return `Blocked as harmful: "${title}" reads like negative feedback about our own product or customer trust. Publishing it would create public evidence against us.`;
-  }
-  return `Blocked as reframeable: "${title}" contains useful substance, but the current wording still exposes a product weakness or negative customer experience. Review the evidence and rewrite the angle before any public use.`;
 }
 
 function parseEnrichmentLog(value: unknown): EnrichmentLogEntry[] {

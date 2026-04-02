@@ -146,21 +146,6 @@ model Opportunity {
   @@unique([companyId, sourceFingerprint])
 }
 
-model NotionDatabaseBinding {
-  id           String   @id
-  companyId     String?
-  name         String
-  parentPageId String
-  databaseId   String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
-
-  @@unique([parentPageId, name])
-  @@index([companyId, name])
-}
-
 model Draft {
   id               String   @id
   companyId        String?
@@ -229,7 +214,6 @@ model Company {
   sourceCursors          SourceCursor[]
   sourceItems            SourceItem[]
   opportunities          Opportunity[]
-  notionDatabaseBindings NotionDatabaseBinding[]
   drafts                 Draft[]
   syncRuns               SyncRun[]
   users                  User[]

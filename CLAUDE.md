@@ -69,7 +69,6 @@ This is the CI-equivalent and explicitly runs both test paths in order:
 4. Focused single-case unit isolation spot-checks
 5. `pnpm test:integration` — applies `prisma migrate deploy`, then runs all `*.integration.test.ts` against real Postgres
 6. Focused single-case integration isolation spot-checks
-7. Notion pull-edits dry-run smoke test (if Notion credentials available)
 
 The `pnpm test` / `pnpm test:integration` split is intentional: unit tests are DB-free and deterministic on any machine; integration tests require a live Postgres and are gated behind `pnpm test:integration` (which applies migrations first). The verification script ensures both paths are exercised before merge.
 
