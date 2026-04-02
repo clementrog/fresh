@@ -303,7 +303,9 @@ export interface ProfileBase {
   speakerAliases: string[];
   sampleExcerpts: string[];
   sourcePath: string;
+  /** @compat Retained for Prisma schema backward compatibility. Written on upsert but never used for routing or display. Remove with follow-up schema migration. */
   notionPageId?: string;
+  /** @compat Retained for Prisma schema backward compatibility (non-nullable column). Written on upsert but never used for routing or display. Remove with follow-up schema migration. */
   notionPageFingerprint: string;
 }
 
@@ -415,10 +417,13 @@ export interface ContentOpportunity {
   editorialOwner?: string;
   editorialNotes?: string;
   dedupFlag?: string;
+  /** @compat Retained for Prisma schema backward compatibility. Read from DB rows but never acted on. Remove with follow-up schema migration. */
   notionEditsPending?: boolean;
   selectedAt?: string;
   v1History?: string[];
+  /** @compat Retained for Prisma schema backward compatibility. Written on upsert but never used for routing or display. Remove with follow-up schema migration. */
   notionPageId?: string;
+  /** @compat Retained for Prisma schema backward compatibility (non-nullable column). Written on upsert but never used for routing or display. Remove with follow-up schema migration. */
   notionPageFingerprint: string;
 }
 
@@ -446,7 +451,9 @@ export interface SyncRunCounters {
   draftsCreated: number;
   llmFallbacks: number;
   llmValidationFailures: number;
+  /** @compat Always 0 after Notion output removal. Retained for Prisma countersJson backward compatibility. Remove with follow-up schema migration. */
   notionCreates: number;
+  /** @compat Always 0 after Notion output removal. Retained for Prisma countersJson backward compatibility. Remove with follow-up schema migration. */
   notionUpdates: number;
 }
 
@@ -475,7 +482,9 @@ export interface SyncRun {
   llmStats: LlmRunStats;
   warnings: string[];
   notes?: string;
+  /** @compat Retained for Prisma schema backward compatibility. Written on upsert but never used for routing or display. Remove with follow-up schema migration. */
   notionPageId?: string;
+  /** @compat Retained for Prisma schema backward compatibility (non-nullable column). Written on upsert but never used for routing or display. Remove with follow-up schema migration. */
   notionPageFingerprint: string;
 }
 

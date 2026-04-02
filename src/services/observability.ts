@@ -11,7 +11,7 @@ export function createRun(runType: SyncRun["runType"], source?: SyncRun["source"
     counters: emptyCounters(),
     llmStats: emptyLlmStats(),
     warnings: [],
-    notionPageFingerprint: `${runType}:${new Date().toISOString()}`
+    notionPageFingerprint: `${runType}:${new Date().toISOString()}` // @compat non-nullable Prisma column; remove with schema cleanup
   };
 }
 
@@ -23,8 +23,8 @@ export function emptyCounters(): SyncRunCounters {
     draftsCreated: 0,
     llmFallbacks: 0,
     llmValidationFailures: 0,
-    notionCreates: 0,
-    notionUpdates: 0
+    notionCreates: 0,  // @compat always 0; remove with schema cleanup
+    notionUpdates: 0   // @compat always 0; remove with schema cleanup
   };
 }
 
@@ -36,8 +36,8 @@ export function addCounters(base: SyncRunCounters, delta: Partial<SyncRunCounter
     draftsCreated: base.draftsCreated + (delta.draftsCreated ?? 0),
     llmFallbacks: base.llmFallbacks + (delta.llmFallbacks ?? 0),
     llmValidationFailures: base.llmValidationFailures + (delta.llmValidationFailures ?? 0),
-    notionCreates: base.notionCreates + (delta.notionCreates ?? 0),
-    notionUpdates: base.notionUpdates + (delta.notionUpdates ?? 0)
+    notionCreates: base.notionCreates + (delta.notionCreates ?? 0),  // @compat
+    notionUpdates: base.notionUpdates + (delta.notionUpdates ?? 0)   // @compat
   };
 }
 

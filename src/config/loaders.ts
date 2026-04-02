@@ -107,7 +107,7 @@ export async function loadProfileBases(): Promise<ProfileBase[]> {
         speakerAliases: ensureStringArray(parsed.data.speakerAliases),
         sampleExcerpts: extractBulletList(parsed.content),
         sourcePath: file,
-        notionPageFingerprint: hashParts(["profile", profileId, file])
+        notionPageFingerprint: hashParts(["profile", profileId, file]) // @compat satisfies ProfileBase type; remove with schema cleanup
       } satisfies ProfileBase;
     })
   );
