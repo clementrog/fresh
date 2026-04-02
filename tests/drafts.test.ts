@@ -491,6 +491,262 @@ describe("generateDraft", () => {
     expect(capturedPrompt).not.toContain("## GTM Foundation");
   });
 
+  it("system prompt includes revised closer rule banning summaries, market claims, and validation questions", async () => {
+    let capturedSystem = "";
+    let callIndex = 0;
+    const llm = new LlmClient({
+      DATABASE_URL: "",
+      NOTION_TOKEN: "",
+      NOTION_PARENT_PAGE_ID: "",
+      OPENAI_API_KEY: "test-key",
+      CLAAP_API_KEY: "",
+      LINEAR_API_KEY: "",
+      DEFAULT_TIMEZONE: "Europe/Paris",
+      LLM_MODEL: "test",
+      LLM_TIMEOUT_MS: 100,
+      LOG_LEVEL: "info"
+    }, undefined, async (_url, options) => {
+      const body = JSON.parse((options as any).body);
+      if (callIndex === 0) {
+        capturedSystem = body.messages?.[0]?.content ?? "";
+      }
+      callIndex += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify(callIndex === 1 ? safeDraftOutput : clearSafety)
+              }
+            }
+          ]
+        })
+      } as Response;
+    });
+
+    await generateDraft({
+      opportunity: makeTestOpportunity(),
+      user: makeTestUser(),
+      llmClient: llm,
+      sensitivityRulesMarkdown: "",
+      doctrineMarkdown: "",
+      editorialNotes: "",
+      layer3Defaults: [],
+      gtmFoundationMarkdown: ""
+    });
+
+    // Revised closer rule
+    expect(capturedSystem).toContain("a concrete stance, a specific admission, or a sharp observation");
+    expect(capturedSystem).toContain("Never a broad market claim");
+    expect(capturedSystem).toContain("Never a question that asks the audience to validate the post");
+  });
+
+  it("system prompt bans audience-directed rhetorical-question closers", async () => {
+    let capturedSystem = "";
+    let callIndex = 0;
+    const llm = new LlmClient({
+      DATABASE_URL: "",
+      NOTION_TOKEN: "",
+      NOTION_PARENT_PAGE_ID: "",
+      OPENAI_API_KEY: "test-key",
+      CLAAP_API_KEY: "",
+      LINEAR_API_KEY: "",
+      DEFAULT_TIMEZONE: "Europe/Paris",
+      LLM_MODEL: "test",
+      LLM_TIMEOUT_MS: 100,
+      LOG_LEVEL: "info"
+    }, undefined, async (_url, options) => {
+      const body = JSON.parse((options as any).body);
+      if (callIndex === 0) {
+        capturedSystem = body.messages?.[0]?.content ?? "";
+      }
+      callIndex += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify(callIndex === 1 ? safeDraftOutput : clearSafety)
+              }
+            }
+          ]
+        })
+      } as Response;
+    });
+
+    await generateDraft({
+      opportunity: makeTestOpportunity(),
+      user: makeTestUser(),
+      llmClient: llm,
+      sensitivityRulesMarkdown: "",
+      doctrineMarkdown: "",
+      editorialNotes: "",
+      layer3Defaults: [],
+      gtmFoundationMarkdown: ""
+    });
+
+    expect(capturedSystem).toContain("Do not end on an audience-directed rhetorical question");
+    expect(capturedSystem).toContain("Vous voyez");
+  });
+
+  it("system prompt includes rule against paraphrasing after strong lines", async () => {
+    let capturedSystem = "";
+    let callIndex = 0;
+    const llm = new LlmClient({
+      DATABASE_URL: "",
+      NOTION_TOKEN: "",
+      NOTION_PARENT_PAGE_ID: "",
+      OPENAI_API_KEY: "test-key",
+      CLAAP_API_KEY: "",
+      LINEAR_API_KEY: "",
+      DEFAULT_TIMEZONE: "Europe/Paris",
+      LLM_MODEL: "test",
+      LLM_TIMEOUT_MS: 100,
+      LOG_LEVEL: "info"
+    }, undefined, async (_url, options) => {
+      const body = JSON.parse((options as any).body);
+      if (callIndex === 0) {
+        capturedSystem = body.messages?.[0]?.content ?? "";
+      }
+      callIndex += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify(callIndex === 1 ? safeDraftOutput : clearSafety)
+              }
+            }
+          ]
+        })
+      } as Response;
+    });
+
+    await generateDraft({
+      opportunity: makeTestOpportunity(),
+      user: makeTestUser(),
+      llmClient: llm,
+      sensitivityRulesMarkdown: "",
+      doctrineMarkdown: "",
+      editorialNotes: "",
+      layer3Defaults: [],
+      gtmFoundationMarkdown: ""
+    });
+
+    expect(capturedSystem).toContain("After a strong quoted line or sharp observation, move to the next beat");
+    expect(capturedSystem).toContain("Do not paraphrase, soften, or restate");
+  });
+
+  it("system prompt includes softened rule for pipeline/deal stats", async () => {
+    let capturedSystem = "";
+    let callIndex = 0;
+    const llm = new LlmClient({
+      DATABASE_URL: "",
+      NOTION_TOKEN: "",
+      NOTION_PARENT_PAGE_ID: "",
+      OPENAI_API_KEY: "test-key",
+      CLAAP_API_KEY: "",
+      LINEAR_API_KEY: "",
+      DEFAULT_TIMEZONE: "Europe/Paris",
+      LLM_MODEL: "test",
+      LLM_TIMEOUT_MS: 100,
+      LOG_LEVEL: "info"
+    }, undefined, async (_url, options) => {
+      const body = JSON.parse((options as any).body);
+      if (callIndex === 0) {
+        capturedSystem = body.messages?.[0]?.content ?? "";
+      }
+      callIndex += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify(callIndex === 1 ? safeDraftOutput : clearSafety)
+              }
+            }
+          ]
+        })
+      } as Response;
+    });
+
+    await generateDraft({
+      opportunity: makeTestOpportunity(),
+      user: makeTestUser(),
+      llmClient: llm,
+      sensitivityRulesMarkdown: "",
+      doctrineMarkdown: "",
+      editorialNotes: "",
+      layer3Defaults: [],
+      gtmFoundationMarkdown: ""
+    });
+
+    expect(capturedSystem).toContain("Deal counts, pipeline stats, or aggregate commercial metrics");
+    expect(capturedSystem).toContain("natural in the speaker's voice");
+  });
+
+  it("system prompt includes writing-refinement rules: fake precision, canned openers, over-explaining, polished closers", async () => {
+    let capturedSystem = "";
+    let callIndex = 0;
+    const llm = new LlmClient({
+      DATABASE_URL: "",
+      NOTION_TOKEN: "",
+      NOTION_PARENT_PAGE_ID: "",
+      OPENAI_API_KEY: "test-key",
+      CLAAP_API_KEY: "",
+      LINEAR_API_KEY: "",
+      DEFAULT_TIMEZONE: "Europe/Paris",
+      LLM_MODEL: "test",
+      LLM_TIMEOUT_MS: 100,
+      LOG_LEVEL: "info"
+    }, undefined, async (_url, options) => {
+      const body = JSON.parse((options as any).body);
+      if (callIndex === 0) {
+        capturedSystem = body.messages?.[0]?.content ?? "";
+      }
+      callIndex += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify(callIndex === 1 ? safeDraftOutput : clearSafety)
+              }
+            }
+          ]
+        })
+      } as Response;
+    });
+
+    await generateDraft({
+      opportunity: makeTestOpportunity(),
+      user: makeTestUser(),
+      llmClient: llm,
+      sensitivityRulesMarkdown: "",
+      doctrineMarkdown: "",
+      editorialNotes: "",
+      layer3Defaults: [],
+      gtmFoundationMarkdown: ""
+    });
+
+    // 1. Fake precision restriction
+    expect(capturedSystem).toContain("Do not insert artificial dates just to simulate realism");
+    // 2. Anti-canned-opener / repeated openings
+    expect(capturedSystem).toContain("Do not recycle opening patterns");
+    expect(capturedSystem).toContain("recognizable formulas");
+    // 3. Anti-over-explaining
+    expect(capturedSystem).toContain("If the anecdote, quote, or contrast already proves the point, stop");
+    expect(capturedSystem).toContain("Trust the reader");
+    // 4. Anti-polished/symmetrical closers
+    expect(capturedSystem).toContain("does not always need to be a polished slogan");
+    expect(capturedSystem).toContain("understated admission is stronger than a symmetrical closer");
+  });
+
   it("conflict case: corporate profile sees Layer 3 first-person rule alongside system invariant", async () => {
     let capturedSystem = "";
     let capturedUser = "";
