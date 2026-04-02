@@ -220,16 +220,6 @@ const fixtures = {
     evidenceReferences: []
   },
 
-  // Unsynced: processed, no Notion page, retained, no risk
-  unsynced: {
-    id: "si_unsynced",
-    processedAt: new Date("2026-01-01"),
-    notionPageId: null,
-    screeningResultJson: { decision: "retain" },
-    metadataJson: {},
-    evidenceReferences: []
-  },
-
   // Unprocessed
   unprocessed: {
     id: "si_unprocessed",
@@ -336,36 +326,6 @@ describe("orphaned disposition semantics", () => {
 
   it("includes item where screeningResultJson exists but lacks decision", () => {
     expect(matches(fixtures.noDecision, "orphaned")).toBe(true);
-  });
-});
-
-describe("unsynced disposition semantics", () => {
-  it("matches processed item with no Notion page", () => {
-    expect(matches(fixtures.unsynced, "unsynced")).toBe(true);
-  });
-
-  it("rejects item with Notion page", () => {
-    expect(matches(fixtures.synced, "unsynced")).toBe(false);
-  });
-
-  it("rejects unprocessed item", () => {
-    expect(matches(fixtures.unprocessed, "unsynced")).toBe(false);
-  });
-
-  it("rejects screened-out item (NOT exclusion)", () => {
-    expect(matches(fixtures.screenedOut, "unsynced")).toBe(false);
-  });
-
-  it("rejects blocked-harmful item (NOT exclusion)", () => {
-    expect(matches(fixtures.blockedHarmful, "unsynced")).toBe(false);
-  });
-
-  it("rejects blocked-reframeable item (NOT exclusion)", () => {
-    expect(matches(fixtures.blockedReframeable, "unsynced")).toBe(false);
-  });
-
-  it("includes item where screeningResultJson exists but lacks decision", () => {
-    expect(matches(fixtures.noDecision, "unsynced")).toBe(true);
   });
 });
 

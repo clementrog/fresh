@@ -6,7 +6,6 @@ function buildEnv() {
   return {
     DATABASE_URL: "",
     NOTION_TOKEN: "",
-    NOTION_PARENT_PAGE_ID: "parent-page",
     OPENAI_API_KEY: "",
     ANTHROPIC_API_KEY: "",
     TAVILY_API_KEY: "tavily-test-key",
@@ -40,7 +39,6 @@ function buildRepositories() {
     })),
     createSyncRun: vi.fn(async () => ({})),
     updateSyncRun: vi.fn(async () => ({})),
-    updateSyncRunNotionSync: vi.fn(async () => ({})),
     addCostEntries: vi.fn(async () => ({})),
     getLatestEditorialConfig: vi.fn(async () => ({
       layer1CompanyLens: {
@@ -93,9 +91,6 @@ describe("market research app command", () => {
       {
         repositories: repositories as any,
         llmClient,
-        notion: {
-          syncRun: vi.fn(async () => null)
-        } as any
       }
     );
 
@@ -168,9 +163,6 @@ describe("market research app command", () => {
       {
         repositories: repositories as any,
         llmClient,
-        notion: {
-          syncRun: vi.fn(async () => null)
-        } as any
       }
     );
 

@@ -96,7 +96,6 @@ describe("anti-regression: signal-era commands are removed (Phase 9)", () => {
         repositories: {
           getCompanyBySlug: vi.fn(async () => null)
         } as any,
-        notion: { isEnabled: vi.fn(() => false) } as any
       }
     );
     await expect(app.run("sync:daily" as any)).rejects.toThrow("Unsupported command");
@@ -111,7 +110,6 @@ describe("anti-regression: signal-era commands are removed (Phase 9)", () => {
         repositories: {
           getCompanyBySlug: vi.fn(async () => null)
         } as any,
-        notion: { isEnabled: vi.fn(() => false) } as any
       }
     );
     await expect(app.run("digest:send" as any)).rejects.toThrow("Unsupported command");
@@ -126,7 +124,6 @@ describe("anti-regression: signal-era commands are removed (Phase 9)", () => {
         repositories: {
           getCompanyBySlug: vi.fn(async () => null)
         } as any,
-        notion: { isEnabled: vi.fn(() => false) } as any
       }
     );
     await expect(app.run("profile:weekly-recompute" as any)).rejects.toThrow("Unsupported command");

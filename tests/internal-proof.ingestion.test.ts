@@ -6,7 +6,6 @@ import type { RawSourceItem } from "../src/domain/types.js";
 const env = {
   DATABASE_URL: "",
   NOTION_TOKEN: "test-token",
-  NOTION_PARENT_PAGE_ID: "",
   OPENAI_API_KEY: "test-key",
   CLAAP_API_KEY: "",
   LINEAR_API_KEY: "",

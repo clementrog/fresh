@@ -95,13 +95,10 @@ Error: Claude CLI preflight probe failed: model "claude-opus-4-6" may not be sup
 
 | Commande | Description |
 |---|---|
-| `pnpm setup:notion` | Crée les bases Notion et le guide opérations |
 | `pnpm ingest:run` | Ingère les source items depuis les connecteurs configurés |
 | `pnpm market-research:run` | Lance les requêtes de recherche marché |
-| `pnpm intelligence:run` | Screening → création/enrichissement d'opportunités → sync Notion |
+| `pnpm intelligence:run` | Screening → création/enrichissement d'opportunités |
 | `pnpm draft:generate --opportunity-id <ID>` | Génère un draft V1 pour une opportunité |
-| `pnpm selection:scan` | Détecte les opportunités sélectionnées dans Notion |
-| `pnpm opportunity:pull-notion-edits` | Lit les modifications Notion et réévalue les opportunités |
 | `pnpm cleanup:retention` | Supprime les données brutes au-delà de la rétention |
 | `pnpm server:start` | Démarre le serveur HTTP |
 

@@ -5,7 +5,7 @@ interface AdminPagination {
   pageSize: number;
 }
 
-export type Disposition = "screened-out" | "blocked" | "orphaned" | "unsynced";
+export type Disposition = "screened-out" | "blocked" | "orphaned";
 
 interface AdminSourceItemFilters {
   source?: string;
@@ -75,11 +75,6 @@ export const DISPOSITION_CLAUSES: Record<Disposition, Prisma.SourceItemWhereInpu
         primaryForOpportunities: { none: {} }
       }
     },
-    NOT: [SCREENED_OUT_GUARD, HARMFUL_GUARD, REFRAMEABLE_GUARD]
-  },
-  unsynced: {
-    processedAt: { not: null },
-    notionPageId: null,
     NOT: [SCREENED_OUT_GUARD, HARMFUL_GUARD, REFRAMEABLE_GUARD]
   }
 };
@@ -552,8 +547,7 @@ export class AdminQueries {
       users,
       screenedOut,
       blocked,
-      orphaned,
-      unsynced
+      orphaned
     ] = await Promise.all([
       this.prisma.sourceItem.count({ where: { companyId } }),
       this.prisma.opportunity.count({ where: { companyId } }),
@@ -568,13 +562,10 @@ export class AdminQueries {
       }),
       this.prisma.sourceItem.count({
         where: { companyId, ...DISPOSITION_CLAUSES.orphaned }
-      }),
-      this.prisma.sourceItem.count({
-        where: { companyId, ...DISPOSITION_CLAUSES.unsynced }
       })
     ]);
 
-    return { sourceItems, opportunities, drafts, runs, users, screenedOut, blocked, orphaned, unsynced };
+    return { sourceItems, opportunities, drafts, runs, users, screenedOut, blocked, orphaned };
   }
 
   async getRecentRuns(companyId: string, limit = 10) {

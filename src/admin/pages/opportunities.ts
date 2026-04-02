@@ -92,12 +92,11 @@ export function registerOpportunityPages(
       item.readiness ? badge(item.readiness, item.readiness === "V1 generated" ? "green" : "blue") : "—",
       item.ownerProfile ?? "—",
       String(item.supportingEvidenceCount),
-      item.notionPageId ? badge("synced", "green") : badge("local", "gray"),
       formatDate(item.updatedAt)
     ]);
 
     const tableHtml = table(
-      ["Title", "Status", "Readiness", "Owner", "Evidence", "Notion", "Updated"],
+      ["Title", "Status", "Readiness", "Owner", "Evidence", "Updated"],
       rows
     );
 
@@ -134,9 +133,7 @@ export function registerOpportunityPages(
 
     const headerHtml = `<p>${statusBadge(opp.status)} · ${
       opp.readiness ? badge(opp.readiness, "blue") : ""
-    } · Owner: ${escapeHtml(opp.ownerUser?.displayName ?? opp.ownerProfile ?? "—")}${
-      opp.notionPageId ? ` · ${linkTo(`https://notion.so/${opp.notionPageId.replace(/-/g, "")}`, "Notion")}` : ""
-    }</p>`;
+    } · Owner: ${escapeHtml(opp.ownerUser?.displayName ?? opp.ownerProfile ?? "—")}</p>`;
 
     const contentHtml = detailSection(
       "Content",

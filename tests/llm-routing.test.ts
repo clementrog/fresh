@@ -11,7 +11,6 @@ function buildDefaultEnv(overrides: Partial<AppEnv> = {}): AppEnv {
   return {
     DATABASE_URL: "",
     NOTION_TOKEN: "",
-    NOTION_PARENT_PAGE_ID: "",
     OPENAI_API_KEY: "test-openai-key",
     ANTHROPIC_API_KEY: "",
     TAVILY_API_KEY: "",

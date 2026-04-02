@@ -1,13 +1,11 @@
 # Linc Editorial Signal Engine
 
-Single scheduled TypeScript worker for ingesting internal signals, extracting editorial opportunities, and synchronizing the editorial workflow into Notion.
+Single scheduled TypeScript worker for ingesting internal signals, extracting editorial opportunities, and managing the editorial workflow.
 
 ## Commands
 
-- `pnpm setup:notion`
 - `pnpm sync:daily`
 - `pnpm digest:send`
-- `pnpm selection:scan`
 - `pnpm profile:weekly-recompute`
 - `pnpm cleanup:retention`
 - `pnpm backfill`
@@ -15,8 +13,7 @@ Single scheduled TypeScript worker for ingesting internal signals, extracting ed
 ## Runtime model
 
 - One worker service
-- PostgreSQL for private memory
-- Notion as editorial control center
+- PostgreSQL for private memory and source of truth
 - Slack as notification layer
 - Containerized scheduled runtime preferred
 

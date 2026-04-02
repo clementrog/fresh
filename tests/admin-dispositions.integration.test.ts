@@ -59,7 +59,6 @@ describe.skipIf(!dbReachable)("disposition filter integration", () => {
     blocked: `si_blocked_${suffix}`,
     screenedOut: `si_screened_${suffix}`,
     noDecision: `si_nodecision_${suffix}`,
-    unsynced: `si_unsynced_${suffix}`,
     synced: `si_synced_${suffix}`,
     unprocessed: `si_unprocessed_${suffix}`
   };
@@ -207,7 +206,6 @@ describe.skipIf(!dbReachable)("disposition filter integration", () => {
         sourceItem(si.screenedOut, { processedAt: null, screeningResultJson: { decision: "skip" } }),
         // screeningResultJson exists but lacks "decision" key — must NOT be excluded by the screened-out guard
         sourceItem(si.noDecision, { screeningResultJson: { status: "done" } }),
-        sourceItem(si.unsynced),
         sourceItem(si.synced, { notionPageId: `notion-${suffix}` }),
         sourceItem(si.unprocessed, { processedAt: null })
       ]
@@ -247,7 +245,7 @@ describe.skipIf(!dbReachable)("disposition filter integration", () => {
     expect(totalCount).toBe(allSourceItemIds.length);
 
     // ── orphaned ────────────────────────────────────────────────────────
-    // Matches: si.orphaned (unlinked evidence), si.noDecision + si.unsynced + si.synced (no evidence = vacuous every)
+    // Matches: si.orphaned (unlinked evidence), si.noDecision + si.synced (no evidence = vacuous every)
     // Rejects: primaryLinked, joinLinked, directLinked (linked), blocked (NOT), screenedOut (NOT), unprocessed
 
     const orphanedList = await queries.listSourceItems(companyId, { disposition: "orphaned" });
@@ -255,7 +253,6 @@ describe.skipIf(!dbReachable)("disposition filter integration", () => {
 
     expect(orphanedIds).toContain(si.orphaned);
     expect(orphanedIds).toContain(si.noDecision);
-    expect(orphanedIds).toContain(si.unsynced);
     expect(orphanedIds).toContain(si.synced);
     expect(orphanedIds).not.toContain(si.primaryLinked);
     expect(orphanedIds).not.toContain(si.joinLinked);
@@ -276,19 +273,6 @@ describe.skipIf(!dbReachable)("disposition filter integration", () => {
     expect(blockedIds).not.toContain(si.orphaned);
     expect(blockedIds).not.toContain(si.screenedOut);
 
-    // ── unsynced ────────────────────────────────────────────────────────
-
-    const unsyncedList = await queries.listSourceItems(companyId, { disposition: "unsynced" });
-    const unsyncedIds = unsyncedList.map((r) => r.id);
-
-    expect(unsyncedIds).toContain(si.unsynced);
-    expect(unsyncedIds).toContain(si.orphaned);
-    expect(unsyncedIds).toContain(si.noDecision);
-    expect(unsyncedIds).not.toContain(si.synced);
-    expect(unsyncedIds).not.toContain(si.blocked);
-    expect(unsyncedIds).not.toContain(si.screenedOut);
-    expect(unsyncedIds).not.toContain(si.unprocessed);
-
     // ── screened-out ────────────────────────────────────────────────────
 
     const screenedList = await queries.listSourceItems(companyId, { disposition: "screened-out" });
@@ -305,7 +289,6 @@ describe.skipIf(!dbReachable)("disposition filter integration", () => {
 
     expect(counts.orphaned).toBe(orphanedIds.length);
     expect(counts.blocked).toBe(blockedIds.length);
-    expect(counts.unsynced).toBe(unsyncedIds.length);
     expect(counts.screenedOut).toBe(screenedIds.length);
     expect(counts.sourceItems).toBe(allSourceItemIds.length);
   });

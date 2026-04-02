@@ -42,8 +42,8 @@ model SourceItem {
   rawTextStored    Boolean  @default(true)
   rawTextExpiresAt DateTime?
   cleanupEligible  Boolean  @default(false)
-  notionPageId     String?
-  notionPageFingerprint String?
+  notionPageId     String?  // @compat Notion output removed. Column retained for backward compatibility; remove in follow-up schema cleanup.
+  notionPageFingerprint String?  // @compat Notion output removed. Column retained for backward compatibility; remove in follow-up schema cleanup.
   processedAt      DateTime?
   screeningResultJson Json?
 
@@ -126,13 +126,13 @@ model Opportunity {
   editorialOwner          String?
   editorialNotes          String?  @default("")
   dedupFlag               String?  @default("")
-  notionEditsPending      Boolean  @default(false)
+  notionEditsPending      Boolean  @default(false)  // @compat Notion output removed. Column retained for backward compatibility; remove in follow-up schema cleanup.
   selectedAt              DateTime?
   lastDigestAt            DateTime?
   enrichmentLogJson       Json     @default("[]")
   v1HistoryJson           Json?    @default("[]")
-  notionPageId            String?
-  notionPageFingerprint   String
+  notionPageId            String?  // @compat Notion output removed. Column retained for backward compatibility; remove in follow-up schema cleanup.
+  notionPageFingerprint   String   // @compat Notion output removed. Column retained for backward compatibility; remove in follow-up schema cleanup.
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
@@ -144,21 +144,6 @@ model Opportunity {
   drafts          Draft[]
 
   @@unique([companyId, sourceFingerprint])
-}
-
-model NotionDatabaseBinding {
-  id           String   @id
-  companyId     String?
-  name         String
-  parentPageId String
-  databaseId   String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
-
-  @@unique([parentPageId, name])
-  @@index([companyId, name])
 }
 
 model Draft {
@@ -195,8 +180,8 @@ model SyncRun {
   notes            String?
   llmStatsJson     Json?
   tokenTotalsJson  Json?
-  notionPageId     String?
-  notionPageFingerprint String
+  notionPageId     String?  // @compat Notion output removed. Column retained for backward compatibility; remove in follow-up schema cleanup.
+  notionPageFingerprint String  // @compat Notion output removed. Column retained for backward compatibility; remove in follow-up schema cleanup.
   leaseExpiresAt   DateTime?
   createdAt        DateTime @default(now())
 
@@ -229,7 +214,6 @@ model Company {
   sourceCursors          SourceCursor[]
   sourceItems            SourceItem[]
   opportunities          Opportunity[]
-  notionDatabaseBindings NotionDatabaseBinding[]
   drafts                 Draft[]
   syncRuns               SyncRun[]
   users                  User[]

@@ -3,7 +3,6 @@ import { envSchema } from "./schema.js";
 export interface AppEnv {
   DATABASE_URL: string;
   NOTION_TOKEN?: string;
-  NOTION_PARENT_PAGE_ID?: string;
   OPENAI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   TAVILY_API_KEY?: string;

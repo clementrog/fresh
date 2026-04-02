@@ -98,7 +98,13 @@ export async function assessSensitivity(
     };
   };
 
-  if (notionKind === "claap-signal") {
+  // Use Claap-specific stricter heuristics for curated claap signals (both legacy Notion-ingested and native)
+  const claapSignalKind = typeof item.metadata?.signalKind === "string" ? item.metadata.signalKind : undefined;
+  const claapRouting = typeof item.metadata?.routingDecision === "string" ? item.metadata.routingDecision : undefined;
+  const isClaapSignal = notionKind === "claap-signal"
+    || claapSignalKind === "claap-signal"
+    || claapRouting === "create_opportunity";
+  if (isClaapSignal) {
     const stageTwo = claapSignalStageTwoFallback();
     const categories = [...new Set([...stageOneCategories, ...stageTwo.categories])];
     const blocked = matchedRules.length > 0 || stageTwo.blocked;

@@ -38,13 +38,11 @@ export function registerDashboard(
         ${statCard("Screened Out", counts.screenedOut)}
         ${statCard("Blocked", counts.blocked)}
         ${statCard("Orphaned", counts.orphaned)}
-        ${statCard("Unsynced", counts.unsynced)}
       </div>
       <p>
         ${linkTo(c("/admin/source-items?disposition=screened-out"), "View screened-out")} ·
         ${linkTo(c("/admin/source-items?disposition=blocked"), "View blocked")} ·
-        ${linkTo(c("/admin/source-items?disposition=orphaned"), "View orphaned")} ·
-        ${linkTo(c("/admin/source-items?disposition=unsynced"), "View unsynced")}
+        ${linkTo(c("/admin/source-items?disposition=orphaned"), "View orphaned")}
       </p>
     </div>`;
 

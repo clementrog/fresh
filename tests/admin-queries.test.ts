@@ -67,22 +67,6 @@ describe("disposition query shape", () => {
     expect(where.OR[1]).toEqual({ metadataJson: { path: ["publishabilityRisk"], equals: "reframeable" } });
   });
 
-  it("unsynced requires notionPageId null + processedAt not null + DbNull-guarded NOT", async () => {
-    const prisma = mockPrisma();
-    const queries = new AdminQueries(prisma);
-
-    await queries.countSourceItems("comp_1", { disposition: "unsynced" });
-
-    const where = prisma.sourceItem.count.mock.calls[0][0].where;
-
-    expect(where.notionPageId).toBeNull();
-    expect(where.processedAt).toEqual({ not: null });
-    expect(where.NOT).toHaveLength(3);
-    for (const notClause of where.NOT) {
-      expect(notClause.AND).toBeDefined();
-    }
-  });
-
   it("single disposition merges directly without OR wrapper", async () => {
     const prisma = mockPrisma();
     const queries = new AdminQueries(prisma);

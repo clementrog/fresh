@@ -78,7 +78,7 @@ function makeLlmClient(draftResponse: Record<string, unknown>, safetyResponse: R
   return new LlmClient({
     DATABASE_URL: "",
     NOTION_TOKEN: "",
-    NOTION_PARENT_PAGE_ID: "",
+
     OPENAI_API_KEY: "test-key",
     CLAAP_API_KEY: "",
     LINEAR_API_KEY: "",
@@ -159,7 +159,7 @@ describe("generateDraft", () => {
     const llm = new LlmClient({
       DATABASE_URL: "",
       NOTION_TOKEN: "",
-      NOTION_PARENT_PAGE_ID: "",
+  
       OPENAI_API_KEY: "test-key",
       CLAAP_API_KEY: "",
       LINEAR_API_KEY: "",
@@ -208,7 +208,7 @@ describe("generateDraft", () => {
     const llm = new LlmClient({
       DATABASE_URL: "",
       NOTION_TOKEN: "",
-      NOTION_PARENT_PAGE_ID: "",
+  
       OPENAI_API_KEY: "test-key",
       CLAAP_API_KEY: "",
       LINEAR_API_KEY: "",
@@ -256,7 +256,7 @@ describe("generateDraft", () => {
     const llm = new LlmClient({
       DATABASE_URL: "",
       NOTION_TOKEN: "",
-      NOTION_PARENT_PAGE_ID: "",
+  
       OPENAI_API_KEY: "test-key",
       CLAAP_API_KEY: "",
       LINEAR_API_KEY: "",
@@ -338,7 +338,7 @@ describe("generateDraft", () => {
     const llm = new LlmClient({
       DATABASE_URL: "",
       NOTION_TOKEN: "",
-      NOTION_PARENT_PAGE_ID: "",
+  
       OPENAI_API_KEY: "test-key",
       CLAAP_API_KEY: "",
       LINEAR_API_KEY: "",
@@ -395,7 +395,7 @@ describe("generateDraft", () => {
     const llm = new LlmClient({
       DATABASE_URL: "",
       NOTION_TOKEN: "",
-      NOTION_PARENT_PAGE_ID: "",
+  
       OPENAI_API_KEY: "test-key",
       CLAAP_API_KEY: "",
       LINEAR_API_KEY: "",
@@ -449,7 +449,7 @@ describe("generateDraft", () => {
     const llm = new LlmClient({
       DATABASE_URL: "",
       NOTION_TOKEN: "",
-      NOTION_PARENT_PAGE_ID: "",
+  
       OPENAI_API_KEY: "test-key",
       CLAAP_API_KEY: "",
       LINEAR_API_KEY: "",
@@ -497,7 +497,7 @@ describe("generateDraft", () => {
     const llm = new LlmClient({
       DATABASE_URL: "",
       NOTION_TOKEN: "",
-      NOTION_PARENT_PAGE_ID: "",
+  
       OPENAI_API_KEY: "test-key",
       CLAAP_API_KEY: "",
       LINEAR_API_KEY: "",
@@ -548,7 +548,7 @@ describe("generateDraft", () => {
     const llm = new LlmClient({
       DATABASE_URL: "",
       NOTION_TOKEN: "",
-      NOTION_PARENT_PAGE_ID: "",
+  
       OPENAI_API_KEY: "test-key",
       CLAAP_API_KEY: "",
       LINEAR_API_KEY: "",
@@ -597,7 +597,7 @@ describe("generateDraft", () => {
     const llm = new LlmClient({
       DATABASE_URL: "",
       NOTION_TOKEN: "",
-      NOTION_PARENT_PAGE_ID: "",
+  
       OPENAI_API_KEY: "test-key",
       CLAAP_API_KEY: "",
       LINEAR_API_KEY: "",
@@ -646,7 +646,7 @@ describe("generateDraft", () => {
     const llm = new LlmClient({
       DATABASE_URL: "",
       NOTION_TOKEN: "",
-      NOTION_PARENT_PAGE_ID: "",
+  
       OPENAI_API_KEY: "test-key",
       CLAAP_API_KEY: "",
       LINEAR_API_KEY: "",
@@ -695,7 +695,7 @@ describe("generateDraft", () => {
     const llm = new LlmClient({
       DATABASE_URL: "",
       NOTION_TOKEN: "",
-      NOTION_PARENT_PAGE_ID: "",
+  
       OPENAI_API_KEY: "test-key",
       CLAAP_API_KEY: "",
       LINEAR_API_KEY: "",
@@ -754,7 +754,7 @@ describe("generateDraft", () => {
     const llm = new LlmClient({
       DATABASE_URL: "",
       NOTION_TOKEN: "",
-      NOTION_PARENT_PAGE_ID: "",
+  
       OPENAI_API_KEY: "test-key",
       CLAAP_API_KEY: "",
       LINEAR_API_KEY: "",
@@ -926,7 +926,6 @@ describe("draft evidence company scoping", () => {
 const TEST_LLM_CONFIG = {
   DATABASE_URL: "",
   NOTION_TOKEN: "",
-  NOTION_PARENT_PAGE_ID: "",
   OPENAI_API_KEY: "test-key",
   CLAAP_API_KEY: "",
   LINEAR_API_KEY: "",

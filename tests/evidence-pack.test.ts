@@ -102,12 +102,12 @@ describe("deriveProvenanceType", () => {
     expect(deriveProvenanceType(item)).toBe("notion:market-insight");
   });
 
-  it("returns notion:claap-signal for notion items with claap-signal metadata", () => {
+  it("returns notion for notion items with claap-signal metadata (legacy path removed)", () => {
     const item = makeItem({
       source: "notion",
       metadata: { notionKind: "claap-signal" }
     });
-    expect(deriveProvenanceType(item)).toBe("notion:claap-signal");
+    expect(deriveProvenanceType(item)).toBe("notion");
   });
 
   it("returns notion for generic notion items", () => {
@@ -1618,11 +1618,11 @@ describe("findSupportingEvidence publishability blocking", () => {
 // --- deriveProvenanceType reframeable ---
 
 describe("deriveProvenanceType reframeable", () => {
-  it("returns claap:reframeable for reframeable signalKind", () => {
+  it("returns claap:support for reframeable signalKind", () => {
     const item = makeItem({
       source: "claap",
       metadata: { signalKind: "claap-signal-reframeable" }
     });
-    expect(deriveProvenanceType(item)).toBe("claap:reframeable");
+    expect(deriveProvenanceType(item)).toBe("claap:support");
   });
 });

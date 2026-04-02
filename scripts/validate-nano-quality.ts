@@ -30,7 +30,6 @@ if (!OPENAI_API_KEY) {
 const env: AppEnv = {
   DATABASE_URL: "",
   NOTION_TOKEN: "",
-  NOTION_PARENT_PAGE_ID: "",
   OPENAI_API_KEY,
   ANTHROPIC_API_KEY: "",
   TAVILY_API_KEY: "",

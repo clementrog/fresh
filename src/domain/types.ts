@@ -150,8 +150,6 @@ export type RunType =
   | "draft:generate"
   | "draft:generate-ready"
   | "server:start"
-  | "setup:notion"
-  | "selection:scan"
   | "cleanup:retention"
   | "backfill:evidence"
   | "cleanup:claap-publishability"
@@ -160,8 +158,7 @@ export type RunType =
   | "sales:extract"
   | "sales:detect"
   | "sales:match"
-  | "sales:cleanup"
-  | "opportunity:pull-notion-edits";
+  | "sales:cleanup";
 
 export interface RateLimitConfig {
   requestsPerMinute: number;
@@ -306,7 +303,9 @@ export interface ProfileBase {
   speakerAliases: string[];
   sampleExcerpts: string[];
   sourcePath: string;
+  /** @compat Retained for Prisma schema backward compatibility. Written on upsert but never used for routing or display. Remove with follow-up schema migration. */
   notionPageId?: string;
+  /** @compat Retained for Prisma schema backward compatibility (non-nullable column). Written on upsert but never used for routing or display. Remove with follow-up schema migration. */
   notionPageFingerprint: string;
 }
 
@@ -418,10 +417,13 @@ export interface ContentOpportunity {
   editorialOwner?: string;
   editorialNotes?: string;
   dedupFlag?: string;
+  /** @compat Retained for Prisma schema backward compatibility. Read from DB rows but never acted on. Remove with follow-up schema migration. */
   notionEditsPending?: boolean;
   selectedAt?: string;
   v1History?: string[];
+  /** @compat Retained for Prisma schema backward compatibility. Written on upsert but never used for routing or display. Remove with follow-up schema migration. */
   notionPageId?: string;
+  /** @compat Retained for Prisma schema backward compatibility (non-nullable column). Written on upsert but never used for routing or display. Remove with follow-up schema migration. */
   notionPageFingerprint: string;
 }
 
@@ -449,7 +451,9 @@ export interface SyncRunCounters {
   draftsCreated: number;
   llmFallbacks: number;
   llmValidationFailures: number;
+  /** @compat Always 0 after Notion output removal. Retained for Prisma countersJson backward compatibility. Remove with follow-up schema migration. */
   notionCreates: number;
+  /** @compat Always 0 after Notion output removal. Retained for Prisma countersJson backward compatibility. Remove with follow-up schema migration. */
   notionUpdates: number;
 }
 
@@ -478,7 +482,9 @@ export interface SyncRun {
   llmStats: LlmRunStats;
   warnings: string[];
   notes?: string;
+  /** @compat Retained for Prisma schema backward compatibility. Written on upsert but never used for routing or display. Remove with follow-up schema migration. */
   notionPageId?: string;
+  /** @compat Retained for Prisma schema backward compatibility (non-nullable column). Written on upsert but never used for routing or display. Remove with follow-up schema migration. */
   notionPageFingerprint: string;
 }
 
@@ -558,43 +564,6 @@ export interface HealthcheckResult {
   source: SourceKind;
   ok: boolean;
   details?: string;
-}
-
-export interface NotionSelectionRow {
-  notionPageId: string;
-  fingerprint: string;
-  editorialOwner: string;
-}
-
-export interface NotionEditRequest {
-  notionPageId: string;
-  fingerprint: string;
-  title: string;
-  angle: string;
-  whyNow: string;
-  whatItIsAbout: string;
-  whatItIsNotAbout: string;
-  sourceUrl: string;
-  editorialNotes: string;
-  /** "" = operator cleared, valid enum = operator set, undefined = absent or invalid (preserve DB) */
-  targetSegment?: string;
-  editorialPillar?: string;
-  awarenessTarget?: string;
-  buyerFriction?: string;
-  contentMotion?: string;
-}
-
-export interface NotionSyncResult {
-  notionPageId: string;
-  action: "created" | "updated";
-}
-
-export interface NotionDatabaseBinding {
-  name: string;
-  parentPageId: string;
-  databaseId: string;
-  createdAt?: string;
-  updatedAt?: string;
 }
 
 export interface SourceConnector<TConfig extends ConnectorConfig = ConnectorConfig> {

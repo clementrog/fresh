@@ -27,7 +27,6 @@ const ENV = {
   CLAAP_API_KEY: "test-key",
   DATABASE_URL: "",
   NOTION_TOKEN: "",
-  NOTION_PARENT_PAGE_ID: "",
   OPENAI_API_KEY: "",
   ANTHROPIC_API_KEY: "",
   TAVILY_API_KEY: "",
@@ -83,7 +82,8 @@ describe("ClaapConnector", () => {
               id: "rec-1",
               title: "Sales call",
               updatedAt: "2026-03-19T10:00:00.000Z",
-              url: "https://app.claap.io/rec-1"
+              url: "https://app.claap.io/rec-1",
+              workspaceId: "ws-1"
             }]
           }
         })
@@ -118,8 +118,8 @@ describe("ClaapConnector", () => {
         json: () => Promise.resolve({
           result: {
             recordings: [
-              { id: "rec-a", updatedAt: "2026-03-19T10:00:00.000Z" },
-              { id: "rec-b", updatedAt: "2026-03-19T11:00:00.000Z" }
+              { id: "rec-a", updatedAt: "2026-03-19T10:00:00.000Z", workspaceId: "ws-1" },
+              { id: "rec-b", updatedAt: "2026-03-19T11:00:00.000Z", workspaceId: "ws-1" }
             ]
           }
         })
@@ -142,8 +142,8 @@ describe("ClaapConnector", () => {
         json: () => Promise.resolve({
           result: {
             recordings: [
-              { id: "rec-old", updatedAt: "2026-03-18T10:00:00.000Z" },
-              { id: "rec-new", updatedAt: "2026-03-19T10:00:00.000Z" }
+              { id: "rec-old", updatedAt: "2026-03-18T10:00:00.000Z", workspaceId: "ws-1" },
+              { id: "rec-new", updatedAt: "2026-03-19T10:00:00.000Z", workspaceId: "ws-1" }
             ]
           }
         })
@@ -162,7 +162,8 @@ describe("ClaapConnector", () => {
     it("respects maxRecordingsPerRun cap", async () => {
       const recordings = Array.from({ length: 10 }, (_, i) => ({
         id: `rec-${i}`,
-        updatedAt: `2026-03-19T${String(i).padStart(2, "0")}:00:00.000Z`
+        updatedAt: `2026-03-19T${String(i).padStart(2, "0")}:00:00.000Z`,
+        workspaceId: "ws-1"
       }));
       const fetchSpy = vi.fn().mockResolvedValue({
         ok: true,
@@ -185,8 +186,8 @@ describe("ClaapConnector", () => {
         json: () => Promise.resolve({
           result: {
             recordings: [
-              { id: "rec-1", folderId: "folder-a", updatedAt: "2026-03-19T10:00:00.000Z" },
-              { id: "rec-2", folderId: "folder-b", updatedAt: "2026-03-19T11:00:00.000Z" }
+              { id: "rec-1", folderId: "folder-a", updatedAt: "2026-03-19T10:00:00.000Z", workspaceId: "ws-1" },
+              { id: "rec-2", folderId: "folder-b", updatedAt: "2026-03-19T11:00:00.000Z", workspaceId: "ws-1" }
             ]
           }
         })
@@ -199,6 +200,76 @@ describe("ClaapConnector", () => {
 
       expect(items).toHaveLength(1);
       expect(items[0].id).toBe("rec-1");
+
+      vi.unstubAllGlobals();
+    });
+
+    it("respects workspaceIds filter — drops recordings from other workspaces", async () => {
+      const fetchSpy = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          result: {
+            recordings: [
+              { id: "rec-ws1", workspaceId: "ws-1", updatedAt: "2026-03-19T10:00:00.000Z" },
+              { id: "rec-ws2", workspaceId: "ws-other", updatedAt: "2026-03-19T11:00:00.000Z" }
+            ]
+          }
+        })
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const connector = new ClaapConnector(ENV);
+      const items = await connector.fetchSince(null, CLAAP_CONFIG, CONTEXT);
+
+      expect(items).toHaveLength(1);
+      expect(items[0].id).toBe("rec-ws1");
+
+      vi.unstubAllGlobals();
+    });
+
+    it("lets recordings through when workspaceId is absent — avoids silent data loss", async () => {
+      const fetchSpy = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          result: {
+            recordings: [
+              { id: "rec-no-ws", updatedAt: "2026-03-19T10:00:00.000Z" },
+              { id: "rec-null-ws", workspaceId: null, updatedAt: "2026-03-19T11:00:00.000Z" },
+              { id: "rec-ws1", workspaceId: "ws-1", updatedAt: "2026-03-19T12:00:00.000Z" }
+            ]
+          }
+        })
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const connector = new ClaapConnector(ENV);
+      const items = await connector.fetchSince(null, CLAAP_CONFIG, CONTEXT);
+
+      // All three should pass: absent/null workspaceId is unfilterable, ws-1 matches config
+      expect(items).toHaveLength(3);
+      expect(items.map(i => i.id)).toEqual(["rec-no-ws", "rec-null-ws", "rec-ws1"]);
+
+      vi.unstubAllGlobals();
+    });
+
+    it("skips workspaceIds filter entirely when config.workspaceIds is empty", async () => {
+      const fetchSpy = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          result: {
+            recordings: [
+              { id: "rec-any", workspaceId: "ws-whatever", updatedAt: "2026-03-19T10:00:00.000Z" }
+            ]
+          }
+        })
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const config = { ...CLAAP_CONFIG, workspaceIds: [] };
+      const connector = new ClaapConnector(ENV);
+      const items = await connector.fetchSince(null, config, CONTEXT);
+
+      expect(items).toHaveLength(1);
 
       vi.unstubAllGlobals();
     });
@@ -423,11 +494,8 @@ describe("ClaapConnector", () => {
 
       expect(result.metadata.signalKind).toBeUndefined();
       expect(result.metadata.publishabilityRisk).toBe("harmful");
+      expect(result.metadata.routingDecision).toBe("support_only");
       expect(result.title).toBe("Customer complaint call");
-      expect(result.metadata.reviewTitle).toBe("Signal détecté dans l'appel commercial");
-      expect(result.metadata.reviewSummary).toBe("Le prospect a exprimé un besoin urgent de conformité DSN.");
-      expect(result.metadata.reviewExcerpts).toEqual(["Le DRH a dit: nous avons perdu confiance dans notre DSN actuelle"]);
-      expect(result.metadata.reviewWhyBlocked).toContain("Blocked as harmful");
     });
 
     it("reframeable signal → signalKind 'claap-signal-reframeable', confidence ≤ 0.5, reframingSuggestion in metadata", async () => {
@@ -456,12 +524,9 @@ describe("ClaapConnector", () => {
 
       expect(result.metadata.signalKind).toBe("claap-signal-reframeable");
       expect(result.metadata.publishabilityRisk).toBe("reframeable");
+      expect(result.metadata.routingDecision).toBe("support_only");
       expect(result.metadata.reframingSuggestion).toBe("Focus on the validation outcome, not the doubt");
       expect(result.metadata.confidenceScore).toBeLessThanOrEqual(0.5);
-      expect(result.metadata.reviewTitle).toBe("Signal détecté dans l'appel commercial");
-      expect(result.metadata.reviewSummary).toBe("Le prospect a exprimé un besoin urgent de conformité DSN.");
-      expect(result.metadata.reviewExcerpts).toEqual(["Le DRH a dit: nous avons perdu confiance dans notre DSN actuelle"]);
-      expect(result.metadata.reviewWhyBlocked).toContain("Blocked as reframeable");
       // Extracted fields should still be present
       expect(result.metadata.theme).toBe("Compliance");
       expect(result.metadata.hookCandidate).toBeDefined();

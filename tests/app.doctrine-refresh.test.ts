@@ -26,7 +26,7 @@ const FRESH_DOCTRINE = "# FRESH DOCTRINE v2\nThis is the updated editorial doctr
 
 function buildEnv() {
   return {
-    DATABASE_URL: "", NOTION_TOKEN: "", NOTION_PARENT_PAGE_ID: "parent-page",
+    DATABASE_URL: "", NOTION_TOKEN: "",
     OPENAI_API_KEY: "", ANTHROPIC_API_KEY: "", TAVILY_API_KEY: "",
     CLAAP_API_KEY: "", LINEAR_API_KEY: "",
     DEFAULT_TIMEZONE: "Europe/Paris", DEFAULT_COMPANY_SLUG: "default", DEFAULT_COMPANY_NAME: "Default Company",
@@ -59,12 +59,11 @@ function buildRepositories() {
       upsertUser: vi.fn(), upsertSourceConfig: vi.fn(), listUsers: vi.fn(async () => []),
       createSyncRun: vi.fn(async () => ({})), acquireRunLease: vi.fn(async () => ({})),
       renewRunLease: vi.fn(async () => true), updateSyncRun: vi.fn(async () => ({})),
-      updateSyncRunNotionSync: vi.fn(async () => ({})), addCostEntries: vi.fn(async () => ({})),
+      addCostEntries: vi.fn(async () => ({})),
       listPendingSourceItems: vi.fn(async () => []), listRecentActiveOpportunities: vi.fn(async () => []),
       createOpportunityOnly: vi.fn(async () => ({})), persistStandaloneEvidence: vi.fn(async () => ({})),
       listCandidateSourceItems: vi.fn(async () => [] as any[]), listSourceItemsByIds: vi.fn(async () => [] as any[]),
-      enrichOpportunity: vi.fn(async () => ({})), updateOpportunityNotionSync: vi.fn(async () => ({})),
-      updateSourceItemNotionSync: vi.fn(async () => ({})), markSourceItemsProcessed: vi.fn(async () => ({})),
+      enrichOpportunity: vi.fn(async () => ({})), markSourceItemsProcessed: vi.fn(async () => ({})),
       saveScreeningResults: vi.fn(async () => ({ missingIds: [] as string[] }))
     } as any,
     upsertEditorialConfig, getLatestEditorialConfig
@@ -82,8 +81,7 @@ describe("doctrine refresh → intelligence:run end-to-end", () => {
     });
     const app = new EditorialSignalEngineApp(buildEnv(), { info: vi.fn(), error: vi.fn(), warn: vi.fn() }, {
       prisma: { $transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})), $queryRawUnsafe: vi.fn(async () => [{ count: BigInt(0) }]) } as any,
-      repositories: repos, llmClient: {} as any,
-      notion: { syncOpportunity: vi.fn(async () => null), syncRun: vi.fn(async () => null), syncUser: vi.fn(async () => null) } as any
+      repositories: repos, llmClient: {} as any
     });
     await app.run("intelligence:run");
 

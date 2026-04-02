@@ -20,7 +20,6 @@ function buildEnv() {
   return {
     DATABASE_URL: "",
     NOTION_TOKEN: "",
-    NOTION_PARENT_PAGE_ID: "parent-page",
     OPENAI_API_KEY: "",
     ANTHROPIC_API_KEY: "",
     TAVILY_API_KEY: "",
@@ -141,11 +140,6 @@ function buildMocks(opts: {
   const sourceItemUpdate = vi.fn().mockResolvedValue({});
   const opportunityUpdate = vi.fn().mockResolvedValue({});
   const replaceOpportunityRelations = vi.fn().mockResolvedValue(undefined);
-  const archiveOpportunityInNotion = vi.fn().mockResolvedValue(undefined);
-  const syncClaapReviewItem = vi.fn().mockResolvedValue({ notionPageId: "review-page-1", action: "created" });
-  const archiveClaapReviewItem = vi.fn().mockResolvedValue(undefined);
-  const syncOpportunity = vi.fn().mockResolvedValue(null);
-
   let llmCallIndex = 0;
   const llmClient = {
     generateStructured: vi.fn().mockImplementation(() => {
@@ -181,16 +175,6 @@ function buildMocks(opts: {
     $queryRawUnsafe: vi.fn().mockResolvedValue([{ count: BigInt(0) }])
   };
 
-  const notion = {
-    isEnabled: () => true,
-    archiveOpportunityInNotion,
-    archiveClaapReviewItem,
-    syncClaapReviewItem,
-    syncOpportunity,
-    syncRun: vi.fn().mockResolvedValue(null),
-    ensureSchema: vi.fn().mockResolvedValue({ databases: [], viewSpecs: [] })
-  };
-
   const repositories = {
     getCompanyBySlug: vi.fn().mockResolvedValue({ id: COMPANY_ID, slug: "default", name: "Default" }),
     getLatestEditorialConfig: vi.fn().mockResolvedValue({
@@ -202,23 +186,16 @@ function buildMocks(opts: {
     createSyncRun: vi.fn().mockResolvedValue(undefined),
     updateSyncRun: vi.fn().mockResolvedValue(undefined),
     addCostEntries: vi.fn().mockResolvedValue(undefined),
-    updateSyncRunNotionSync: vi.fn().mockResolvedValue(undefined),
-    updateSourceItemNotionSync: vi.fn().mockResolvedValue(undefined),
     replaceOpportunityRelations
   };
 
   return {
     prisma,
-    notion,
     repositories,
     llmClient,
     sourceItemUpdate,
     opportunityUpdate,
-    replaceOpportunityRelations,
-    archiveOpportunityInNotion,
-    syncClaapReviewItem,
-    archiveClaapReviewItem,
-    syncOpportunity
+    replaceOpportunityRelations
   };
 }
 
@@ -246,8 +223,7 @@ describe("cleanup:claap-publishability", () => {
     const app = new EditorialSignalEngineApp(buildEnv(), { info: vi.fn(), error: vi.fn(), warn: vi.fn() }, {
       prisma: mocks.prisma as any,
       repositories: mocks.repositories as any,
-      llmClient: mocks.llmClient as any,
-      notion: mocks.notion as any
+      llmClient: mocks.llmClient as any
     });
 
     await app.run("cleanup:claap-publishability");
@@ -268,15 +244,9 @@ describe("cleanup:claap-publishability", () => {
       expect(call[2]).toBeNull(); // null primaryEvidenceId
     }
 
-    // Notion archive called for both (NOT syncOpportunity)
-    expect(mocks.archiveOpportunityInNotion).toHaveBeenCalledTimes(2);
-    expect(mocks.archiveOpportunityInNotion).toHaveBeenCalledWith("page-1");
-    expect(mocks.archiveOpportunityInNotion).toHaveBeenCalledWith("page-2");
-    expect(mocks.syncClaapReviewItem).toHaveBeenCalledTimes(2);
-    expect(mocks.syncOpportunity).not.toHaveBeenCalled();
   });
 
-  it("archive sync propagates to already-synced Notion record", async () => {
+  it("archives opportunity in DB when source item reclassified as harmful", async () => {
     const si = makeMockSourceItem({ id: "si-notion", text: "Customer complaint. ".repeat(5) });
     const opp = makeMockOpportunityRow({ id: "opp-notion", notionPageId: "existing-page-id", sourceItemId: "si-notion" });
 
@@ -291,59 +261,11 @@ describe("cleanup:claap-publishability", () => {
     const app = new EditorialSignalEngineApp(buildEnv(), { info: vi.fn(), error: vi.fn(), warn: vi.fn() }, {
       prisma: mocks.prisma as any,
       repositories: mocks.repositories as any,
-      llmClient: mocks.llmClient as any,
-      notion: mocks.notion as any
+      llmClient: mocks.llmClient as any
     });
 
     await app.run("cleanup:claap-publishability");
 
-    expect(mocks.archiveOpportunityInNotion).toHaveBeenCalledWith("existing-page-id");
-    expect(mocks.syncOpportunity).not.toHaveBeenCalled();
-  });
-
-  it("backfills blocked items into the Claap review queue during cleanup", async () => {
-    const si = makeMockSourceItem({
-      id: "si-review-backfill",
-      metadataJson: {
-        publishabilityRisk: "reframeable",
-        signalKind: "claap-signal-reframeable",
-        reframingSuggestion: "Lead with the validated outcome",
-        reviewSummary: "Le client voit de la valeur mais le cadrage actuel expose encore une faiblesse produit.",
-        reviewExcerpts: [
-          "La traçabilité n'était pas assez claire au départ.",
-          "Après vérification, le résultat était bon."
-        ],
-        reviewWhyBlocked: "Blocked as reframeable because the original framing still exposes a trust gap."
-      }
-    });
-
-    const mocks = buildMocks({
-      sourceItems: [si],
-      opportunities: [],
-      llmResponses: []
-    });
-
-    const app = new EditorialSignalEngineApp(buildEnv(), { info: vi.fn(), error: vi.fn(), warn: vi.fn() }, {
-      prisma: mocks.prisma as any,
-      repositories: mocks.repositories as any,
-      llmClient: mocks.llmClient as any,
-      notion: mocks.notion as any
-    });
-
-    await app.run("cleanup:claap-publishability");
-
-    expect(mocks.syncClaapReviewItem).toHaveBeenCalledWith(expect.objectContaining({
-      signalTitle: "Sales call",
-      publishabilityRisk: "reframeable",
-      originalSignalSummary: "Le client voit de la valeur mais le cadrage actuel expose encore une faiblesse produit.",
-      keyExcerpts: [
-        "La traçabilité n'était pas assez claire au départ.",
-        "Après vérification, le résultat était bon."
-      ],
-      whyBlocked: "Blocked as reframeable because the original framing still exposes a trust gap.",
-      reframingSuggestion: "Lead with the validated outcome",
-      claapSourceItemId: "si-review-backfill"
-    }));
   });
 
   it("safe items left untouched", async () => {
@@ -358,8 +280,7 @@ describe("cleanup:claap-publishability", () => {
     const app = new EditorialSignalEngineApp(buildEnv(), { info: vi.fn(), error: vi.fn(), warn: vi.fn() }, {
       prisma: mocks.prisma as any,
       repositories: mocks.repositories as any,
-      llmClient: mocks.llmClient as any,
-      notion: mocks.notion as any
+      llmClient: mocks.llmClient as any
     });
 
     await app.run("cleanup:claap-publishability");
@@ -368,11 +289,9 @@ describe("cleanup:claap-publishability", () => {
     expect(mocks.sourceItemUpdate).not.toHaveBeenCalled();
     expect(mocks.opportunityUpdate).not.toHaveBeenCalled();
     expect(mocks.replaceOpportunityRelations).not.toHaveBeenCalled();
-    expect(mocks.archiveOpportunityInNotion).not.toHaveBeenCalled();
-    expect(mocks.syncClaapReviewItem).not.toHaveBeenCalled();
   });
 
-  it("dry-run mode makes no DB writes or Notion calls", async () => {
+  it("dry-run mode makes no DB writes", async () => {
     const si = makeMockSourceItem({ id: "si-dry", text: "Negative feedback about accuracy. ".repeat(5) });
     const opp = makeMockOpportunityRow({ id: "opp-dry", notionPageId: "page-dry", sourceItemId: "si-dry" });
 
@@ -389,8 +308,7 @@ describe("cleanup:claap-publishability", () => {
     const app = new EditorialSignalEngineApp(buildEnv(), { info: logInfo, error: vi.fn(), warn: vi.fn() }, {
       prisma: mocks.prisma as any,
       repositories: mocks.repositories as any,
-      llmClient: mocks.llmClient as any,
-      notion: mocks.notion as any
+      llmClient: mocks.llmClient as any
     });
 
     await app.run("cleanup:claap-publishability", { dryRun: true });
@@ -398,9 +316,6 @@ describe("cleanup:claap-publishability", () => {
     expect(mocks.sourceItemUpdate).not.toHaveBeenCalled();
     expect(mocks.opportunityUpdate).not.toHaveBeenCalled();
     expect(mocks.replaceOpportunityRelations).not.toHaveBeenCalled();
-    expect(mocks.archiveOpportunityInNotion).not.toHaveBeenCalled();
-    expect(mocks.syncClaapReviewItem).not.toHaveBeenCalled();
-    expect(mocks.archiveClaapReviewItem).not.toHaveBeenCalled();
   });
 
   it("archived opportunity with detached evidence remains readable via mapOpportunityRow sentinel", async () => {
@@ -430,8 +345,7 @@ describe("cleanup:claap-publishability", () => {
         ...mocks.repositories,
         listRecentActiveOpportunities: vi.fn().mockResolvedValue([oppRow])
       } as any,
-      llmClient: mocks.llmClient as any,
-      notion: mocks.notion as any
+      llmClient: mocks.llmClient as any
     });
 
     // The mapOpportunityRow is private, but it's used by intelligence run.
