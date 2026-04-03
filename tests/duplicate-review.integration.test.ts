@@ -271,6 +271,10 @@ describe.skipIf(!dbReachable)("duplicate review integration", () => {
     ];
     expect(allEvidenceIds).toContain(ev.b_unique);
 
+    // Regression: merged evidence must NOT appear as both FK and junction
+    const uniqueIds = new Set(allEvidenceIds);
+    expect(uniqueIds.size).toBe(allEvidenceIds.length);
+
     // Enrichment log should have a merge entry
     const log = canonical.enrichmentLogJson as Array<{ reason: string }>;
     expect(log.some((e) => e.reason === "tier2-duplicate-merge")).toBe(true);
@@ -343,5 +347,91 @@ describe.skipIf(!dbReachable)("duplicate review integration", () => {
     await prisma.duplicateCluster.delete({ where: { id: cluster.id } }).catch(() => {});
     await prisma.evidenceReference.deleteMany({ where: { id: { in: [newEvX, newEvY] } } });
     await prisma.opportunity.deleteMany({ where: { id: { in: [newOppX, newOppY] } } });
+  });
+
+  // ── Mixed decision: canonical + archive + keep-separate ────────────
+
+  it("mixed review suppresses surviving active subset from resurfacing", async () => {
+    // Create 3 opportunities sharing a source item
+    const ms = randomUUID().slice(0, 8);
+    const mixOppA = `opp_mix_a_${suffix}_${ms}`;
+    const mixOppB = `opp_mix_b_${suffix}_${ms}`;
+    const mixOppC = `opp_mix_c_${suffix}_${ms}`;
+    const mixEvA  = `ev_mix_a_${suffix}_${ms}`;
+    const mixEvB  = `ev_mix_b_${suffix}_${ms}`;
+    const mixEvC  = `ev_mix_c_${suffix}_${ms}`;
+
+    await prisma.opportunity.createMany({
+      data: [
+        opportunity(mixOppA, "Migration DSN canonical"),
+        opportunity(mixOppB, "Migration DSN archive"),
+        opportunity(mixOppC, "Migration DSN keep-separate")
+      ]
+    });
+    // All three share si.shared → will form a cluster
+    await prisma.evidenceReference.createMany({
+      data: [
+        evidence(mixEvA, si.shared, mixOppA),
+        evidence(mixEvB, si.shared, mixOppB),
+        evidence(mixEvC, si.shared, mixOppC)
+      ]
+    });
+
+    // Detect and upsert the cluster
+    const detected = await queries.detectDuplicateClusters(companyId);
+    const target = detected.find(
+      (c) => c.memberIds.includes(mixOppA)
+        && c.memberIds.includes(mixOppB)
+        && c.memberIds.includes(mixOppC)
+    );
+    expect(target).toBeDefined();
+
+    const cluster = await queries.upsertPendingCluster(
+      companyId, target!.memberIds, target!.suppressionHash
+    );
+
+    // Review: A=canonical, B=archive, C=keep-separate
+    const result = await executeDuplicateReview(prisma, {
+      clusterId: cluster.id,
+      decisions: {
+        [mixOppA]: "canonical",
+        [mixOppB]: "archive",
+        [mixOppC]: "keep-separate"
+      },
+      reviewedBy: "test-admin"
+    });
+
+    expect(result.canonicalId).toBe(mixOppA);
+    expect(result.archivedIds).toEqual([mixOppB]);
+    expect(result.keepSeparateIds).toEqual([mixOppC]);
+
+    // Rerun detection: the surviving {A, C} pair must NOT resurface
+    const afterDetection = await queries.detectDuplicateClusters(companyId);
+    const resurfaced = afterDetection.find(
+      (c) => c.memberIds.includes(mixOppA) && c.memberIds.includes(mixOppC)
+    );
+    expect(resurfaced).toBeUndefined();
+
+    // Verify the suppression record was created for the surviving subset
+    const survivorHash = clusterSuppressionHash([mixOppA, mixOppC].sort());
+    const suppression = await prisma.duplicateCluster.findUnique({
+      where: { companyId_suppressionHash: { companyId, suppressionHash: survivorHash } }
+    });
+    expect(suppression).not.toBeNull();
+    expect(suppression!.status).toBe("reviewed");
+
+    // Cleanup
+    await prisma.duplicateCluster.deleteMany({
+      where: { companyId, memberIds: { hasSome: [mixOppA, mixOppB, mixOppC] } }
+    });
+    await prisma.opportunityEvidence.deleteMany({
+      where: { evidenceId: { in: [mixEvA, mixEvB, mixEvC] } }
+    });
+    await prisma.evidenceReference.deleteMany({
+      where: { id: { in: [mixEvA, mixEvB, mixEvC] } }
+    });
+    await prisma.opportunity.deleteMany({
+      where: { id: { in: [mixOppA, mixOppB, mixOppC] } }
+    });
   });
 });

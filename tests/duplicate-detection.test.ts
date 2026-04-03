@@ -9,6 +9,7 @@ import {
   validateDecisions,
   type ClusterDecision
 } from "../src/admin/duplicate-actions.js";
+import { withCompany } from "../src/admin/components.js";
 
 // ── buildClustersFromPairs ────────────────────────────────────────────
 
@@ -50,15 +51,16 @@ describe("buildClustersFromPairs", () => {
     expect(clusters[0].sort()).toEqual(["A", "B", "C", "D", "E"]);
   });
 
-  it("caps cluster size at 10", () => {
-    // Create 12 nodes in a chain
+  it("preserves all members in a large chain (no silent truncation)", () => {
+    // Create 12 nodes in a chain — all must appear so the suppression
+    // hash covers the full connected component
     const pairs: Array<[string, string]> = [];
     for (let i = 0; i < 11; i++) {
       pairs.push([`N${i}`, `N${i + 1}`]);
     }
     const clusters = buildClustersFromPairs(pairs);
     expect(clusters).toHaveLength(1);
-    expect(clusters[0].length).toBeLessThanOrEqual(10);
+    expect(clusters[0].length).toBe(12);
   });
 
   it("returns empty array for no pairs", () => {
@@ -212,5 +214,23 @@ describe("validateDecisions", () => {
       opp_b: "archive"
     });
     expect(result).toBeNull();
+  });
+});
+
+// ── Redirect URL construction ────────────────────────────────────────
+
+describe("duplicate review redirect URL", () => {
+  it("uses ? separator when no company slug is provided", () => {
+    const base = withCompany("/admin/reviews/duplicates", undefined);
+    const separator = base.includes("?") ? "&" : "?";
+    const url = base + separator + "success=1";
+    expect(url).toBe("/admin/reviews/duplicates?success=1");
+  });
+
+  it("uses & separator when company slug adds ?company=", () => {
+    const base = withCompany("/admin/reviews/duplicates", "acme");
+    const separator = base.includes("?") ? "&" : "?";
+    const url = base + separator + "success=1";
+    expect(url).toBe("/admin/reviews/duplicates?company=acme&success=1");
   });
 });

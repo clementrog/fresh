@@ -633,8 +633,30 @@ export class AdminQueries {
         AND o2."status" NOT IN ('Archived', 'Rejected')
     `;
 
+    // Mixed path: direct FK on one side, junction on the other
+    const mixedPairs = await this.prisma.$queryRaw<
+      Array<{ opp_a: string; opp_b: string; source_item_id: string }>
+    >`
+      SELECT DISTINCT
+        LEAST(e_direct."opportunityId", oe."opportunityId") AS opp_a,
+        GREATEST(e_direct."opportunityId", oe."opportunityId") AS opp_b,
+        e_direct."sourceItemId" AS source_item_id
+      FROM "EvidenceReference" e_direct
+      JOIN "EvidenceReference" e_junc
+        ON e_direct."sourceItemId" = e_junc."sourceItemId"
+      JOIN "OpportunityEvidence" oe ON oe."evidenceId" = e_junc."id"
+        AND e_direct."opportunityId" <> oe."opportunityId"
+      JOIN "Opportunity" o1 ON o1."id" = e_direct."opportunityId"
+        AND o1."companyId" = ${companyId}
+        AND o1."status" NOT IN ('Archived', 'Rejected')
+      JOIN "Opportunity" o2 ON o2."id" = oe."opportunityId"
+        AND o2."companyId" = ${companyId}
+        AND o2."status" NOT IN ('Archived', 'Rejected')
+      WHERE e_direct."opportunityId" IS NOT NULL
+    `;
+
     // Merge all pairs
-    const allPairs = [...pairs, ...junctionPairs];
+    const allPairs = [...pairs, ...junctionPairs, ...mixedPairs];
     const pairSet = new Map<string, Set<string>>();
     for (const { opp_a, opp_b, source_item_id } of allPairs) {
       const key = [opp_a, opp_b].sort().join("|");
@@ -766,11 +788,10 @@ export function buildClustersFromPairs(pairs: Array<[string, string]>): string[]
     groups.get(root)!.push(node);
   }
 
-  // Cap cluster size at 10
-  const MAX_CLUSTER_SIZE = 10;
-  return [...groups.values()].map((members) =>
-    members.length > MAX_CLUSTER_SIZE ? members.slice(0, MAX_CLUSTER_SIZE) : members
-  );
+  // No hard cap — all members participate in the suppression hash so
+  // partial truncation cannot create a gap where dropped members resurface
+  // in a new cluster.  In practice, topic-based clusters rarely exceed 5-6.
+  return [...groups.values()];
 }
 
 export function computeTopicalScore(

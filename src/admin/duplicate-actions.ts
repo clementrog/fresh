@@ -1,5 +1,8 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 
+import { clusterSuppressionHash } from "./queries.js";
+import { createId } from "../lib/ids.js";
+
 // ── Types ────────────────────────────────────────────────────��────────
 
 export type ClusterDecision = "canonical" | "archive" | "keep-separate";
@@ -119,9 +122,12 @@ export async function executeDuplicateReview(
         );
 
         if (toMerge.length > 0) {
+          // Split into direct-FK vs junction-only evidence
+          const directIdSet = new Set(directEvidence.map((e) => e.id));
+          const mergeDirectIds = toMerge.filter((e) => directIdSet.has(e.id)).map((e) => e.id);
+          const junctionOnlyEvidence = toMerge.filter((e) => !directIdSet.has(e.id));
+
           // Re-point direct FK evidence to canonical
-          const directIds = directEvidence.map((e) => e.id);
-          const mergeDirectIds = toMerge.filter((e) => directIds.includes(e.id)).map((e) => e.id);
           if (mergeDirectIds.length > 0) {
             await tx.evidenceReference.updateMany({
               where: { id: { in: mergeDirectIds }, opportunityId: archivedId },
@@ -129,15 +135,17 @@ export async function executeDuplicateReview(
             });
           }
 
-          // Create junction links to canonical
-          await tx.opportunityEvidence.createMany({
-            data: toMerge.map((e) => ({
-              opportunityId: canonicalId,
-              evidenceId: e.id,
-              relevanceNote: `Merged from archived duplicate ${archivedId}`
-            })),
-            skipDuplicates: true
-          });
+          // Create junction links only for evidence that wasn't re-pointed via FK
+          if (junctionOnlyEvidence.length > 0) {
+            await tx.opportunityEvidence.createMany({
+              data: junctionOnlyEvidence.map((e) => ({
+                opportunityId: canonicalId,
+                evidenceId: e.id,
+                relevanceNote: `Merged from archived duplicate ${archivedId}`
+              })),
+              skipDuplicates: true
+            });
+          }
 
           // Track merged evidence in canonical's evidence set
           for (const e of toMerge) canonicalEvidenceIds.add(e.id);
@@ -220,6 +228,50 @@ export async function executeDuplicateReview(
         reviewedBy: input.reviewedBy
       }
     });
+
+    // Suppress follow-up clusters from surviving active members.
+    // After a mixed review (canonical + archive + keep-separate), archived
+    // members are excluded from detection but the surviving active subset
+    // (canonical + keep-separate) still shares evidence and would form a
+    // new, smaller cluster with a different suppression hash. Pre-register
+    // that subset as "reviewed" so it does not resurface.
+    const survivingIds = [
+      ...(canonicalId ? [canonicalId] : []),
+      ...keepSeparateIds
+    ].sort();
+    if (survivingIds.length >= 2) {
+      const survivorHash = clusterSuppressionHash(survivingIds);
+      if (survivorHash !== clusterSuppressionHash([...cluster.memberIds].sort())) {
+        await tx.duplicateCluster.upsert({
+          where: {
+            companyId_suppressionHash: {
+              companyId: cluster.companyId,
+              suppressionHash: survivorHash
+            }
+          },
+          create: {
+            id: createId("dcluster"),
+            companyId: cluster.companyId,
+            memberIds: survivingIds,
+            suppressionHash: survivorHash,
+            status: "reviewed",
+            decisionsJson: Object.fromEntries(
+              survivingIds.map((id) => [id, input.decisions[id]])
+            ),
+            reviewedAt: new Date(),
+            reviewedBy: input.reviewedBy
+          },
+          update: {
+            status: "reviewed",
+            decisionsJson: Object.fromEntries(
+              survivingIds.map((id) => [id, input.decisions[id]])
+            ),
+            reviewedAt: new Date(),
+            reviewedBy: input.reviewedBy
+          }
+        });
+      }
+    }
   });
 
   return {

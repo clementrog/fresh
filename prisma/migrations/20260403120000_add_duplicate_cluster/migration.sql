@@ -3,7 +3,7 @@ CREATE TABLE "DuplicateCluster" (
     "id" TEXT NOT NULL,
     "companyId" TEXT NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'pending',
-    "memberIds" TEXT[],
+    "memberIds" TEXT[] NOT NULL,
     "decisionsJson" JSONB NOT NULL DEFAULT '{}',
     "reviewedAt" TIMESTAMP(3),
     "reviewedBy" TEXT,

@@ -289,7 +289,9 @@ export function registerDuplicateReviewPages(
       return reply.code(400).type("text/html").send(html);
     }
 
-    return reply.redirect(withCompany("/admin/reviews/duplicates", companySlug) + "&success=1");
+    const redirectBase = withCompany("/admin/reviews/duplicates", companySlug);
+    const separator = redirectBase.includes("?") ? "&" : "?";
+    return reply.redirect(redirectBase + separator + "success=1");
   });
 }
 
