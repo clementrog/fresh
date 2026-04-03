@@ -1,3 +1,4 @@
+import { parse as parseQs } from "node:querystring";
 import type { FastifyInstance } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 
@@ -12,6 +13,7 @@ import { registerEditorialConfigPages } from "./pages/editorial-configs.js";
 import { registerSourceConfigPages } from "./pages/source-configs.js";
 import { registerMarketQueryPages } from "./pages/market-queries.js";
 import { registerDraftPages } from "./pages/drafts.js";
+import { registerDuplicateReviewPages } from "./pages/duplicate-review.js";
 
 export interface AdminOptions {
   user: string;
@@ -74,6 +76,15 @@ export function registerAdminPlugin(
     reply.header("X-Robots-Tag", "noindex");
   });
 
+  // Form body parser for POST actions (admin-only)
+  server.addContentTypeParser(
+    "application/x-www-form-urlencoded",
+    { parseAs: "string" },
+    (_request, body, done) => {
+      done(null, parseFormBody(body as string));
+    }
+  );
+
   // Company resolver shared by all pages
   async function resolveCompany(
     query: Record<string, string>
@@ -93,4 +104,29 @@ export function registerAdminPlugin(
   registerSourceConfigPages(server, queries, resolveCompany);
   registerMarketQueryPages(server, queries, resolveCompany);
   registerDraftPages(server, queries, resolveCompany);
+  registerDuplicateReviewPages(server, queries, prisma, resolveCompany);
+}
+
+/**
+ * Parse URL-encoded form body with support for bracket-notation keys.
+ * e.g. `decisions[opp_abc]=canonical` → `{ decisions: { opp_abc: "canonical" } }`
+ */
+function parseFormBody(body: string): Record<string, unknown> {
+  const flat = parseQs(body);
+  const result: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(flat)) {
+    const match = key.match(/^([^[]+)\[([^\]]+)\]$/);
+    if (match) {
+      const [, parent, child] = match;
+      if (typeof result[parent] !== "object" || result[parent] === null) {
+        result[parent] = {};
+      }
+      (result[parent] as Record<string, unknown>)[child] = Array.isArray(value) ? value[0] : value;
+    } else {
+      result[key] = Array.isArray(value) ? value[0] : value;
+    }
+  }
+
+  return result;
 }

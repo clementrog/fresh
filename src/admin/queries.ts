@@ -1,4 +1,6 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { createDeterministicId, createId } from "../lib/ids.js";
+import { jaccardSimilarity, removeStopWords, tokenizeV2 } from "../lib/text.js";
 
 interface AdminPagination {
   page: number;
@@ -584,4 +586,200 @@ export class AdminQueries {
       }
     });
   }
+
+  // ── Duplicate cluster detection & management ────────────────────────
+
+  async detectDuplicateClusters(companyId: string) {
+    // Phase 1: Find opportunity pairs sharing a sourceItemId via evidence
+    const pairs = await this.prisma.$queryRaw<
+      Array<{ opp_a: string; opp_b: string; source_item_id: string }>
+    >`
+      SELECT DISTINCT
+        e1."opportunityId" AS opp_a,
+        e2."opportunityId" AS opp_b,
+        e1."sourceItemId"  AS source_item_id
+      FROM "EvidenceReference" e1
+      JOIN "EvidenceReference" e2
+        ON e1."sourceItemId" = e2."sourceItemId"
+        AND e1."opportunityId" < e2."opportunityId"
+      JOIN "Opportunity" o1 ON o1."id" = e1."opportunityId"
+        AND o1."companyId" = ${companyId}
+        AND o1."status" NOT IN ('Archived', 'Rejected')
+      JOIN "Opportunity" o2 ON o2."id" = e2."opportunityId"
+        AND o2."companyId" = ${companyId}
+        AND o2."status" NOT IN ('Archived', 'Rejected')
+      WHERE e1."opportunityId" IS NOT NULL
+        AND e2."opportunityId" IS NOT NULL
+    `;
+
+    // Also check junction table paths
+    const junctionPairs = await this.prisma.$queryRaw<
+      Array<{ opp_a: string; opp_b: string; source_item_id: string }>
+    >`
+      SELECT DISTINCT
+        oe1."opportunityId" AS opp_a,
+        oe2."opportunityId" AS opp_b,
+        er1."sourceItemId"  AS source_item_id
+      FROM "OpportunityEvidence" oe1
+      JOIN "EvidenceReference" er1 ON oe1."evidenceId" = er1."id"
+      JOIN "EvidenceReference" er2 ON er1."sourceItemId" = er2."sourceItemId"
+      JOIN "OpportunityEvidence" oe2 ON oe2."evidenceId" = er2."id"
+        AND oe1."opportunityId" < oe2."opportunityId"
+      JOIN "Opportunity" o1 ON o1."id" = oe1."opportunityId"
+        AND o1."companyId" = ${companyId}
+        AND o1."status" NOT IN ('Archived', 'Rejected')
+      JOIN "Opportunity" o2 ON o2."id" = oe2."opportunityId"
+        AND o2."companyId" = ${companyId}
+        AND o2."status" NOT IN ('Archived', 'Rejected')
+    `;
+
+    // Merge all pairs
+    const allPairs = [...pairs, ...junctionPairs];
+    const pairSet = new Map<string, Set<string>>();
+    for (const { opp_a, opp_b, source_item_id } of allPairs) {
+      const key = [opp_a, opp_b].sort().join("|");
+      if (!pairSet.has(key)) pairSet.set(key, new Set());
+      pairSet.get(key)!.add(source_item_id);
+    }
+
+    // Phase 2: Transitive closure via union-find
+    const clusters = buildClustersFromPairs(
+      [...pairSet.keys()].map((k) => k.split("|") as [string, string])
+    );
+
+    // Phase 3: Suppression filter — exclude clusters already reviewed
+    const reviewedClusters = await this.prisma.duplicateCluster.findMany({
+      where: { companyId, status: "reviewed" },
+      select: { suppressionHash: true }
+    });
+    const suppressedHashes = new Set(reviewedClusters.map((c) => c.suppressionHash));
+
+    // Phase 4: Check for existing pending clusters
+    const pendingClusters = await this.prisma.duplicateCluster.findMany({
+      where: { companyId, status: "pending" },
+      select: { id: true, suppressionHash: true, memberIds: true }
+    });
+    const pendingByHash = new Map(pendingClusters.map((c) => [c.suppressionHash, c]));
+
+    // Build output
+    const result: Array<{
+      memberIds: string[];
+      suppressionHash: string;
+      existingClusterId: string | null;
+      sharedSourceItems: Map<string, Set<string>>;
+    }> = [];
+
+    for (const memberIds of clusters) {
+      if (memberIds.length < 2) continue;
+      const sorted = [...memberIds].sort();
+      const hash = clusterSuppressionHash(sorted);
+      if (suppressedHashes.has(hash)) continue;
+
+      // Collect shared source items for this cluster
+      const shared = new Map<string, Set<string>>();
+      for (const [key, sourceItems] of pairSet) {
+        const [a, b] = key.split("|");
+        if (memberIds.includes(a) && memberIds.includes(b)) {
+          for (const si of sourceItems) {
+            if (!shared.has(si)) shared.set(si, new Set());
+            shared.get(si)!.add(a);
+            shared.get(si)!.add(b);
+          }
+        }
+      }
+
+      const existing = pendingByHash.get(hash);
+      result.push({
+        memberIds: sorted,
+        suppressionHash: hash,
+        existingClusterId: existing?.id ?? null,
+        sharedSourceItems: shared
+      });
+    }
+
+    return result;
+  }
+
+  async listPendingClusters(companyId: string) {
+    return this.prisma.duplicateCluster.findMany({
+      where: { companyId, status: "pending" },
+      orderBy: { createdAt: "desc" }
+    });
+  }
+
+  async getClusterById(id: string) {
+    return this.prisma.duplicateCluster.findUnique({ where: { id } });
+  }
+
+  async upsertPendingCluster(companyId: string, memberIds: string[], suppressionHash: string) {
+    return this.prisma.duplicateCluster.upsert({
+      where: { companyId_suppressionHash: { companyId, suppressionHash } },
+      create: {
+        id: createId("dcluster"),
+        companyId,
+        memberIds,
+        suppressionHash,
+        status: "pending"
+      },
+      update: { memberIds }
+    });
+  }
+}
+
+// ── Cluster detection helpers (exported for testing) ──────────────────
+
+export function clusterSuppressionHash(sortedMemberIds: string[]): string {
+  return createDeterministicId("dcluster", sortedMemberIds);
+}
+
+export function buildClustersFromPairs(pairs: Array<[string, string]>): string[][] {
+  const parent = new Map<string, string>();
+
+  function find(x: string): string {
+    if (!parent.has(x)) parent.set(x, x);
+    let root = x;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    // Path compression
+    let curr = x;
+    while (curr !== root) {
+      const next = parent.get(curr)!;
+      parent.set(curr, root);
+      curr = next;
+    }
+    return root;
+  }
+
+  function union(a: string, b: string) {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  }
+
+  for (const [a, b] of pairs) {
+    union(a, b);
+  }
+
+  const groups = new Map<string, string[]>();
+  for (const node of parent.keys()) {
+    const root = find(node);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root)!.push(node);
+  }
+
+  // Cap cluster size at 10
+  const MAX_CLUSTER_SIZE = 10;
+  return [...groups.values()].map((members) =>
+    members.length > MAX_CLUSTER_SIZE ? members.slice(0, MAX_CLUSTER_SIZE) : members
+  );
+}
+
+export function computeTopicalScore(
+  titleA: string,
+  angleA: string,
+  titleB: string,
+  angleB: string
+): number {
+  const tokensA = new Set(removeStopWords(tokenizeV2(`${titleA} ${angleA}`)));
+  const tokensB = new Set(removeStopWords(tokenizeV2(`${titleB} ${angleB}`)));
+  return jaccardSimilarity(tokensA, tokensB);
 }
