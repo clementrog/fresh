@@ -1117,7 +1117,7 @@ Provide a rationale explaining your assessment.`,
           });
 
           // Detach evidence
-          await this.repositories.replaceOpportunityRelations(opp.id, [], null);
+          await this.repositories.replaceOpportunityRelations(opp.id, [], null, opp.companyId);
 
           archived += 1;
         }

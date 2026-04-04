@@ -134,6 +134,7 @@ describe.skipIf(!dbReachable)("disposition filter integration", () => {
     return {
       id,
       sourceItemId,
+      companyId,
       opportunityId,
       source: "notion",
       sourceUrl: `https://example.com/${id}`,

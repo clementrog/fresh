@@ -864,61 +864,6 @@ describe("draft evidence company scoping", () => {
     expect(evidenceData[0].companyId).toBe("company_abc");
   });
 
-  it("createDraft without companyId writes null on both draft and evidence rows", async () => {
-    const draftCreateCalls: unknown[] = [];
-    const evidenceCreateCalls: unknown[] = [];
-    const fakeTx = {
-      draft: {
-        create: vi.fn(async (args: unknown) => {
-          draftCreateCalls.push(args);
-        })
-      },
-      evidenceReference: {
-        createMany: vi.fn(async (args: unknown) => {
-          evidenceCreateCalls.push(args);
-        })
-      }
-    };
-
-    const { RepositoryBundle } = await import("../src/db/repositories.js");
-    const repos = new RepositoryBundle(null as any);
-
-    const draft = {
-      id: "draft_unscoped",
-      opportunityId: "opp_2",
-      profileId: "quentin" as const,
-      proposedTitle: "Title",
-      hook: "Hook",
-      summary: "Summary",
-      whatItIsAbout: "About",
-      whatItIsNotAbout: "Not about",
-      visualIdea: "Visual",
-      firstDraftText: "Text",
-      sourceEvidence: [
-        {
-          id: "ev_2",
-          source: "notion" as const,
-          sourceItemId: "si_2",
-          sourceUrl: "https://example.com",
-          timestamp: new Date().toISOString(),
-          excerpt: "Evidence excerpt",
-          excerptHash: "hash2",
-          freshnessScore: 0.8
-        }
-      ],
-      confidenceScore: 0.8,
-      language: "fr",
-      createdAt: new Date().toISOString()
-    };
-
-    await repos.createDraft(draft, fakeTx as any);
-
-    const draftData = (draftCreateCalls[0] as any).data;
-    expect(draftData.companyId).toBeNull();
-
-    const evidenceData = (evidenceCreateCalls[0] as any).data;
-    expect(evidenceData[0].companyId).toBeNull();
-  });
 });
 
 // --- Helper: create LlmClient that captures all calls ---

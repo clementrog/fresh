@@ -411,6 +411,7 @@ export class RepositoryBundle {
     opportunityId: string,
     evidence: EvidenceReference[],
     primaryEvidenceId: string | null,
+    companyId: string,
     tx: PrismaTransaction = this.prisma
   ) {
     validateOpportunityPrimaryEvidence(evidence, primaryEvidenceId);
@@ -424,6 +425,7 @@ export class RepositoryBundle {
         data: evidence.map((item) => ({
           id: item.id,
           opportunityId,
+          companyId,
           sourceItemId: item.sourceItemId,
           source: item.source,
           sourceUrl: item.sourceUrl,
@@ -444,11 +446,11 @@ export class RepositoryBundle {
     });
   }
 
-  async createDraft(draft: DraftV1, tx: PrismaTransaction = this.prisma, companyId?: string) {
+  async createDraft(draft: DraftV1, tx: PrismaTransaction = this.prisma, companyId: string) {
     await tx.draft.create({
       data: {
         id: draft.id,
-        companyId: companyId ?? null,
+        companyId,
         opportunityId: draft.opportunityId,
         profileId: draft.profileId,
         proposedTitle: draft.proposedTitle,
@@ -469,7 +471,7 @@ export class RepositoryBundle {
         data: draft.sourceEvidence.map((item) => ({
           id: item.id,
           draftId: draft.id,
-          companyId: companyId ?? null,
+          companyId,
           sourceItemId: item.sourceItemId,
           source: item.source,
           sourceUrl: item.sourceUrl,
@@ -611,15 +613,18 @@ export class RepositoryBundle {
   }
 
   async persistOpportunityGraph(opportunity: ContentOpportunity) {
+    if (!opportunity.companyId) {
+      throw new Error(`persistOpportunityGraph: opportunity ${opportunity.id} has no companyId — every opportunity must be scoped to a company`);
+    }
     return this.prisma.$transaction(async (tx) => {
       await this.upsertOpportunity(opportunity, tx);
-      await this.replaceOpportunityRelations(opportunity.id, opportunity.evidence, opportunity.primaryEvidence.id, tx);
+      await this.replaceOpportunityRelations(opportunity.id, opportunity.evidence, opportunity.primaryEvidence.id, opportunity.companyId!, tx);
     });
   }
 
-  async persistDraftGraph(draft: DraftV1, opportunity: ContentOpportunity, companyId?: string) {
+  async persistDraftGraph(draft: DraftV1, opportunity: ContentOpportunity, companyId: string) {
     return this.prisma.$transaction(async (tx) => {
-      await this.createDraft(draft, tx, companyId ?? opportunity.companyId);
+      await this.createDraft(draft, tx, companyId);
       await this.upsertOpportunity(opportunity, tx);
     });
   }

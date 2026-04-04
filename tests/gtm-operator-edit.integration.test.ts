@@ -129,6 +129,7 @@ describe.skipIf(!dbReachable)("GTM operator-edit persistence", () => {
       data: {
         id: evId,
         sourceItemId: siId,
+        companyId,
         opportunityId: oppId,
         source: "notion",
         sourceUrl: "https://example.com/ev",
