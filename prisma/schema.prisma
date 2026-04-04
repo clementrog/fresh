@@ -222,6 +222,8 @@ model Company {
   marketQueries          MarketQuery[]
   evidenceReferences     EvidenceReference[]
 
+  duplicateClusters      DuplicateCluster[]
+
   // Sales relations
   salesDeals              SalesDeal[]
   salesContacts           SalesContact[]
@@ -292,6 +294,23 @@ model MarketQuery {
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId, enabled, priority])
+}
+
+model DuplicateCluster {
+  id              String   @id
+  companyId       String
+  status          String   @default("pending")
+  memberIds       String[]
+  decisionsJson   Json     @default("{}")
+  reviewedAt      DateTime?
+  reviewedBy      String?
+  suppressionHash String
+  createdAt       DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, suppressionHash])
+  @@index([companyId, status])
 }
 
 // ===========================================================================

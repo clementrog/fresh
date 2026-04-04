@@ -70,6 +70,7 @@ export function layout(
     <a href="/admin/reviews/claap${qs}">Claap Review</a>
     <a href="/admin/reviews/linear${qs}">Linear Review</a>
     <a href="/admin/reviews/github${qs}">GitHub Review</a>
+    <a href="/admin/reviews/duplicates${qs}">Duplicates</a>
     <a href="/admin/runs${qs}">Runs</a>
     <a href="/admin/users${qs}">Users</a>
     <a href="/admin/editorial-configs${qs}">Doctrine</a>

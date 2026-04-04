@@ -1,0 +1,170 @@
+
+ RUN  v3.2.4 /Users/clement/projects/fresh/.claude/worktrees/bright-oak-1nyw
+
+ ✓ tests/repositories.integration.test.ts > repository DB integrity > rejects duplicate fingerprints within the same company 61ms
+ × tests/repositories.integration.test.ts > repository DB integrity > cascades evidence deletion when a source item is removed 26ms
+   → 
+Invalid `prisma.evidenceReference.create()` invocation in
+/Users/clement/projects/fresh/.claude/worktrees/bright-oak-1nyw/tests/repositories.integration.test.ts:123:38
+
+  120 try {
+  121   await prisma.company.create({ data: makeCompany(companyId, suffix) });
+  122   await prisma.sourceItem.create({ data: makeSourceItem(siId, companyId, `fp-casc-${suffix}`) });
+→ 123   await prisma.evidenceReference.create(
+Null constraint violation on the fields: (`companyId`)
+ × tests/gtm-operator-edit.integration.test.ts > GTM operator-edit persistence > empty string clears a stored GTM field; undefined preserves existing DB value 43ms
+   → 
+Invalid `prisma.evidenceReference.create()` invocation in
+/Users/clement/projects/fresh/.claude/worktrees/bright-oak-1nyw/tests/gtm-operator-edit.integration.test.ts:128:36
+
+  125   }
+  126 });
+  127 
+→ 128 await prisma.evidenceReference.create(
+Null constraint violation on the fields: (`companyId`)
+ × tests/admin-dispositions.integration.test.ts > disposition filter integration > seeds fixtures and validates disposition filters against real DB 40ms
+   → 
+Invalid `prisma.evidenceReference.createMany()` invocation in
+/Users/clement/projects/fresh/.claude/worktrees/bright-oak-1nyw/tests/admin-dispositions.integration.test.ts:222:36
+
+  219 
+  220 // ── Evidence references ─────────────────────────────────────────────
+  221 
+→ 222 await prisma.evidenceReference.createMany(
+Null constraint violation on the fields: (`companyId`)
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > seeds test company 6ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > acquires a lease when no running run exists 49ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > blocks a second lease while the first is live 11ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > takes over an expired lease 15ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > renewLease returns true when run is still running 6ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listEditorialConfigs returns only configs for seeded company ordered by version DESC 56ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getEditorialConfig returns full layer JSON and returns null for wrong-company ID 12ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getUser returns full baseProfile JSON and _count.ownedOpportunities 13ms
+ ✓ tests/duplicate-review.integration.test.ts > duplicate review integration > seeds test data 42ms
+ ✓ tests/duplicate-review.integration.test.ts > duplicate review integration > detects overlapping opportunities as a cluster 12ms
+ ✓ tests/duplicate-review.integration.test.ts > duplicate review integration > does not cluster the isolated opportunity 13ms
+ ✓ tests/duplicate-review.integration.test.ts > duplicate review integration > creates a pending cluster and reviews it with archive+merge 31ms
+ ✓ tests/duplicate-review.integration.test.ts > duplicate review integration > archived opportunities have correct status and dedupFlag 2ms
+ ✓ tests/duplicate-review.integration.test.ts > duplicate review integration > canonical has merged evidence and enrichment log 2ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > renewLease returns false when run was taken over 24ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > allows concurrent leases for different runTypes 12ms
+ ✓ tests/sales-lease.integration.test.ts > sales lease integration > atomic lease acquisition serializes concurrent starters 7ms
+ ✓ tests/duplicate-review.integration.test.ts > duplicate review integration > cluster is marked as reviewed 1ms
+ ✓ tests/duplicate-review.integration.test.ts > duplicate review integration > reviewed cluster is suppressed from detection 7ms
+ ✓ tests/duplicate-review.integration.test.ts > duplicate review integration > keep-separate sets dedupFlag without archiving 36ms
+ ✓ tests/duplicate-review.integration.test.ts > duplicate review integration > mixed review suppresses surviving active subset from resurfacing 34ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listSourceConfigs returns both enabled and disabled configs for seeded company 29ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listMarketQueries with enabled yes returns only enabled 14ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > countMarketQueries matches list count 49ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDraftProfileIds returns distinct profileIds for seeded company 94ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > listDrafts returns drafts with opportunity relation and respects filters 7ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getRun returns run with costEntries ordered by createdAt 9ms
+ ✓ tests/admin-expansion.integration.test.ts > admin expansion integration > getDraft returns draft with included opportunity and evidence relations 13ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates companies for the tests 6ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > upserts a deal and retrieves it by company-scoped lookup 4ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > upsert is idempotent — same deal twice produces one row 4ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates a signal 5ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates a recommendation with deal and signal FKs 5ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > tracks recommendation actions as discrete events 4ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > updates recommendation status 3ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > upserts and retrieves doctrine 2ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates and retrieves a sync run 2ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > manages cursors for incremental sync 3ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates an activity and cleans up raw text 9ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > creates extracted facts for a deal 5ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > two companies with the same HubSpot external IDs stay isolated 10ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > links a deal to a HubSpot company using the internal row ID 4ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > linkDealCompany is idempotent 1ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig passes when DB, schema, HubSpot token, and LLM key are present 1ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig verifies Sales tables exist 0ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig fails when HUBSPOT_ACCESS_TOKEN is missing 0ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig fails when LLM key is missing for configured provider 0ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig validates openai key when SALES_LLM_PROVIDER is openai 1ms
+ ✓ tests/sales-repositories.integration.test.ts > sales repositories integration > checkConfig does not call any external API (token is not validated) 0ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/admin-dispositions.integration.test.ts > disposition filter integration > seeds fixtures and validates disposition filters against real DB
+PrismaClientKnownRequestError: 
+Invalid `prisma.evidenceReference.createMany()` invocation in
+/Users/clement/projects/fresh/.claude/worktrees/bright-oak-1nyw/tests/admin-dispositions.integration.test.ts:222:36
+
+  219 
+  220 // ── Evidence references ─────────────────────────────────────────────
+  221 
+→ 222 await prisma.evidenceReference.createMany(
+Null constraint violation on the fields: (`companyId`)
+ ❯ ei.handleRequestError node_modules/.pnpm/@prisma+client@6.19.3_prisma@6.19.3_typescript@5.9.3__typescript@5.9.3/node_modules/@prisma/client/src/runtime/RequestHandler.ts:228:13
+ ❯ ei.handleAndLogRequestError node_modules/.pnpm/@prisma+client@6.19.3_prisma@6.19.3_typescript@5.9.3__typescript@5.9.3/node_modules/@prisma/client/src/runtime/RequestHandler.ts:174:12
+ ❯ ei.request node_modules/.pnpm/@prisma+client@6.19.3_prisma@6.19.3_typescript@5.9.3__typescript@5.9.3/node_modules/@prisma/client/src/runtime/RequestHandler.ts:143:12
+ ❯ a node_modules/.pnpm/@prisma+client@6.19.3_prisma@6.19.3_typescript@5.9.3__typescript@5.9.3/node_modules/@prisma/client/src/runtime/getPrismaClient.ts:833:24
+ ❯ tests/admin-dispositions.integration.test.ts:222:5
+    220|     // ── Evidence references ────────────────────────────────────────…
+    221| 
+    222|     await prisma.evidenceReference.createMany({
+       |     ^
+    223|       data: [
+    224|         evidence(ev.orphaned, si.orphaned, null),
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { code: 'P2011', meta: { modelName: 'EvidenceReference', constraint: [ 'companyId' ] }, clientVersion: '6.19.3', batchRequestIdx: undefined }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  tests/gtm-operator-edit.integration.test.ts > GTM operator-edit persistence > empty string clears a stored GTM field; undefined preserves existing DB value
+PrismaClientKnownRequestError: 
+Invalid `prisma.evidenceReference.create()` invocation in
+/Users/clement/projects/fresh/.claude/worktrees/bright-oak-1nyw/tests/gtm-operator-edit.integration.test.ts:128:36
+
+  125   }
+  126 });
+  127 
+→ 128 await prisma.evidenceReference.create(
+Null constraint violation on the fields: (`companyId`)
+ ❯ ei.handleRequestError node_modules/.pnpm/@prisma+client@6.19.3_prisma@6.19.3_typescript@5.9.3__typescript@5.9.3/node_modules/@prisma/client/src/runtime/RequestHandler.ts:228:13
+ ❯ ei.handleAndLogRequestError node_modules/.pnpm/@prisma+client@6.19.3_prisma@6.19.3_typescript@5.9.3__typescript@5.9.3/node_modules/@prisma/client/src/runtime/RequestHandler.ts:174:12
+ ❯ ei.request node_modules/.pnpm/@prisma+client@6.19.3_prisma@6.19.3_typescript@5.9.3__typescript@5.9.3/node_modules/@prisma/client/src/runtime/RequestHandler.ts:143:12
+ ❯ a node_modules/.pnpm/@prisma+client@6.19.3_prisma@6.19.3_typescript@5.9.3__typescript@5.9.3/node_modules/@prisma/client/src/runtime/getPrismaClient.ts:833:24
+ ❯ tests/gtm-operator-edit.integration.test.ts:128:5
+    126|     });
+    127| 
+    128|     await prisma.evidenceReference.create({
+       |     ^
+    129|       data: {
+    130|         id: evId,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { code: 'P2011', meta: { modelName: 'EvidenceReference', constraint: [ 'companyId' ] }, clientVersion: '6.19.3', batchRequestIdx: undefined }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  tests/repositories.integration.test.ts > repository DB integrity > cascades evidence deletion when a source item is removed
+PrismaClientKnownRequestError: 
+Invalid `prisma.evidenceReference.create()` invocation in
+/Users/clement/projects/fresh/.claude/worktrees/bright-oak-1nyw/tests/repositories.integration.test.ts:123:38
+
+  120 try {
+  121   await prisma.company.create({ data: makeCompany(companyId, suffix) });
+  122   await prisma.sourceItem.create({ data: makeSourceItem(siId, companyId, `fp-casc-${suffix}`) });
+→ 123   await prisma.evidenceReference.create(
+Null constraint violation on the fields: (`companyId`)
+ ❯ ei.handleRequestError node_modules/.pnpm/@prisma+client@6.19.3_prisma@6.19.3_typescript@5.9.3__typescript@5.9.3/node_modules/@prisma/client/src/runtime/RequestHandler.ts:228:13
+ ❯ ei.handleAndLogRequestError node_modules/.pnpm/@prisma+client@6.19.3_prisma@6.19.3_typescript@5.9.3__typescript@5.9.3/node_modules/@prisma/client/src/runtime/RequestHandler.ts:174:12
+ ❯ ei.request node_modules/.pnpm/@prisma+client@6.19.3_prisma@6.19.3_typescript@5.9.3__typescript@5.9.3/node_modules/@prisma/client/src/runtime/RequestHandler.ts:143:12
+ ❯ a node_modules/.pnpm/@prisma+client@6.19.3_prisma@6.19.3_typescript@5.9.3__typescript@5.9.3/node_modules/@prisma/client/src/runtime/getPrismaClient.ts:833:24
+ ❯ tests/repositories.integration.test.ts:123:7
+    121|       await prisma.company.create({ data: makeCompany(companyId, suffi…
+    122|       await prisma.sourceItem.create({ data: makeSourceItem(siId, comp…
+    123|       await prisma.evidenceReference.create({ data: makeEvidence(evId,…
+       |       ^
+    124| 
+    125|       const before = await prisma.evidenceReference.findUnique({ where…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { code: 'P2011', meta: { modelName: 'EvidenceReference', constraint: [ 'companyId' ] }, clientVersion: '6.19.3', batchRequestIdx: undefined }
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  3 failed | 4 passed (7)
+      Tests  3 failed | 50 passed (53)
+   Start at  12:20:32
+   Duration  1.01s (transform 280ms, setup 0ms, collect 1.18s, tests 1.02s, environment 1ms, prepare 371ms)
+
