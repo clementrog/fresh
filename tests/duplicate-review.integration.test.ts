@@ -117,6 +117,7 @@ describe.skipIf(!dbReachable)("duplicate review integration", () => {
       id,
       sourceItemId,
       opportunityId,
+      companyId,
       source: "claap",
       sourceUrl: `https://example.com/${id}`,
       timestamp: now,
@@ -352,8 +353,10 @@ describe.skipIf(!dbReachable)("duplicate review integration", () => {
   // ── Mixed decision: canonical + archive + keep-separate ────────────
 
   it("mixed review suppresses surviving active subset from resurfacing", async () => {
-    // Create 3 opportunities sharing a source item
+    // Use a dedicated source item so this cluster is isolated from the
+    // main test data (opp.a still shares si.shared and is active).
     const ms = randomUUID().slice(0, 8);
+    const mixSi    = `si_mix_${suffix}_${ms}`;
     const mixOppA = `opp_mix_a_${suffix}_${ms}`;
     const mixOppB = `opp_mix_b_${suffix}_${ms}`;
     const mixOppC = `opp_mix_c_${suffix}_${ms}`;
@@ -361,6 +364,7 @@ describe.skipIf(!dbReachable)("duplicate review integration", () => {
     const mixEvB  = `ev_mix_b_${suffix}_${ms}`;
     const mixEvC  = `ev_mix_c_${suffix}_${ms}`;
 
+    await prisma.sourceItem.create({ data: sourceItem(mixSi) });
     await prisma.opportunity.createMany({
       data: [
         opportunity(mixOppA, "Migration DSN canonical"),
@@ -368,12 +372,12 @@ describe.skipIf(!dbReachable)("duplicate review integration", () => {
         opportunity(mixOppC, "Migration DSN keep-separate")
       ]
     });
-    // All three share si.shared → will form a cluster
+    // All three share the dedicated mixSi → isolated 3-member cluster
     await prisma.evidenceReference.createMany({
       data: [
-        evidence(mixEvA, si.shared, mixOppA),
-        evidence(mixEvB, si.shared, mixOppB),
-        evidence(mixEvC, si.shared, mixOppC)
+        evidence(mixEvA, mixSi, mixOppA),
+        evidence(mixEvB, mixSi, mixOppB),
+        evidence(mixEvC, mixSi, mixOppC)
       ]
     });
 
@@ -433,5 +437,6 @@ describe.skipIf(!dbReachable)("duplicate review integration", () => {
     await prisma.opportunity.deleteMany({
       where: { id: { in: [mixOppA, mixOppB, mixOppC] } }
     });
+    await prisma.sourceItem.deleteMany({ where: { id: mixSi } });
   });
 });
