@@ -67,10 +67,11 @@ function makeSourceItem(id: string, companyId: string, fingerprint: string) {
   };
 }
 
-function makeEvidence(id: string, sourceItemId: string) {
+function makeEvidence(id: string, sourceItemId: string, companyId: string) {
   return {
     id,
     sourceItemId,
+    companyId,
     source: "notion",
     sourceUrl: `https://example.com/${id}`,
     timestamp: NOW,
@@ -120,7 +121,7 @@ describe.skipIf(!dbReachable)("repository DB integrity", () => {
     try {
       await prisma.company.create({ data: makeCompany(companyId, suffix) });
       await prisma.sourceItem.create({ data: makeSourceItem(siId, companyId, `fp-casc-${suffix}`) });
-      await prisma.evidenceReference.create({ data: makeEvidence(evId, siId) });
+      await prisma.evidenceReference.create({ data: makeEvidence(evId, siId, companyId) });
 
       const before = await prisma.evidenceReference.findUnique({ where: { id: evId } });
       expect(before).not.toBeNull();

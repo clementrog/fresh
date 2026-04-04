@@ -62,7 +62,7 @@ model EvidenceReference {
   id              String   @id
   opportunityId   String?
   draftId         String?
-  companyId       String?
+  companyId       String
   sourceItemId    String
   source          String
   sourceUrl       String
@@ -76,7 +76,7 @@ model EvidenceReference {
   opportunity Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
   draft       Draft?       @relation(fields: [draftId], references: [id], onDelete: Cascade)
   sourceItem  SourceItem   @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
-  company     Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  company     Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
   primaryForOpportunities Opportunity[] @relation("PrimaryOpportunityEvidence")
   opportunityLinks OpportunityEvidence[]
   recommendationLinks RecommendationEvidence[]
