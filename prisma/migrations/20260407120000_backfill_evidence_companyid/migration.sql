@@ -5,12 +5,9 @@
 -- already CASCADE.
 --
 -- If the prior migration failed on SET NOT NULL because of historical NULLs
--- (possible in staging/dev), the operator should mark it rolled-back:
---
---   prisma migrate resolve --rolled-back 20260404120000_evidence_company_not_null
---
--- Then this migration handles the full repair: backfill, cleanup, constraint
--- tightening, and FK recreation — all idempotent.
+-- (possible in staging/dev), Prisma will replay it on the next deploy even after
+-- marking it rolled-back. The operator must backfill NULLs BEFORE re-running
+-- migrate deploy. See scripts/recover-evidence-companyid.sql for the exact steps.
 
 -- 1. Backfill NULL companyId from the linked SourceItem (sourceItemId is required
 --    and SourceItem.companyId is NOT NULL, so this resolves every resolvable row).
