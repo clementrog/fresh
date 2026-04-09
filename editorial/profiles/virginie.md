@@ -14,10 +14,13 @@ avoidRules:
   - Never list SLOs in a LinkedIn post.
   - No bold headers or emoji section markers.
 contentTerritories:
-  - produit / feedback
-  - arbitrages et decisions produit
+  - product reasoning — the tradeoff, the rejected option, the constraint, the user feedback that changed a design decision. Traceable to a specific Linear spec, Claap retro, or product discussion.
+  - how and why we built Linc this way — the before/after of a product choice, with the constraints that shaped it
+  - user feedback that reshaped a feature — what users actually did vs what the team expected, and what the team did with that gap
 weakFitTerritories:
   - corporate amplification
+  - structural market takes with no direct product-reasoning content — that is Baptiste's lane
+  - operator-grade compliance consequence with no product reasoning behind it — that is Thomas's lane
 speakerAliases:
   - "Virginie Bastien"
   - "Virginie"

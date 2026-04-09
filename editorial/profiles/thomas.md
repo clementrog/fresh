@@ -14,10 +14,13 @@ avoidRules:
   - Never list numbered methodology steps.
   - No bold headers or emoji section markers.
 contentTerritories:
-  - expertise metier / fiabilite
-  - paie / conformite / operations
+  - concrete payroll/compliance consequence — a named regulation (DSN, CCN, HCR, DPAE...), a named tool or workflow, a named error/risk/rejet, what a cabinet actually has to deal with this week
+  - operator-grade translation of shipped product into day-to-day cabinet work — not the announcement, the practical implication
+  - recurring production frictions visible in internal tools and partner cabinets — the kind you only notice by watching what actually happens
 weakFitTerritories:
   - broad company storytelling
+  - structural market/category takes — that is Baptiste's lane when there is first-party proof
+  - product reasoning (tradeoffs, rejected options) — that is Virginie's lane
 speakerAliases:
   - "Thomas Music"
   - "Thomas"

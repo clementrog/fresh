@@ -60,7 +60,7 @@ function buildRepositories() {
       createSyncRun: vi.fn(async () => ({})), acquireRunLease: vi.fn(async () => ({})),
       renewRunLease: vi.fn(async () => true), updateSyncRun: vi.fn(async () => ({})),
       addCostEntries: vi.fn(async () => ({})),
-      listPendingSourceItems: vi.fn(async () => []), listRecentActiveOpportunities: vi.fn(async () => []),
+      listPendingSourceItems: vi.fn(async () => []), listRecentSourceItems: vi.fn(async () => []), listRecentActiveOpportunities: vi.fn(async () => []),
       createOpportunityOnly: vi.fn(async () => ({})), persistStandaloneEvidence: vi.fn(async () => ({})),
       listCandidateSourceItems: vi.fn(async () => [] as any[]), listSourceItemsByIds: vi.fn(async () => [] as any[]),
       enrichOpportunity: vi.fn(async () => ({})), markSourceItemsProcessed: vi.fn(async () => ({})),
@@ -77,7 +77,7 @@ describe("doctrine refresh → intelligence:run end-to-end", () => {
       screeningResults: new Map(), created: [], enriched: [], skipped: [],
       usageEvents: [], dedupEvents: [], processedSourceItemIds: [],
       linearReviewItems: [], linearClassifications: new Map(), githubReviewItems: [], githubClassifications: new Map(), angleQualityEvents: [],
-      speakerContextEvents: []
+      speakerContextEvents: [], routingEvents: []
     });
     const app = new EditorialSignalEngineApp(buildEnv(), { info: vi.fn(), error: vi.fn(), warn: vi.fn() }, {
       prisma: { $transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})), $queryRawUnsafe: vi.fn(async () => [{ count: BigInt(0) }]) } as any,

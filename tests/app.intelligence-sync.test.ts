@@ -75,6 +75,7 @@ function buildRepositories() {
     })),
     listUsers: vi.fn(async () => []),
     listPendingSourceItems: vi.fn(async () => []),
+    listRecentSourceItems: vi.fn(async () => []),
     listRecentActiveOpportunities: vi.fn(async () => []),
     createOpportunityOnly: vi.fn(async () => ({})),
     persistStandaloneEvidence: vi.fn(async () => ({})),
@@ -140,7 +141,8 @@ describe("intelligence sync — screening-write warnings", () => {
       githubReviewItems: [],
       githubClassifications: new Map(),
       angleQualityEvents: [],
-      speakerContextEvents: []
+      speakerContextEvents: [],
+      routingEvents: []
     });
 
     await app.run("intelligence:run");
@@ -191,7 +193,8 @@ describe("Layer 3 runtime normalization through load path", () => {
       githubReviewItems: [],
       githubClassifications: new Map(),
       angleQualityEvents: [],
-      speakerContextEvents: []
+      speakerContextEvents: [],
+      routingEvents: []
     });
 
     await app.run("intelligence:run");

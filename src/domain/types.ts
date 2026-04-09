@@ -319,6 +319,22 @@ export interface ScreeningResult {
   sensitivityCategories: string[];
   /** True when the result came from a fallback path (LLM unavailable or partial response). Items with fallback=true should not be marked as processed so they can be retried. */
   fallback?: boolean;
+  // --- Structural reading (filled by screening LLM when it can) ---
+  /** One-sentence summary of the LITERAL (operational/concrete) reading of the signal. */
+  literalReading?: string;
+  /** One-sentence summary of the STRUCTURAL (market/category/wedge/speed) reading, if any. */
+  structuralReading?: string;
+  /** True when the signal materially reveals something broader than the incident — a
+   *  pattern about the market, category shift, company wedge, or execution speed. */
+  hasStructuralSignificance?: boolean;
+  /** True when this synthesized-market signal would need first-party proof to
+   *  legitimately drive founder (baptiste), product-lead (virginie), or
+   *  corporate voices. Advisory from the LLM; enforcement happens in the
+   *  deterministic routing gate. */
+  needsFirstPartyCorroboration?: boolean;
+  /** The owner originally suggested by the LLM, preserved for audit when the
+   *  deterministic routing gate has overridden or cleared `ownerSuggestion`. */
+  llmOwnerSuggestion?: string;
 }
 
 export interface EnrichmentLogEntry {
