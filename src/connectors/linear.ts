@@ -227,6 +227,9 @@ export class LinearConnector extends BaseConnector<LinearSourceConfig> {
     }
     const filterArg = filterParts.length > 0 ? `filter: { ${filterParts.join(", ")} }` : "";
 
+    // Page size reduced from 100 to 50: the nested projectUpdates, labels,
+    // and teams selections push per-project complexity high enough that 100
+    // projects exceeds Linear's 10,000 complexity budget (12,650 at 100).
     const projects = await this.paginateNodes<Record<string, unknown>>(
       config,
       "projects",
@@ -246,7 +249,8 @@ export class LinearConnector extends BaseConnector<LinearSourceConfig> {
           nodes { body health createdAt }
         }
       `,
-      filterArg || undefined
+      filterArg || undefined,
+      50
     );
 
     const items: RawSourceItem[] = [];
@@ -268,7 +272,8 @@ export class LinearConnector extends BaseConnector<LinearSourceConfig> {
     config: LinearSourceConfig,
     fieldName: string,
     selection: string,
-    filterArg?: string
+    filterArg?: string,
+    pageSize: number = 100
   ) {
     const nodes: T[] = [];
     let after: string | null = null;
@@ -280,7 +285,7 @@ export class LinearConnector extends BaseConnector<LinearSourceConfig> {
         config,
         `
           query PaginatedNodes($after: String) {
-            ${fieldName}(first: 100, after: $after${filterClause}) {
+            ${fieldName}(first: ${pageSize}, after: $after${filterClause}) {
               nodes {
                 ${selection}
               }
@@ -316,7 +321,9 @@ export class LinearConnector extends BaseConnector<LinearSourceConfig> {
     );
 
     if (!response.ok) {
-      throw new Error(`Linear request failed with ${response.status}`);
+      let body = "";
+      try { body = await response.text(); } catch { /* ignore read errors */ }
+      throw new Error(`Linear request failed with ${response.status}: ${body.slice(0, 500)}`);
     }
 
     const payload = (await response.json()) as { data?: T; errors?: Array<{ message?: string }> };
