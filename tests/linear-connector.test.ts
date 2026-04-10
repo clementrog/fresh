@@ -287,3 +287,60 @@ describe("LinearConnector.normalize", () => {
     expect(result.metadata.projectName).toBe("DSN Reliability");
   });
 });
+
+describe("LinearConnector projects query complexity", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  it("uses first:50 for projects to stay under Linear's 10k complexity budget", async () => {
+    const capturedQueries: string[] = [];
+    fetchMock = vi.fn().mockImplementation(async (_url: unknown, init: { body?: string }) => {
+      const body = JSON.parse(init.body ?? "{}");
+      capturedQueries.push(body.query ?? "");
+      if (body.query?.includes("issues(")) return graphqlResponse(emptyPage("issues"));
+      if (body.query?.includes("projectUpdates(")) return graphqlResponse(emptyPage("projectUpdates"));
+      if (body.query?.includes("projects(")) return graphqlResponse(emptyPage("projects"));
+      return graphqlResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const connector = new LinearConnector({ LINEAR_API_KEY: "test-key" } as any);
+    await connector.fetchSinceV2(null, {
+      ...defaultConfig,
+      includeProjects: true,
+      projectStateFilter: ["completed"]
+    }, defaultContext);
+
+    const projectQuery = capturedQueries.find(q => q.includes("projects("));
+    expect(projectQuery).toBeDefined();
+    expect(projectQuery).toMatch(/projects\(first:\s*50/);
+    expect(projectQuery).not.toMatch(/projects\(first:\s*100/);
+
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("LinearConnector error diagnostics", () => {
+  it("includes response body in error message on non-200 status", async () => {
+    const errorBody = JSON.stringify({
+      errors: [{ message: "Unknown field 'accessibleTeams' on input type 'ProjectFilter'" }]
+    });
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
+      Promise.resolve(new Response(errorBody, { status: 400, headers: { "Content-Type": "application/json" } }))
+    ));
+    const connector = new LinearConnector({ LINEAR_API_KEY: "test-key" } as any);
+
+    let caughtMessage = "";
+    try {
+      await connector.fetchSinceV2(
+        null, { ...defaultConfig, includeIssues: true, includeProjectUpdates: false }, defaultContext
+      );
+    } catch (e) {
+      caughtMessage = e instanceof Error ? e.message : String(e);
+    }
+
+    expect(caughtMessage).toMatch(/400/);
+    expect(caughtMessage).toMatch(/accessibleTeams/);
+
+    vi.unstubAllGlobals();
+  });
+});
