@@ -38,6 +38,45 @@ export function normalizeAccents(text: string): string {
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
+// --- Narrative pillar canonicalization ---
+
+/**
+ * Canonicalize a narrative pillar string so equivalent variants collapse to
+ * one key. Used at write-time so reporting and grouping are not split by
+ * accent drift, stray whitespace, or separator inconsistency.
+ *
+ * Transform:
+ *  - strip accents, lowercase
+ *  - drop punctuation except `/` and `-` (compound pillars like
+ *    "expertise metier / fiabilite")
+ *  - normalize `/` to `" / "` and hyphens to `"-"`
+ *  - collapse runs of whitespace
+ *  - trim
+ *
+ * Returns `undefined` for null, undefined, or empty-after-normalization
+ * inputs so callers can drop the field entirely if the input was empty.
+ *
+ * Examples:
+ *   "Expertise métier / fiabilité" → "expertise metier / fiabilite"
+ *   "expertise metier/fiabilite"    → "expertise metier / fiabilite"
+ *   "  EXPERTISE  MÉTIER "          → "expertise metier"
+ */
+export function normalizeNarrativePillar(value: string | null | undefined): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") return undefined;
+  const stripped = normalizeAccents(value)
+    .toLowerCase()
+    // Keep ASCII letters, digits, whitespace, slash, and hyphen.
+    .replace(/[^a-z0-9\s/\-]/g, " ")
+    // Normalize `/` so it's always surrounded by single spaces.
+    .replace(/\s*\/\s*/g, " / ")
+    // Collapse whitespace and trim.
+    .replace(/\s+/g, " ")
+    .trim();
+  if (stripped.length === 0) return undefined;
+  return stripped;
+}
+
 // --- Tokenization ---
 
 /**

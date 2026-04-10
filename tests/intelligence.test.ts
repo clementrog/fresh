@@ -3658,3 +3658,328 @@ describe("normalizeGtmFieldsForOperatorEdit", () => {
 
 // "name and detail preservation" tests removed — the ungated prompt additions
 // they tested were reverted as out-of-scope for the speaker-context rollout.
+
+// ─────────────────────────────────────────────────────────────────────
+// Routing gate enforcement — end-to-end through runIntelligencePipeline
+//
+// These tests exercise the full pipeline flow with mocked LLM responses to
+// prove the deterministic routing gate's decisions actually survive the
+// downstream create/enrich LLM call. Without these tests, the gate is
+// only provably advisory — a regression that re-routes an owner in
+// create/enrich would slip through.
+// ─────────────────────────────────────────────────────────────────────
+
+describe("runIntelligencePipeline — routing gate enforcement (end-to-end)", () => {
+  function makeUsersWithAllProfiles(): UserRecord[] {
+    const mk = (displayName: string, idSuffix: string): UserRecord => ({
+      id: `user-${idSuffix}`,
+      companyId: "company-1",
+      displayName,
+      type: "human",
+      language: "fr",
+      baseProfile: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    return [
+      mk("baptiste", "b"),
+      mk("thomas", "t"),
+      mk("virginie", "v"),
+      mk("quentin", "q"),
+      { ...mk("linc-corporate", "c"), type: "corporate" as const }
+    ];
+  }
+
+  it("cleared owner: LLM re-assigning baptiste is rejected and final opp has no owner", async () => {
+    // Scenario: a market-research (synthesized-market) item whose screening
+    // LLM suggests baptiste. The gate's Rule 1 clears the owner because the
+    // source is synthesized-market and there is no first-party corroboration
+    // in the batch. The create/enrich LLM then returns ownerDisplayName=baptiste
+    // (ignoring the cleared hint). Enforcement must reject that and leave
+    // the opportunity unowned.
+    const items = [makeMarketResearchItem()];
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        // 1. screening → retain with baptiste + synthesized-market marker
+        .mockResolvedValueOnce({
+          output: {
+            items: [{
+              sourceItemId: "market-research:mq-1:hash-1",
+              decision: "retain" as const,
+              rationale: "strong market signal",
+              ownerSuggestion: "baptiste",
+              createOrEnrich: "create" as const,
+              relevanceScore: 0.8,
+              sensitivityFlag: false,
+              sensitivityCategories: [],
+              literalReading: "buyers expect concrete proof",
+              structuralReading: "shift in buyer expectations",
+              hasStructuralSignificance: true,
+              needsFirstPartyCorroboration: true
+            }]
+          },
+          usage: { mode: "provider" as const, promptTokens: 100, completionTokens: 50, estimatedCostUsd: 0.001 },
+          mode: "provider" as const
+        })
+        // 2. create/enrich → LLM insists on baptiste (the bug the gate exists to prevent)
+        .mockResolvedValueOnce(makeDecisionOutput({
+          ownerDisplayName: "baptiste",
+          title: "Market proof reshapes buying",
+          angle: "Buyers now expect repeated concrete proof before trusting onboarding claims",
+          whyNow: "Recurring market signal across multiple sources",
+          whatItIsAbout: "How repeated customer proof changes the buying conversation",
+          whatItIsNotAbout: "not about discovery"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: makeUsersWithAllProfiles(),
+      layer2Defaults: [],
+      layer3Defaults: [],
+      gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
+      recentOpportunities: []
+    });
+
+    // The opportunity IS created — we don't want to block create/enrich, we
+    // just want to strip the forced baptiste voice.
+    expect(result.created).toHaveLength(1);
+
+    // The critical assertion: the final opportunity's ownerProfile is NOT
+    // baptiste, because the gate cleared it and enforcement rejected the
+    // LLM's re-assignment.
+    expect(result.created[0].ownerProfile).toBeUndefined();
+    expect(result.created[0].ownerUserId).toBeUndefined();
+
+    // Routing event captures the full audit trail: gate cleared, enforcement rejected.
+    const routingEvent = result.routingEvents.find(
+      (e) => e.sourceItemId === "market-research:mq-1:hash-1"
+    );
+    expect(routingEvent).toBeDefined();
+    expect(routingEvent!.outcome).toBe("cleared");
+    expect(routingEvent!.sourceFamily).toBe("synthesized-market");
+    expect(routingEvent!.enforcement).toBeDefined();
+    expect(routingEvent!.enforcement!.kind).toBe("reject-llm-reroute");
+    expect(routingEvent!.enforcement!.llmProposedOwner).toBe("baptiste");
+    expect(routingEvent!.enforcement!.finalOwner).toBeUndefined();
+  });
+
+  it("promoted owner: LLM picking thomas is overridden to baptiste", async () => {
+    // Scenario: a Linear item flagged as `editorial-lead` (create-capable)
+    // where screening reports ownerSuggestion=thomas + hasStructuralSignificance=true.
+    // A second Claap item in the same batch covers the same topic and acts
+    // as first-party corroboration. The gate's Rule 2 promotes thomas →
+    // baptiste. The create/enrich LLM then returns ownerDisplayName=thomas
+    // (again ignoring the promoted hint). Enforcement must override that
+    // back to baptiste.
+    const linearItem = makeLinearItem({
+      title: "API timeout root cause shipped in onboarding rewrite",
+      summary: "After recurring API timeout bugs in cabinet onboarding, the team shipped a rewrite of the provisioning step.",
+      text: "After months of recurring API timeout bugs reported by multiple cabinets during onboarding, the team shipped a full rewrite of the provisioning step. The rewrite consolidates three legacy endpoints into one and cuts tail latency by 80%.",
+      externalId: "linear:issue-api-timeout"
+    });
+    // Claap item: same topic (cabinet onboarding + API timeout) so it matches
+    // as first-party corroboration. Claap items default to enrich-only so
+    // this one will be skipped after screening and never reach create/enrich.
+    const claapCorroboration: NormalizedSourceItem = {
+      source: "claap",
+      sourceItemId: "recording-api-timeout",
+      externalId: "claap:api-timeout-session",
+      sourceFingerprint: "claap-fp-1",
+      sourceUrl: "https://claap.io/recording-api-timeout",
+      title: "Cabinet call — recurring API timeout during onboarding",
+      text: "Cabinet call where the operator describes recurring API timeout errors during onboarding provisioning. The cabinet says they have to restart onboarding multiple times before it completes.",
+      summary: "Cabinet reports recurring API timeout bug during onboarding provisioning",
+      occurredAt: new Date().toISOString(),
+      ingestedAt: new Date().toISOString(),
+      metadata: {},
+      rawPayload: {}
+    };
+    const items = [linearItem, claapCorroboration];
+
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        // 1. screening: batch of 2 items — linear (structural) + claap (plain)
+        .mockResolvedValueOnce({
+          output: {
+            items: [
+              {
+                sourceItemId: "linear:issue-api-timeout",
+                decision: "retain" as const,
+                rationale: "shipped capability with structural reading",
+                ownerSuggestion: "thomas",
+                createOrEnrich: "create" as const,
+                relevanceScore: 0.9,
+                sensitivityFlag: false,
+                sensitivityCategories: [],
+                literalReading: "API timeout rewrite shipped",
+                structuralReading: "consolidating legacy endpoints signals how Linc chooses to build for reliability",
+                hasStructuralSignificance: true,
+                needsFirstPartyCorroboration: false
+              },
+              {
+                sourceItemId: "claap:api-timeout-session",
+                decision: "retain" as const,
+                rationale: "cabinet call about same topic",
+                ownerSuggestion: "thomas",
+                createOrEnrich: "enrich" as const,
+                relevanceScore: 0.7,
+                sensitivityFlag: false,
+                sensitivityCategories: []
+              }
+            ]
+          },
+          usage: { mode: "provider" as const, promptTokens: 150, completionTokens: 80, estimatedCostUsd: 0.001 },
+          mode: "provider" as const
+        })
+        // 2. Linear enrichment policy — classify the Linear item as editorial-lead
+        //    (so it becomes create-capable and reaches create/enrich).
+        .mockResolvedValueOnce(makeLinearPolicyOutput("editorial-lead"))
+        // 3. create/enrich for the linear item → LLM returns thomas.
+        //    (The claap item is skipped as enrich-only with no candidate,
+        //    so there's no create/enrich call for it.)
+        .mockResolvedValueOnce(makeDecisionOutput({
+          ownerDisplayName: "thomas",
+          title: "API timeout rewrite ships: consolidation as a reliability wedge",
+          angle: "Consolidating three legacy endpoints into one cut tail latency by 80% — a structural bet on reliability",
+          whyNow: "Rewrite shipped this week after months of recurring timeouts",
+          whatItIsAbout: "What Linc ships when a reliability bug becomes a category-defining decision",
+          whatItIsNotAbout: "not a generic refactor story"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items,
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: makeUsersWithAllProfiles(),
+      layer2Defaults: [],
+      layer3Defaults: [],
+      gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
+      recentOpportunities: []
+    });
+
+    // A single opportunity created from the linear item (the claap item is
+    // skipped as enrich-only with no candidate).
+    expect(result.created).toHaveLength(1);
+    const created = result.created[0];
+
+    // Critical assertion: the opp owner is baptiste, NOT thomas — the gate
+    // promoted and enforcement overrode the LLM's thomas choice.
+    expect(created.ownerProfile).toBe("baptiste");
+    expect(created.ownerUserId).toBe("user-b");
+
+    // Audit trail: routing event shows promoted + enforcement override
+    const routingEvent = result.routingEvents.find(
+      (e) => e.sourceItemId === "linear:issue-api-timeout"
+    );
+    expect(routingEvent).toBeDefined();
+    expect(routingEvent!.outcome).toBe("promoted");
+    expect(routingEvent!.hasFirstPartyCorroboration).toBe(true);
+    expect(routingEvent!.corroboratingItemIds).toContain("claap:api-timeout-session");
+    expect(routingEvent!.enforcement).toBeDefined();
+    expect(routingEvent!.enforcement!.kind).toBe("override-llm-reroute");
+    expect(routingEvent!.enforcement!.llmProposedOwner).toBe("thomas");
+    expect(routingEvent!.enforcement!.finalOwner).toBe("baptiste");
+  });
+
+  it("corroboration window extends beyond in-run batch when recentSourceItems is supplied", async () => {
+    // Scenario: a single Linear item is the only thing in the current batch
+    // but a Claap item from the recent history window covers the same topic.
+    // Without the recentSourceItems param, the gate would find zero
+    // corroboration and fail to promote. With it, the gate finds the Claap
+    // corroboration in history and promotes to baptiste.
+    const linearItem = makeLinearItem({
+      title: "DSN regularization bug root cause fix shipped",
+      summary: "After months of recurring DSN regularization anomalies under HCR convention",
+      text: "After months of recurring DSN regularization anomalies under HCR convention, the team shipped a structural fix to the computation pipeline that handles convention-specific rules.",
+      externalId: "linear:dsn-regularization-fix"
+    });
+
+    // Historical Claap item — NOT in the current batch, but available in the
+    // corroboration window.
+    const historicalClaap: NormalizedSourceItem = {
+      source: "claap",
+      sourceItemId: "claap-dsn-hist",
+      externalId: "claap:dsn-history-session",
+      sourceFingerprint: "fp-hist",
+      sourceUrl: "https://claap.io/hist",
+      title: "Cabinet reports DSN regularization anomaly on HCR convention",
+      text: "Cabinet call reporting recurring DSN regularization anomalies specifically on HCR convention calculations. The operator confirms the issue blocks onboarding.",
+      summary: "DSN regularization anomaly under HCR convention",
+      occurredAt: new Date().toISOString(),
+      ingestedAt: new Date().toISOString(),
+      metadata: {},
+      rawPayload: {}
+    };
+
+    const mockLlmClient = {
+      generateStructured: vi.fn()
+        .mockResolvedValueOnce({
+          output: {
+            items: [{
+              sourceItemId: "linear:dsn-regularization-fix",
+              decision: "retain" as const,
+              rationale: "structural ship",
+              ownerSuggestion: "thomas",
+              createOrEnrich: "create" as const,
+              relevanceScore: 0.9,
+              sensitivityFlag: false,
+              sensitivityCategories: [],
+              hasStructuralSignificance: true
+            }]
+          },
+          usage: { mode: "provider" as const, promptTokens: 100, completionTokens: 50, estimatedCostUsd: 0.001 },
+          mode: "provider" as const
+        })
+        .mockResolvedValueOnce(makeLinearPolicyOutput("editorial-lead"))
+        .mockResolvedValueOnce(makeDecisionOutput({
+          ownerDisplayName: "thomas",
+          title: "DSN regularization under HCR: the fix that unblocks cabinet onboarding",
+          angle: "A convention-specific computation fix unblocks recurring cabinet-reported DSN anomalies",
+          whyNow: "Rewrite shipped after months of accumulation",
+          whatItIsAbout: "Operational consequence of a shipped DSN fix",
+          whatItIsNotAbout: "not a routine patch"
+        }))
+    } as any;
+
+    const result = await runIntelligencePipeline({
+      items: [linearItem],
+      companyId: "company-1",
+      llmClient: mockLlmClient,
+      doctrineMarkdown: "",
+      sensitivityMarkdown: "",
+      userDescriptions: "",
+      users: makeUsersWithAllProfiles(),
+      layer2Defaults: [],
+      layer3Defaults: [],
+      gtmFoundationMarkdown: "",
+      extractionProfilesMarkdown: "",
+      recentOpportunities: [],
+      // This is the new parameter — the history window. Without it the test
+      // would assert ownerProfile === "thomas" (pass-through) instead.
+      recentSourceItems: [historicalClaap]
+    });
+
+    expect(result.created).toHaveLength(1);
+    expect(result.created[0].ownerProfile).toBe("baptiste");
+
+    const routingEvent = result.routingEvents.find(
+      (e) => e.sourceItemId === "linear:dsn-regularization-fix"
+    );
+    expect(routingEvent!.outcome).toBe("promoted");
+    expect(routingEvent!.corroboratingItemIds).toContain("claap:dsn-history-session");
+    expect(routingEvent!.enforcement!.kind).toBe("override-llm-reroute");
+    expect(routingEvent!.enforcement!.finalOwner).toBe("baptiste");
+  });
+});

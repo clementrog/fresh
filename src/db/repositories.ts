@@ -16,6 +16,7 @@ import type {
   UserRecord
 } from "../domain/types.js";
 import { createDeterministicId } from "../lib/ids.js";
+import { normalizeNarrativePillar } from "../lib/text.js";
 
 export type { PrismaTransaction };
 
@@ -312,6 +313,27 @@ export class RepositoryBundle {
     });
   }
 
+  /**
+   * Recent source items within a rolling window, used by the routing gate as
+   * the corroboration candidate pool. Includes both processed and unprocessed
+   * items — the gate only needs the content (title/summary/text/metadata) to
+   * score token overlap, not the processing state.
+   */
+  async listRecentSourceItems(params: {
+    companyId: string;
+    sinceDate: Date;
+    take: number;
+  }) {
+    return this.prisma.sourceItem.findMany({
+      where: {
+        companyId: params.companyId,
+        occurredAt: { gte: params.sinceDate }
+      },
+      orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+      take: params.take
+    });
+  }
+
   async markSourceItemsProcessed(sourceItemIds: string[], processedAt: Date, tx: PrismaTransaction = this.prisma) {
     if (sourceItemIds.length === 0) {
       return;
@@ -338,6 +360,10 @@ export class RepositoryBundle {
 
   async upsertOpportunity(opportunity: ContentOpportunity, tx: PrismaTransaction = this.prisma) {
     const supportingEvidenceCount = Math.max(0, opportunity.evidence.length - 1);
+    // Normalize narrativePillar at the write boundary so accent drift,
+    // whitespace, and separator inconsistency collapse to one canonical
+    // string. Applied to both create and update paths.
+    const normalizedNarrativePillar = normalizeNarrativePillar(opportunity.narrativePillar);
     return tx.opportunity.upsert({
       where: { id: opportunity.id },
       create: {
@@ -347,7 +373,7 @@ export class RepositoryBundle {
         title: opportunity.title,
         ownerProfile: opportunity.ownerProfile,
         ownerUserId: opportunity.ownerUserId,
-        narrativePillar: opportunity.narrativePillar,
+        narrativePillar: normalizedNarrativePillar,
         targetSegment: opportunity.targetSegment ?? "",
         editorialPillar: opportunity.editorialPillar ?? "",
         awarenessTarget: opportunity.awarenessTarget ?? "",
@@ -379,7 +405,7 @@ export class RepositoryBundle {
         title: opportunity.title,
         ownerProfile: opportunity.ownerProfile,
         ownerUserId: opportunity.ownerUserId,
-        narrativePillar: opportunity.narrativePillar,
+        narrativePillar: normalizedNarrativePillar,
         targetSegment: opportunity.targetSegment ?? "",
         editorialPillar: opportunity.editorialPillar ?? "",
         awarenessTarget: opportunity.awarenessTarget ?? "",
@@ -739,7 +765,7 @@ export class RepositoryBundle {
         title: opportunity.title,
         ownerProfile: opportunity.ownerProfile,
         ownerUserId: opportunity.ownerUserId,
-        narrativePillar: opportunity.narrativePillar,
+        narrativePillar: normalizeNarrativePillar(opportunity.narrativePillar),
         angle: opportunity.angle,
         editorialClaim: opportunity.editorialClaim ?? "",
         whyNow: opportunity.whyNow,

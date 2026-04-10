@@ -196,7 +196,12 @@ export const screeningItemSchema = z.object({
   createOrEnrich: z.enum(["create", "enrich", "unknown"]),
   relevanceScore: z.number().min(0).max(1),
   sensitivityFlag: z.boolean(),
-  sensitivityCategories: z.array(z.string())
+  sensitivityCategories: z.array(z.string()),
+  // Structural reading — all optional so older prompts / fallbacks still validate.
+  literalReading: z.string().optional(),
+  structuralReading: z.string().optional(),
+  hasStructuralSignificance: z.boolean().optional(),
+  needsFirstPartyCorroboration: z.boolean().optional()
 });
 export const screeningBatchSchema = z.object({
   items: z.array(screeningItemSchema)

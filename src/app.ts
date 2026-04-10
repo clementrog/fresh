@@ -358,6 +358,18 @@ export class EditorialSignalEngineApp {
       });
       const recentOpportunities = opportunityRows.map((row) => this.mapOpportunityRow(row));
 
+      // Corroboration window for the routing gate: last 30 days of source
+      // items, up to 500 rows. This is what lets the structural-promotion
+      // rule find first-party proof even when it arrived in a previous
+      // batch. Without this window, corroboration is in-batch-only and the
+      // promotion rule almost never fires in production-sized runs.
+      const recentSourceItemRows = await this.repositories.listRecentSourceItems({
+        companyId: company.id,
+        sinceDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        take: 500
+      });
+      const recentSourceItems = recentSourceItemRows.map((row) => this.mapStoredSourceItem(row));
+
       const pipelineResult = await runIntelligencePipeline({
         items,
         companyId: company.id,
@@ -371,6 +383,7 @@ export class EditorialSignalEngineApp {
         gtmFoundationMarkdown: inputs.gtmFoundationMarkdown,
         extractionProfilesMarkdown: inputs.extractionProfilesMarkdown,
         recentOpportunities,
+        recentSourceItems,
         checkOriginDedupe: async (siDbId) =>
           this.repositories.findActiveOpportunityByOriginSourceItem({
             sourceItemId: siDbId,

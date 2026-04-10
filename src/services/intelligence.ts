@@ -24,9 +24,18 @@ import { sourceItemDbId } from "../db/repositories.js";
 import { isBlockedByPublishability } from "./evidence-pack.js";
 import { resolveSpeakerContext, buildExtractionDepthBlock } from "../lib/speaker-context.js";
 import type { SpeakerContextSource } from "../lib/speaker-context.js";
-import { tokenizeV1, tokenizeV2, removeStopWords, jaccardSimilarity, hasMeaningfulOverlap, assessAngleSharpness } from "../lib/text.js";
+import { tokenizeV1, tokenizeV2, removeStopWords, jaccardSimilarity, hasMeaningfulOverlap, assessAngleSharpness, normalizeNarrativePillar } from "../lib/text.js";
 import type { AngleSharpnessResult } from "../lib/text.js";
 import type { AngleQualitySignals } from "../domain/types.js";
+import { getSourceFamily } from "../domain/source-family.js";
+import {
+  adjustOwnerRouting,
+  findFirstPartyCorroboration,
+  buildRoutingEvent,
+  enforceRoutingOnDecision,
+  type RoutingAdjustment,
+  type RoutingEvent
+} from "./routing.js";
 
 // --- Concurrency-limited parallel map ---
 async function pMap<T, R>(items: T[], fn: (item: T) => Promise<R>, concurrency: number): Promise<R[]> {
@@ -123,6 +132,31 @@ export async function screenSourceItems(params: {
       "",
       "For each source item, decide: skip (not relevant) or retain (potential content opportunity).",
       "If retaining, suggest an owner displayName if obvious, and hint at create vs enrich.",
+      "",
+      "## Literal vs structural reading",
+      "For every RETAINED item perform two readings:",
+      "1. Literal reading — what happened operationally/concretely? The surface fact.",
+      "2. Structural reading — does this signal also reveal a broader pattern about market movement, category direction, Linc's product wedge, execution speed, or structural change in payroll/HR operations?",
+      "",
+      "Return the literal reading as `literalReading` (one sentence).",
+      "Return the structural reading as `structuralReading` (one sentence) when present; omit otherwise.",
+      "Set `hasStructuralSignificance = true` ONLY when the structural reading is sharp and materially more interesting than the literal incident. Most signals do NOT have structural significance.",
+      "",
+      "## Source leverage (critical)",
+      "Notion \"market-insight\" pages, market-research articles, and market-findings files are SYNTHESIZED MARKET signals. They can seed opportunities, but they must NOT drive founder (baptiste), product-lead (virginie), or corporate (linc-corporate) voices on their own. Those voices require direct proof from first-party work (Linear issue/project, Claap internal retro, GitHub PR, internal Notion page) or field proof (HubSpot prospect signal, Claap sales call).",
+      "",
+      "When a signal is synthesized-market AND you would otherwise suggest baptiste, virginie, or linc-corporate, set `needsFirstPartyCorroboration = true`. A deterministic downstream gate will enforce the policy.",
+      "",
+      "## Sharper owner territories",
+      "Resist greedy literal matching. Prefer the owner whose territory is SHARPEST for the specific signal:",
+      "- thomas → CONCRETE payroll/compliance/operations consequence. What a cabinet actually has to deal with: named regulation (DSN, CCN, HCR...), named tool, named error/risk/rejet. NOT broad storytelling. NOT structural market takes.",
+      "- virginie → PRODUCT REASONING. Tradeoffs, constraints, rejected options, user feedback shaping a design choice, why we built it this way. References specific product work. NOT corporate amplification. NOT pure market commentary.",
+      "- baptiste → STRUCTURAL / FOUNDER reading. When a repeated operational signal reveals something broader about the market, category direction, company wedge, or execution speed. Operationally triggerable: a sharp structural reading over real first-party proof is his territory, even when the literal reading would fit thomas or virginie. NOT deeply technical product detail, NOT methodology posts.",
+      "- quentin → FIELD commercial. Objections, buying process, what prospects/cabinets actually say in meetings. Traceable to a specific conversation or deal.",
+      "- linc-corporate → Company proof and regulatory changes with practical consequences, patterns across the client base. NOT personal operating reflections, NOT founder narratives.",
+      "",
+      "When two owners could plausibly match, pick the one whose territory is sharpest. Overlap between thomas and baptiste is the enemy: if the reading is structural and there is first-party proof, prefer baptiste; if the reading is a concrete cabinet consequence, prefer thomas.",
+      "",
       "Return JSON with an 'items' array matching the screeningBatch schema."
     ].join("\n");
 
@@ -159,7 +193,14 @@ export async function screenSourceItems(params: {
         relevanceScore: result.relevanceScore,
         sensitivityFlag: result.sensitivityFlag,
         sensitivityCategories: result.sensitivityCategories,
-        fallback: isFallback || undefined
+        fallback: isFallback || undefined,
+        literalReading: result.literalReading,
+        structuralReading: result.structuralReading,
+        hasStructuralSignificance: result.hasStructuralSignificance,
+        needsFirstPartyCorroboration: result.needsFirstPartyCorroboration,
+        // Preserve the LLM-raw suggestion so audit can compare against the
+        // routed value after the deterministic gate runs.
+        llmOwnerSuggestion: result.ownerSuggestion
       };
       results.set(result.sourceItemId, screening);
     }
@@ -1263,7 +1304,7 @@ export function buildNewOpportunity(params: {
     title: params.decision.title,
     ownerProfile,
     ownerUserId: params.ownerUserId,
-    narrativePillar: params.decision.territory,
+    narrativePillar: normalizeNarrativePillar(params.decision.territory),
     ...normalizeGtmFields({
       targetSegment: params.decision.targetSegment,
       editorialPillar: params.decision.editorialPillar,
@@ -1388,8 +1429,37 @@ export interface IntelligencePipelineParams {
   gtmFoundationMarkdown: string;
   extractionProfilesMarkdown: string;
   recentOpportunities: ContentOpportunity[];
+  /**
+   * Candidate pool for the routing gate's first-party corroboration lookup.
+   * When omitted, corroboration is limited to the in-run batch only. Callers
+   * should pass a recent-window (e.g. last 30 days) of source items so the
+   * structural-promotion rule can find proof that arrived in earlier runs.
+   */
+  recentSourceItems?: NormalizedSourceItem[];
   /** DB-backed origin dedupe. When provided, called before every create decision. */
   checkOriginDedupe?: OriginDedupeCheck;
+}
+
+/**
+ * Build the corroboration candidate pool for the routing gate by combining
+ * the current in-run batch with an optional recent-history window. Deduped
+ * by `externalId`; in-batch items take priority over history items with the
+ * same id (they carry the freshest metadata).
+ */
+function buildCorroborationPool(
+  retained: NormalizedSourceItem[],
+  recent: NormalizedSourceItem[]
+): NormalizedSourceItem[] {
+  if (recent.length === 0) return retained;
+  const seen = new Set(retained.map((i) => i.externalId));
+  const out: NormalizedSourceItem[] = [...retained];
+  for (const item of recent) {
+    if (!seen.has(item.externalId)) {
+      seen.add(item.externalId);
+      out.push(item);
+    }
+  }
+  return out;
 }
 
 export interface DedupEvent {
@@ -1435,6 +1505,8 @@ export interface IntelligencePipelineResult {
     classification: GitHubEnrichmentClassification;
   }>;
   githubClassifications: Map<string, GitHubEnrichmentClassification>;
+  /** Per-retained-item routing telemetry emitted by the deterministic gate. */
+  routingEvents: RoutingEvent[];
 }
 
 export async function runIntelligencePipeline(
@@ -1453,7 +1525,8 @@ export async function runIntelligencePipeline(
     linearReviewItems: [],
     linearClassifications: new Map(),
     githubReviewItems: [],
-    githubClassifications: new Map()
+    githubClassifications: new Map(),
+    routingEvents: []
   };
 
   // 1. Prefilter
@@ -1501,6 +1574,65 @@ export async function runIntelligencePipeline(
       continue;
     }
     retainedAfterScreening.push({ item, screening: sr });
+  }
+
+  // 3b. Deterministic routing gate — sharpen owner assignment based on source
+  // family and structural reading. Runs on the retained set so every downstream
+  // stage sees the adjusted `ownerSuggestion`. All non-retained items are left
+  // untouched. The gate does not call the LLM.
+  //
+  // Corroboration window: the in-run batch PLUS an optional `recentSourceItems`
+  // history window (typically 30 days from the DB, supplied by the caller in
+  // `app.ts intelligenceRun`). Without a history window the gate degrades to
+  // in-batch-only corroboration, which is what tests pass. The combined pool
+  // is deduped by externalId (retained items take priority).
+  //
+  // `gateAdjustments` keeps the full RoutingAdjustment for each retained item
+  // so the post-LLM enforcement step (inside the create/enrich loop) can
+  // reconcile the LLM's owner choice against the gate's authoritative decision.
+  const corroborationPool = buildCorroborationPool(retained, params.recentSourceItems ?? []);
+  const gateAdjustments = new Map<string, RoutingAdjustment>();
+  const routingEventByExternalId = new Map<string, RoutingEvent>();
+  for (const entry of retainedAfterScreening) {
+    try {
+      const corroboratingItems = findFirstPartyCorroboration({
+        item: entry.item,
+        candidateItems: corroborationPool
+      });
+      const adjustment = adjustOwnerRouting({
+        item: entry.item,
+        screening: entry.screening,
+        corroboratingItems
+      });
+      // Apply the routed value in-place so create-enrich and the fallback
+      // owner resolution both see it. Preserve the original on
+      // `llmOwnerSuggestion` (captured during screening mapping above).
+      entry.screening.ownerSuggestion = adjustment.finalOwnerSuggestion;
+      gateAdjustments.set(entry.item.externalId, adjustment);
+      const event = buildRoutingEvent({
+        item: entry.item,
+        screening: entry.screening,
+        adjustment
+      });
+      result.routingEvents.push(event);
+      routingEventByExternalId.set(entry.item.externalId, event);
+    } catch (routingError) {
+      // Fail-open: the gate is advisory; if it crashes, fall back to the
+      // LLM's original suggestion and continue.
+      const fallbackEvent: RoutingEvent = {
+        sourceItemId: entry.item.externalId,
+        sourceFamily: getSourceFamily(entry.item),
+        originalOwnerSuggestion: entry.screening.llmOwnerSuggestion ?? entry.screening.ownerSuggestion,
+        finalOwnerSuggestion: entry.screening.ownerSuggestion,
+        outcome: "kept",
+        reason: `Routing gate error — ${routingError instanceof Error ? routingError.message : "unknown"}. Falling back to LLM suggestion.`,
+        hasFirstPartyCorroboration: false,
+        corroboratingItemIds: [],
+        hasStructuralSignificance: entry.screening.hasStructuralSignificance
+      };
+      result.routingEvents.push(fallbackEvent);
+      routingEventByExternalId.set(entry.item.externalId, fallbackEvent);
+    }
   }
 
   // 4. Linear enrichment policy — triage Linear items before create/enrich
@@ -1761,6 +1893,26 @@ export async function runIntelligencePipeline(
           contractResult: null,
           curated
         });
+      }
+
+      // Post-LLM routing enforcement: reconcile the LLM-returned
+      // `ownerDisplayName` against the deterministic routing gate's
+      // decision. Without this, the gate is only advisory — the LLM can
+      // re-assign an owner the gate cleared or pick a different owner than
+      // the gate promoted to. Enforcement mutates `finalDecision.ownerDisplayName`
+      // in place and augments the per-item RoutingEvent with an
+      // `enforcement` subfield so one audit record tells the whole story.
+      const gateAdjustment = gateAdjustments.get(item.externalId);
+      if (gateAdjustment) {
+        const enforced = enforceRoutingOnDecision({
+          gateDecision: gateAdjustment,
+          llmOwnerDisplayName: finalDecision.ownerDisplayName
+        });
+        finalDecision.ownerDisplayName = enforced.finalOwnerDisplayName;
+        const routingEvent = routingEventByExternalId.get(item.externalId);
+        if (routingEvent) {
+          routingEvent.enforcement = enforced.enforcement;
+        }
       }
 
       // Map ownerDisplayName -> User.id
